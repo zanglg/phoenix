@@ -9,6 +9,8 @@ Bare-metal AArch64 kernel with:
 - Assembly boot code with EL initialization and MMU setup
 - Custom linker script for kernel memory layout
 - Conditional compilation for host vs bare-metal
+- Linux-style memblock boot-time allocator
+- Thread-safe memory management with spin locks
 
 ## Build System
 
@@ -38,6 +40,7 @@ cargo clean
 - `.cargo/config.toml`: Target-specific rustflags with custom linker script
 - `build.rs`: Tracks architecture-specific file changes
 - `src/arch/aarch64/kernel.ld`: Linker script for kernel memory layout
+- `Cargo.toml`: Includes `spin = "0.9"` dependency for synchronization
 
 ## Testing
 
@@ -60,6 +63,7 @@ cargo test --target aarch64-unknown-none
 - Tests in `#[cfg(test)]` modules within source files
 - Use `assert!`, `assert_eq!`, etc. for assertions
 - Bare-metal tests may need QEMU/hardware
+- Use `#[cfg(all(test, not(target_os = "none")))]` for host-only tests
 
 ## Code Style Guidelines
 
@@ -86,6 +90,21 @@ mod arch;
 - Bare-metal: Use `panic!` for unrecoverable errors
 - Implement `#[panic_handler]` in architecture modules
 - Panic handlers should loop indefinitely
+
+### Concurrency & Synchronization
+- Use `spin::Mutex` for thread-safe global data structures
+- Keep critical sections short to avoid deadlocks
+- Document synchronization requirements for shared resources
+- Example: `static MEMBLOCK: Mutex<Memblock> = Mutex::new(Memblock::new());`
+
+### Memblock Implementation Guidelines
+- Follow Linux memblock design: boot-time allocator before buddy system
+- Use fixed-size arrays (e.g., `MAX_REGIONS = 128`) to avoid dynamic allocation
+- Implement core operations: `add()`, `reserve()`, `remove()`, `alloc()`
+- Merge adjacent regions automatically
+- Check for overlaps when adding/reserving regions
+- Support alignment requirements in `alloc()`
+- Provide global instance via `spin::Mutex` for thread safety
 
 ### Unsafe Code
 - Mark unsafe blocks with safety comments
@@ -123,6 +142,9 @@ src/
 │       ├── mod.rs      # AArch64 implementation
 │       ├── boot.S      # Assembly boot code
 │       └── kernel.ld   # Linker script
+├── mm/
+│   ├── mod.rs          # Memory management module
+│   └── memblock.rs     # Boot-time allocator implementation
 ```
 
 ### Architecture Guidelines

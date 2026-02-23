@@ -21,7 +21,7 @@ Phoenix aims to be a **research-oriented, Linux-like kernel** written entirely i
 | Component | Status | Notes |
 |-----------|--------|-------|
 | **Boot & MMU** | ✅ **Complete** | High-half addressing at `0xffffff8000000000`, EL initialization |
-| **Memory Management** | 🔄 **Foundation** | Static 1GB block mappings, no dynamic allocator yet |
+| **Memory Management** | 🔄 **Progressing** | Linux-style memblock boot allocator + static 1GB mappings |
 | **Exception Handling** | 📋 **Planned** | Basic panic handler (WFE loop), no interrupt vectors |
 | **Device Drivers** | 📋 **Planned** | Hardcoded serial MMIO only |
 | **Process Management** | 📋 **Future** | Single execution flow, no scheduler |
@@ -35,9 +35,12 @@ Phoenix aims to be a **research-oriented, Linux-like kernel** written entirely i
 - ✅ Simple serial output via MMIO
 - ✅ Multi-core filtering (primary core only)
 - ✅ Clean separation of host vs bare-metal compilation
+- ✅ Linux-style memblock boot-time allocator
+- ✅ Automatic kernel memory reservation
+- ✅ Thread-safe memory management with spin locks
 
 **Critical Limitations:**
-- ❌ No dynamic memory allocation
+- ❌ No dynamic buddy system allocator (only boot-time memblock)
 - ❌ No interrupt or exception handling
 - ❌ No concurrency or preemption
 - ❌ No hardware abstraction layer
@@ -67,6 +70,14 @@ Stack Size:            64KB (0x10000)
 3. **Virtual switch**: Jump to high-half address space
 4. **BSS clearing**: Zero-initialize uninitialized data
 5. **Kernel entry**: Call `kernel_main()` in Rust
+
+### Memory Management
+- **Boot-time allocator**: Linux-style memblock manages physical memory before buddy system
+- **Thread-safe**: Global instance protected by `spin::Mutex`
+- **Automatic reservation**: Kernel image memory automatically reserved on boot
+- **Core operations**: `add()`, `reserve()`, `remove()`, `alloc()` with alignment
+- **Region merging**: Adjacent memory regions automatically merged
+- **Fixed capacity**: 128 regions limit to avoid dynamic allocation
 
 ## 🚀 Getting Started
 
@@ -143,11 +154,14 @@ phoenix/
 │   │       ├── boot.S      # Assembly boot code (175 lines)
 │   │       ├── kernel.ld   # Linker script (118 lines)
 │   │       └── mod.rs      # AArch64 module with panic handler
-│   └── (future: mm/, kernel/, drivers/, fs/, net/)
+│   ├── mm/                 # Memory management subsystem
+│   │   ├── mod.rs          # Memory module declaration
+│   │   └── memblock.rs     # Linux-style boot-time allocator (505 lines)
+│   └── (future: kernel/, drivers/, fs/, net/)
 ├── .cargo/
 │   └── config.toml         # Target-specific rustflags
 ├── build.rs               # Build script tracking file changes
-├── Cargo.toml            # Minimal package configuration
+├── Cargo.toml            # Package configuration with spin dependency
 ├── AGENTS.md             # AI agent development guidelines
 └── README.md             # This file
 ```
@@ -155,6 +169,7 @@ phoenix/
 ## 🗺️ Development Roadmap
 
 ### Phase 1: Core Infrastructure (Q1 2026)
+- [x] **Boot-time memory allocator** (Linux-style memblock with spin locks)
 - [ ] **Dynamic memory allocator** (buddy system + slab allocator)
 - [ ] **Exception vector table** and interrupt controller driver (GIC)
 - [ ] **Timer subsystem** with ARM Generic Timer
