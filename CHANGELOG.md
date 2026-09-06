@@ -10,8 +10,10 @@ under `Unreleased` and the Cargo version remains 0.0.0 until the 0.1.0 release g
 
 - Initial Rust 2024 workspace with a single Phoenix version source.
 - Stable Rust toolchain policy, Rust 1.95 MSRV, and AArch64 bare-metal target.
-- Minimal, non-bootable `no_std` kernel crate.
-- Initial AArch64 bootstrap implementation in `boot.S`; Cargo integration remains pending.
+- `no_std` AArch64 kernel binary with the initial bootstrap, higher-half linker layout, BSS
+  initialization, 64 KiB boot stack, PL011 early console, panic path, and safe halt loop.
+- Build identity plus deterministic boot-success and panic sentinels.
+- ELF, raw kernel image, and linker-map generation with static layout and symbol inspection.
 - Config-file-driven rust-analyzer target selection.
-- Standalone host-side xtask commands for environment checks and validation.
+- Standalone host-side xtask commands for environment checks, tests, builds, and validation.
 - Project, Agent, Roadmap, and kernel capability documentation.

@@ -1,0 +1,22 @@
+name: Kernel capability
+description: Capture a possible kernel feature without committing to implement it now.
+title: "[capability] "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: capability
+    attributes:
+      label: Capability
+      description: What should Phoenix eventually be able to do?
+    validations:
+      required: true
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation and dependencies
+      description: Why might this matter, and what would need to exist first?
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: Filing this issue does not schedule implementation. Accepted ideas are recorded in FEATURES.md.

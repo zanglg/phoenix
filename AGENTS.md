@@ -20,10 +20,11 @@ not create speculative implementations for them.
 ## Repository map
 
 - `Cargo.toml`: Phoenix version and kernel workspace policy.
-- `kernel/`: freestanding kernel code; currently a non-bootable skeleton.
+- `kernel/`: freestanding kernel library, AArch64 bootstrap, and image linker layout.
 - `xtask/`: standalone host-side development tool.
 - `.cargo/lsp.toml`: rust-analyzer's default kernel target.
-- `boot.S`: first AArch64 bootstrap implementation and the starting point for boot work.
+- `kernel/src/arch/aarch64/boot.S`: first AArch64 bootstrap implementation.
+- `docs/BOOT.md`: current boot contract and runtime-validation boundary.
 - `FEATURES.md`: comprehensive capability catalog.
 - `ROADMAP.md`: ordered path to the first formal release.
 - `CHANGELOG.md`: completed changes.
@@ -55,11 +56,14 @@ cargo xtask fmt
 cargo xtask check
 cargo xtask lint
 cargo xtask test
+cargo xtask build
+cargo xtask inspect
 cargo xtask ci
 ```
 
 Run `cargo xtask ci` before reporting completion. Never state that an unexecuted check passed.
-QEMU is optional in 0.0.0, and there is no boot test yet.
+QEMU is optional in 0.0.0, and there is no runtime boot test yet. Static artifact inspection is
+required. Do not install or invoke QEMU in an environment where it is unavailable.
 
 ## Feature and documentation policy
 

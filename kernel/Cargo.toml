@@ -5,10 +5,16 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish = false
+build = "build.rs"
 
 [lib]
 crate-type = ["rlib"]
 
+[[bin]]
+name = "phoenix-kernel"
+path = "src/main.rs"
+test = false
+bench = false
+
 [lints]
 workspace = true
-

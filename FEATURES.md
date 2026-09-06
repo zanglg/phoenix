@@ -30,15 +30,15 @@ _No unclassified entries._
 | BUILD-001 | Stable Rust workspace with declared MSRV | Implemented | 0.1.0 | Initial engineering baseline |
 | BUILD-002 | Target-aware rust-analyzer configuration | Implemented | 0.1.0 | Default target lives in `.cargo/lsp.toml` |
 | BUILD-003 | Host-side canonical validation | Implemented | 0.1.0 | Provided by xtask |
-| BUILD-004 | Kernel artifact and image packaging | Planned | 0.1.0 | No artifact exists yet |
+| BUILD-004 | Kernel artifact and image packaging | Implemented | 0.1.0 | ELF, raw image, linker map, and static inspection |
 | BUILD-005 | Reproducible release artifacts and provenance | Deferred | Unscheduled | Revisit before public releases |
 
 ## Boot and firmware
 
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
-| BOOT-001 | AArch64 QEMU `virt` direct boot | Planned | 0.1.0 | First observable boot |
-| BOOT-002 | Early stack, BSS initialization, panic, and halt | Planned | 0.1.0 | Minimum boot path |
+| BOOT-001 | AArch64 QEMU `virt` direct boot | In Progress | 0.1.0 | Image builds; emulator execution is unverified |
+| BOOT-002 | Early stack, BSS initialization, panic, and halt | In Progress | 0.1.0 | Implemented and statically checked; runtime unverified |
 | BOOT-003 | Device Tree discovery and ownership | Planned | 0.1.0 | Required for portable platform discovery |
 | BOOT-004 | UEFI boot | Deferred | Unscheduled | Future firmware path |
 | BOOT-005 | Multiboot-compatible x86_64 boot path | Deferred | Unscheduled | Decide with x86_64 port |
@@ -110,7 +110,7 @@ _No unclassified entries._
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
 | DEV-001 | Minimal device and driver lifecycle | Deferred | Unscheduled | Do not build a framework before two users exist |
-| DEV-002 | Early and runtime console | Planned | 0.1.0 | PL011 on initial platform |
+| DEV-002 | Early and runtime console | In Progress | 0.1.0 | Polled PL011 implemented; runtime unverified |
 | IRQ-001 | Interrupt controller abstraction and GIC | Planned | 0.1.0 | Initial AArch64 controller |
 | FW-001 | PSCI integration | Deferred | Unscheduled | Power and SMP services |
 | VIRTIO-001 | VirtIO transport and device discovery | Deferred | Unscheduled | MMIO first; PCI may follow |
@@ -137,7 +137,7 @@ _No unclassified entries._
 | OBS-002 | Panic register dump, symbols, and stack traces | Planned | 0.1.0 | Preserve postmortem information |
 | OBS-003 | Tracing and profiling | Captured | Unscheduled | Avoid committing to a format early |
 | TEST-001 | QEMU boot smoke test with timeout and sentinel | Planned | 0.1.0 | Required from the first boot onward |
-| TEST-002 | Host-side unit and property tests | Deferred | Unscheduled | Extract pure mechanisms when useful |
+| TEST-002 | Host-side unit and property tests | Implemented | 0.1.0 | Console, build identity, config, and ELF-layout logic |
 | TEST-003 | Fuzzing and fault injection | Deferred | Unscheduled | Add with parsers and failure paths |
 | HARD-001 | Unsafe-code review and invariant audit | Deferred | Continuous | Applies as unsafe code appears |
 | HARD-002 | Resource limits and fault isolation | Deferred | Unscheduled | Design with processes and drivers |

@@ -5,16 +5,20 @@ on QEMU `virt`; RISC-V 64 and x86_64 are future ports, not current claims of sup
 
 ## Current status
 
-The project version is **0.0.0**. This repository state is an engineering baseline only:
+The project version is **0.0.0**. The first AArch64 bootstrap is integrated, with a deliberately
+narrow support claim:
 
 - the Rust workspace follows stable Rust and declares Rust 1.95 as its minimum version;
-- an empty `no_std` kernel crate can be checked for AArch64;
+- the `no_std` kernel links as an AArch64 ELF and can be converted to a raw image;
+- static inspection verifies its machine type, entry, load addresses, page-table alignment,
+  BSS bounds, and 64 KiB boot stack;
 - rust-analyzer can use the configured kernel target from an x86_64 development host;
-- host-side validation is available through `cargo xtask`;
-- no Phoenix kernel image is built or booted yet.
+- host-side unit tests and validation are available through `cargo xtask`;
+- runtime boot and serial output have **not** been validated because the current development
+  environment has no QEMU.
 
-[`boot.S`](boot.S) is Phoenix's first AArch64 bootstrap implementation. It is the starting point
-for the first development step, although it is not wired into the 0.0.0 Cargo build yet.
+[`boot.S`](kernel/src/arch/aarch64/boot.S) is Phoenix's first AArch64 bootstrap implementation.
+The boot contract and current validation boundary are recorded in [`docs/BOOT.md`](docs/BOOT.md).
 
 ## Development targets
 
@@ -36,8 +40,8 @@ cargo xtask ci
 ```
 
 The project toolchain follows the current stable Rust release and installs the AArch64 target,
-rustfmt, Clippy, rust-analyzer, `rust-src`, and LLVM tools. QEMU is reported by `doctor` but is
-optional until the bootstrap is wired into the build.
+rustfmt, Clippy, rust-analyzer, `rust-src`, and LLVM tools. QEMU is reported by `doctor` but
+remains optional. No canonical command invokes it yet.
 
 Canonical commands are:
 
@@ -47,10 +51,14 @@ cargo xtask fmt
 cargo xtask check
 cargo xtask lint
 cargo xtask test
+cargo xtask build
+cargo xtask inspect
 cargo xtask ci
 ```
 
-There is deliberately no `build`, `run`, or `debug` command for a bootable kernel yet.
+`build` produces an ELF, raw image, and linker map under `target/`; `inspect` validates those
+artifacts without executing them. There is deliberately no `run` or `debug` command until the
+runtime path can be tested honestly.
 
 ## LSP target
 
@@ -82,6 +90,7 @@ Rust source; assembly such as `boot.S` requires separate editor support.
 - [`ROADMAP.md`](ROADMAP.md) contains the single ordered path to the first release.
 - [`CHANGELOG.md`](CHANGELOG.md) records completed, visible changes.
 - [`AGENTS.md`](AGENTS.md) defines the repository rules for coding agents.
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) defines the `dev` to `main` contribution flow.
 
 Recording a feature does not authorize its implementation. It must first be promoted into the
 ordered Roadmap, and only the first incomplete section is active.

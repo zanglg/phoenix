@@ -10,7 +10,8 @@ remains in `FEATURES.md`.
 
 ## Current position
 
-The engineering foundation is complete. The next work is **Bootstrap and early console**.
+The engineering foundation is complete. **Bootstrap and early console** is in progress: its
+build and static-inspection work is complete, while emulator validation remains outstanding.
 
 ## Completed foundation
 
@@ -25,11 +26,23 @@ The engineering foundation is complete. The next work is **Bootstrap and early c
 Integrate the existing AArch64 bootstrap, define the linker layout and stack, enter Rust, print a
 build identity and deterministic success sentinel through PL011, then halt safely.
 
+Completed without an emulator:
+
+- bootstrap assembly is integrated through the AArch64 kernel binary;
+- the higher-half linker layout, low physical load address, BSS, and 64 KiB boot stack are fixed;
+- early PL011 output, panic output, build identity, and deterministic sentinels are implemented;
+- the ELF, raw image, linker map, and required symbols are checked automatically.
+
+Remaining:
+
+- observe the success and panic paths on a compatible QEMU environment;
+- add a bounded runtime smoke test only after the real command and output have been verified.
+
 Observable result: one command builds and boots Phoenix on AArch64 QEMU `virt`; an automated test
 passes only after observing the success sentinel before its timeout.
 
-Before coding, freeze the image format, load address, entry state, DTB convention, UART source,
-CPU model, QEMU machine version, panic output, and test-exit protocol.
+The current boot contract is in `docs/BOOT.md`. QEMU machine version and runtime test-exit
+protocol remain deliberately open until emulator validation is available.
 
 ## 2. Exceptions and diagnostics
 
