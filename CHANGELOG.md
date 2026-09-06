@@ -61,4 +61,6 @@ under `Unreleased` and the Cargo version remains 0.0.0 until the 0.1.0 release g
   revocation, ownership-checked post-switch user-frame copies, and ordered QEMU progress evidence.
 - One linker-reserved boot-stack guard page, explicit direct-map holes, final-plan absence checks,
   and static artifact validation of guard size and placement.
+- Architecture-neutral process IDs, strict lifecycle transitions, generation-safe bounded process
+  ownership, reap semantics, and loaded-init ready/running/exited integration.
 - Project, Agent, Roadmap, and kernel capability documentation.

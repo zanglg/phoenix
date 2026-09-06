@@ -104,7 +104,8 @@ artifact.
 - make instruction-cache maintenance explicit before newly copied executable bytes can run;
 - define when a complete address space becomes visible through an ASID and `TTBR0_EL1`;
 - execute the reproducibly built embedded ELF through this path and validate it in QEMU;
-- integrate resource accounting and a process owner before supporting teardown outside tests.
+- move image ownership under the implemented process table and add resource accounting before
+  supporting teardown outside tests.
 
 ## Skipped work
 

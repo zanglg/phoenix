@@ -86,6 +86,8 @@ use phoenix_kernel::platform::aarch64::qemu_virt::{
     BootstrapMemoryError, read_direct_mapped_frame, write_direct_mapped_frame,
 };
 #[cfg(feature = "loaded-init-probe")]
+use phoenix_kernel::process::{ExitStatus, ProcessControl, ProcessId};
+#[cfg(feature = "loaded-init-probe")]
 use phoenix_kernel::process_image::ProcessImagePlan;
 #[cfg(feature = "loaded-init-probe")]
 use phoenix_kernel::user::{DEFAULT_USER_STACK_TOP, UserAddr, UserStackLayout};
@@ -163,6 +165,7 @@ type InitAddressSpace = PreparedUserAddressSpace<
 >;
 #[cfg(feature = "loaded-init-probe")]
 struct InitRuntime {
+    process: ProcessControl,
     address_space: InitAddressSpace,
     kernel_tables: FinalKernelTables,
     files: ReadOnlyFileTable<'static, INIT_OPEN_FILES>,
@@ -575,10 +578,16 @@ fn run_loaded_init_probe(boot_argument: usize, console: &mut Console<EarlyPl011>
         });
     drop(physical_memory);
     let kernel_root = kernel_tables.root_frame().start_address().as_usize();
+    let init_id = ProcessId::new(0, 1).expect("the bootstrap init generation is nonzero");
+    let mut process = ProcessControl::new(init_id);
+    process
+        .make_ready()
+        .unwrap_or_else(|error| panic!("could not make init ready: {error:?}"));
     // SAFETY: this single-CPU boot path initializes the slot exactly once
     // before EL0 can issue an exception. The slot is never replaced or freed.
     let (prepared, kernel_tables) = unsafe {
         install_init_runtime(InitRuntime {
+            process,
             address_space: prepared,
             kernel_tables,
             files: ReadOnlyFileTable::new(initramfs),
@@ -600,9 +609,16 @@ fn run_loaded_init_probe(boot_argument: usize, console: &mut Console<EarlyPl011>
     }
     let _ = writeln!(console, "{INIT_KERNEL_MAP_SENTINEL}");
 
+    // SAFETY: the one-time runtime is installed in the ready state and no
+    // execution context can race this single-core transition before `eret`.
+    let init_id = unsafe { start_active_init_process() }
+        .unwrap_or_else(|error| panic!("could not start init: {error:?}"));
+
     let _ = writeln!(
         console,
-        "init: entry={:#018x} stack={:#018x} pages={} root={:#018x}",
+        "init: pid={}.{} entry={:#018x} stack={:#018x} pages={} root={:#018x}",
+        init_id.slot(),
+        init_id.generation(),
         prepared.entry().as_usize(),
         prepared.stack_pointer().as_usize(),
         prepared.resident_page_count(),
@@ -662,6 +678,35 @@ unsafe fn active_init_files() -> &'static mut ReadOnlyFileTable<'static, INIT_OP
     }
 }
 
+#[cfg(feature = "loaded-init-probe")]
+unsafe fn start_active_init_process()
+-> Result<ProcessId, phoenix_kernel::process::ProcessTransitionError> {
+    let slot = &raw mut INIT_RUNTIME;
+    // SAFETY: the runtime is installed before this function is reachable.
+    // Bootstrap calls this once before EL0 entry and no process-field reference
+    // escapes the operation.
+    unsafe {
+        let runtime = (*slot).as_mut_ptr();
+        let process = &mut *core::ptr::addr_of_mut!((*runtime).process);
+        process.start()?;
+        Ok(process.id())
+    }
+}
+
+#[cfg(feature = "loaded-init-probe")]
+unsafe fn exit_active_init_process(
+    status: ExitStatus,
+) -> Result<(), phoenix_kernel::process::ProcessTransitionError> {
+    let slot = &raw mut INIT_RUNTIME;
+    // SAFETY: the runtime is installed and running before SVC dispatch. The
+    // dispatcher is non-reentrant on one CPU and no mutable reference escapes.
+    unsafe {
+        let runtime = (*slot).as_mut_ptr();
+        let process = &mut *core::ptr::addr_of_mut!((*runtime).process);
+        process.exit(status)
+    }
+}
+
 /// Common target of the assembly exception vectors.
 ///
 /// # Safety
@@ -708,13 +753,20 @@ fn handle_probe_syscall(frame: &mut ExceptionFrame, slot: Option<VectorSlot>) ->
             let status = request.argument(0).expect("exit status is in x0");
             let mut console = Console::new(EarlyPl011::new());
             #[cfg(feature = "loaded-init-probe")]
-            let _ = if status == 42 && INIT_WROTE_OUTPUT.load(Ordering::Acquire) {
+            // SAFETY: this is the first terminal transition of the installed
+            // single-core init process, and dispatch cannot be re-entered.
+            let lifecycle = unsafe { exit_active_init_process(ExitStatus::new(status)) };
+            #[cfg(feature = "loaded-init-probe")]
+            let _ = if status == 42
+                && INIT_WROTE_OUTPUT.load(Ordering::Acquire)
+                && lifecycle.is_ok()
+            {
                 writeln!(console, "{INIT_SUCCESS_SENTINEL}")
             } else {
                 writeln!(
                     console,
-                    "{INIT_FAILURE_SENTINEL}: status={status} wrote-output={}",
-                    INIT_WROTE_OUTPUT.load(Ordering::Relaxed)
+                    "{INIT_FAILURE_SENTINEL}: status={status} wrote-output={} lifecycle={lifecycle:?}",
+                    INIT_WROTE_OUTPUT.load(Ordering::Relaxed),
                 )
             };
             #[cfg(all(feature = "el0-probe", not(feature = "loaded-init-probe")))]

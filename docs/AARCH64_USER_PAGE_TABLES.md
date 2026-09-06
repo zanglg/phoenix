@@ -104,7 +104,7 @@ unverified.
 
 - replace the probe-local final-direct-map adapter with a process/VM-owned mapped-frame API;
 - assign and recycle nonzero ASIDs with generation handling;
-- add ASID-aware retirement and reclamation after process ownership exists;
+- add ASID-aware retirement and reclamation after the address space moves under the process table;
 - define break-before-make for changes to published descriptors;
 - retain page-table accounting in the future process object;
 - add recoverable fault handling for mutable/concurrent address spaces;

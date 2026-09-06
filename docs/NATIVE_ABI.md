@@ -22,7 +22,7 @@ vector with exception class `SupervisorCallAArch64` and immediate zero.
 
 | Number | Name | Intended arguments | Status |
 | ---: | --- | --- | --- |
-| 0 | `exit` | `x0=status` | Implemented only by the opt-in static and loaded-init probes |
+| 0 | `exit` | `x0=status` | Implemented by the probes; loaded init records a terminal process state before reporting success |
 | 1 | `write` | `x0=fd`, `x1=user buffer`, `x2=length` | Implemented only by the loaded-init stdout probe |
 | 2 | `read` | `x0=fd`, `x1=user buffer`, `x2=length` | Implemented only by the loaded-init file probe |
 | 3 | `open` | `x0=path bytes`, `x1=path length`, `x2=mode` | Implemented only by the loaded-init file probe |
@@ -62,6 +62,11 @@ errors are `NoSuchFile` (2), `InputOutput` (5), `BadFileDescriptor` (9), `NoMemo
 Values above `i64::MAX` cannot be encoded as success because they collide with the signed error
 space. This rule is checked when constructing a return value.
 
+The current `exit` argument is retained as a full opaque 64-bit `ExitStatus`; it is not truncated
+to Unix's conventional low eight bits. Loaded init accepts its terminal success sentinel only when
+the active process control can move from `Running` to `Exited`. Resource reclamation remains a
+kernel lifecycle concern and does not occur on the exiting EL0 exception stack.
+
 ## Invariants
 
 - the generic ABI preserves all six arguments and unknown call numbers;
@@ -81,9 +86,9 @@ copy directions have separate host tests. The types and adapter are Cross Compil
 ## TODO
 
 - generalize the probe-only SVC recognition into a production dispatcher;
-- implement `exit` process teardown after process ownership exists;
+- move terminal `exit` from the retained probe owner into scheduler-context teardown and reap;
 - define partial I/O, interruption, and production transfer limits;
-- move the probe table into process ownership and define stdin/stderr initialization;
+- move the probe file table into table-owned process resources and define stdin/stderr initialization;
 - separate ABI revisioning from the project version when revision 1 is proposed;
 - execute both EL0 conformance programs and retain their QEMU transcripts.
 

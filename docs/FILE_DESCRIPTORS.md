@@ -70,7 +70,8 @@ path and payload bytes. Runtime execution is tracked by `RUN-FS-001`, `RUN-UCOPY
 
 ## TODO
 
-- move the table into a real process object with lifecycle and locking;
+- move the table beside the implemented lifecycle control into a synchronized table-owned process
+  resource aggregate;
 - introduce VFS node and open-file interfaces when a second filesystem or device file exists;
 - represent stdin, stdout, and stderr as ordinary descriptor objects;
 - define credentials, ownership, and access checks beyond the current any-read-bit rule;

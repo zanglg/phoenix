@@ -89,7 +89,7 @@ _No unclassified entries._
 
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
-| PROC-001 | Process and thread lifecycle | Planned | 0.1.0 | Includes identifiers and teardown |
+| PROC-001 | Process and thread lifecycle | In Progress | 0.1.0 | Generation-checked IDs, strict process phases, retained exit status, and bounded ownership table are Host Tested; loaded init uses lifecycle transitions, while threads and teardown remain |
 | ABI-001 | Native Phoenix syscall ABI | In Progress | 0.1.0 | Revision-0 values plus probe-only bounded open/read/write/close and exit dispatch are built; production dispatch is Runtime Pending |
 | ABI-002 | ELF loader, user stack, TLS, and auxiliary vector | In Progress | 0.1.0 | ELF planning/population and native argc/argv/envp/minimal-auxv stack construction are Host Tested and connected in a Cross Compiled loaded-init path; target execution and TLS remain |
 | ABI-003 | Separately linked first native user program | In Progress | 0.1.0 | One-page RX AArch64 init validates stack, reads initramfs data into its stack, checks EOF/close, writes exact output, and exits; runtime is pending |

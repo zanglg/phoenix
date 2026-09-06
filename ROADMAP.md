@@ -131,14 +131,17 @@ userspace, and a small documented native Phoenix syscall ABI.
 Host-verifiable prerequisites now include lower-39-bit user mapping and guarded-stack plans plus
 the revision-0 AArch64 register and return-value convention. An opt-in statically backed probe now
 links an EL0 entry, replaces TTBR0, verifies one returning unknown syscall, and terminates through
-`exit(42)`. Runtime evidence and process lifecycle remain.
+`exit(42)`. Runtime evidence and the table-owned/thread portions of process lifecycle remain.
 
 Allocator-owned user-table topology, retry-safe descriptor materialization, and an exact combined
 owner retaining populated leaf frames plus table frames are now Host Tested. The target
 bootstrap-memory backend and ownership-retaining ASID-zero activation are Cross Compiled. A
 Host Tested full-range `copy_from_user` uses resident physical ownership instead of dereferencing
 raw pointers. `copy_to_user` applies the same complete residency and permission checks. Process
-ownership, ASID allocation, retirement, general fault recovery, and runtime evidence still remain.
+identity and the strict created/ready/running/exited state machine are now Host Tested, including a
+generation-checked fixed-capacity ownership table. Loaded init uses that state machine through its
+terminal exit. Table-owned runtime publication, threads, ASID allocation, retirement, general fault
+recovery, and runtime evidence still remain.
 
 Observable result: an EL0 program invokes syscalls, exits, and cannot directly access kernel
 memory.
@@ -154,7 +157,7 @@ enforced through an explicit populated type state, and the native argc/argv/envp
 is included with 16-byte alignment. The QEMU bootstrap backend can perform target writes while its
 coarse high alias remains active. A strict initramfs lookup, fixed-capacity read-only file table,
 transactional file offsets, and the complete dynamic executable entry path are Cross Compiled;
-general VFS ownership, process lifecycle, and runtime evidence remain.
+general VFS ownership, table-owned process resources, and runtime evidence remain.
 
 The first standalone AArch64 `init` ELF is reproducibly linked, stripped for embedding, accepted
 by the real loader, and inspected as one RX page. A deterministic, strictly validated `newc`

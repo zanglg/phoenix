@@ -25,6 +25,8 @@ narrow support claim:
   `exit(42)`;
 - checked cross-page user copies and bounded `open`/`read`/`write`/`close` probes let init read
   `etc/motd` from initramfs into its stack and emit verified output without raw pointer dereferences;
+- an architecture-neutral process state machine and generation-checked fixed-capacity registry are
+  host tested; loaded init uses the state machine for ready, running, and exited transitions;
 - lower-half AArch64 user-table topology and descriptor materialization are host tested;
 - a checked QEMU `virt` bootstrap physical-memory backend is cross-compiled but runtime pending;
 - DTB memory plus firmware/kernel/DTB reservations form a transactional boot allocator map;
@@ -102,6 +104,8 @@ the archive and end-to-end integration in [`docs/INITRAMFS.md`](docs/INITRAMFS.m
 [`docs/USER_COPY.md`](docs/USER_COPY.md), and the direct initramfs descriptor layer in
 [`docs/FILE_DESCRIPTORS.md`](docs/FILE_DESCRIPTORS.md). The currently implemented stack protection
 and its explicit limits are recorded in [`docs/KERNEL_STACKS.md`](docs/KERNEL_STACKS.md).
+Process identity, lifecycle, ownership, and teardown deferrals are documented in
+[`docs/PROCESS_LIFECYCLE.md`](docs/PROCESS_LIFECYCLE.md).
 
 ## LSP target
 

@@ -14,6 +14,7 @@ pub mod elf;
 pub mod file;
 pub mod initramfs;
 pub mod memory;
+pub mod process;
 pub mod process_image;
 pub mod user;
 pub mod user_copy;

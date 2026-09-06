@@ -82,7 +82,8 @@ did not precede it. Target execution is covered by `RUN-UCOPY-001` and `RUN-INIT
 
 - run the loaded-init write path on QEMU and retain its complete serial evidence;
 - replace the probe-local ownership-checked direct-map adapter with a process/VM-owned API;
-- move the static runtime slot into a process owner with locking and lifecycle states;
+- move the static runtime's now-explicit lifecycle control and resources into a synchronized
+  process-table owner;
 - add recoverable architecture fault handling before supporting user virtual dereferences or
   mappings that can change concurrently;
 - define partial-transfer behavior, interruption, and larger chunked writes;

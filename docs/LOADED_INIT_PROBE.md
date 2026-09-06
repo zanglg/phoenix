@@ -44,7 +44,8 @@ At boot, the focused kernel variant:
 14. publishes TTBR0, invalidates ASID-zero translations, loads EL0 registers, and executes `eret`;
 15. validates and copies the init message from owned physical frames for bounded stdout `write`;
 16. opens `etc/motd`, copies its bytes into a writable stack buffer, checks EOF, and closes it;
-17. writes those copied bytes and accepts native `exit(42)` as `PHOENIX_INIT_OK` only after output;
+17. writes those copied bytes, transitions its process control to `Exited(42)`, and accepts native
+    `exit(42)` as `PHOENIX_INIT_OK` only after output;
     any other terminal state emits `PHOENIX_INIT_FAIL`.
 
 The user program independently checks its aligned stack pointer, argc, argv/envp pointers and
@@ -78,6 +79,8 @@ the success status.
 - file reads use a window/commit transaction, so a failed `copy_to_user` does not advance offset;
 - ASID zero and the active runtime remain live forever because the terminal probe halts rather
   than returning or reclaiming ownership.
+- the runtime control must reach `Ready` before final publication, `Running` before `eret`, and
+  `Exited` exactly once before terminal success.
 
 ## Fixed capacities
 
@@ -114,7 +117,8 @@ errors all fail.
 - verify TTBR0, ELR, SP, SPSR, descriptor permissions, and the guard fault under GDB;
 - introduce explicit instruction-cache synchronization before enabling caches;
 - runtime-validate the integrated final TTBR1 switch and its ownership-checked user copies;
-- move terminal exit into a process owner that can retire the ASID and reclaim every frame;
+- replace the single retained process control with a table owner and scheduler-context reap that
+  can retire the ASID and reclaim every frame;
 - accept a checked initramfs supplied independently by firmware or a bootloader instead of
   compile-time embedding;
 - replace fixed probe capacities with accounted process limits where dynamic scale is needed;
