@@ -59,4 +59,6 @@ under `Unreleased` and the Cargo version remains 0.0.0 until the 0.1.0 release g
   barriers/TLB invalidation, and a bounded Runtime Pending final-map probe.
 - Loaded-init integration of the retained final TTBR1 owner, explicit bootstrap-memory capability
   revocation, ownership-checked post-switch user-frame copies, and ordered QEMU progress evidence.
+- One linker-reserved boot-stack guard page, explicit direct-map holes, final-plan absence checks,
+  and static artifact validation of guard size and placement.
 - Project, Agent, Roadmap, and kernel capability documentation.

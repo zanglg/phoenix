@@ -120,6 +120,7 @@ pub struct FinalKernelImageLayout {
     text: FrameRange,
     rodata: FrameRange,
     data: FrameRange,
+    boot_stack_guard: FrameRange,
 }
 
 impl FinalKernelImageLayout {
@@ -141,6 +142,11 @@ impl FinalKernelImageLayout {
     /// Return non-executable, writable kernel frames.
     pub const fn data(self) -> FrameRange {
         self.data
+    }
+
+    /// Return the physical frame omitted below the temporary boot stack.
+    pub const fn boot_stack_guard(self) -> FrameRange {
+        self.boot_stack_guard
     }
 }
 
@@ -169,6 +175,8 @@ where
         DirectMapOverride::new(layout.text, MappingAttributes::kernel_code())
             .map_err(FinalKernelMapError::PageTable)?,
         DirectMapOverride::new(layout.rodata, MappingAttributes::kernel_rodata())
+            .map_err(FinalKernelMapError::PageTable)?,
+        DirectMapOverride::unmapped(layout.boot_stack_guard)
             .map_err(FinalKernelMapError::PageTable)?,
     ];
     let mut plan = QemuVirtKernelPageTablePlan::new().map_err(FinalKernelMapError::PageTable)?;
@@ -241,6 +249,22 @@ fn validate_critical_mappings(
                 return Err(FinalKernelMapError::MissingKernelSectionMapping);
             }
         }
+    }
+    let guard_physical = layout
+        .boot_stack_guard
+        .start_frame_number()
+        .checked_mul(PAGE_SIZE)
+        .ok_or(FinalKernelMapError::InvalidKernelLayout)?;
+    let guard_virtual = guard_physical
+        .checked_add(KERNEL_VIRTUAL_OFFSET)
+        .ok_or(FinalKernelMapError::InvalidKernelLayout)?;
+    if plan
+        .translate(VirtAddr::new(guard_virtual))
+        .map_err(KernelPageTableError::Paging)
+        .map_err(FinalKernelMapError::PageTable)?
+        .is_some()
+    {
+        return Err(FinalKernelMapError::MissingKernelSectionMapping);
     }
     let uart = plan
         .translate(VirtAddr::new(PL011_VIRTUAL_BASE))
@@ -447,6 +471,8 @@ unsafe extern "C" {
     static __rodata_end: u8;
     static __data_start: u8;
     static __data_end: u8;
+    static __boot_stack_guard_start: u8;
+    static __boot_stack_guard_end: u8;
 }
 
 /// Return the complete physical range occupied by the linked kernel image.
@@ -470,12 +496,14 @@ pub fn kernel_image_layout() -> Result<FinalKernelImageLayout, FinalKernelMapErr
         &raw const __rodata_end as usize,
         &raw const __data_start as usize,
         &raw const __data_end as usize,
+        &raw const __boot_stack_guard_start as usize,
+        &raw const __boot_stack_guard_end as usize,
     ])
 }
 
 #[cfg(any(target_arch = "aarch64", test))]
 fn linked_kernel_image_layout(
-    bounds: [usize; 8],
+    bounds: [usize; 10],
 ) -> Result<FinalKernelImageLayout, FinalKernelMapError> {
     let [
         kernel_start,
@@ -486,6 +514,8 @@ fn linked_kernel_image_layout(
         rodata_end,
         data_start,
         data_end,
+        boot_stack_guard_start,
+        boot_stack_guard_end,
     ] = bounds;
     if kernel_start != text_start
         || !(text_start < text_end
@@ -493,8 +523,12 @@ fn linked_kernel_image_layout(
             && rodata_start < rodata_end
             && rodata_end <= data_start
             && data_start < data_end
-            && data_end == kernel_end)
+            && data_end == kernel_end
+            && data_start < boot_stack_guard_start
+            && boot_stack_guard_start < boot_stack_guard_end
+            && boot_stack_guard_end < data_end)
         || bounds.iter().any(|bound| !bound.is_multiple_of(PAGE_SIZE))
+        || boot_stack_guard_end - boot_stack_guard_start != PAGE_SIZE
     {
         return Err(FinalKernelMapError::InvalidKernelLayout);
     }
@@ -503,11 +537,13 @@ fn linked_kernel_image_layout(
     let text = linked_frame_range(text_start, text_end)?;
     let rodata = linked_frame_range(rodata_start, rodata_end)?;
     let data = linked_frame_range(data_start, data_end)?;
+    let boot_stack_guard = linked_frame_range(boot_stack_guard_start, boot_stack_guard_end)?;
     Ok(FinalKernelImageLayout {
         image,
         text,
         rodata,
         data,
+        boot_stack_guard,
     })
 }
 
@@ -761,6 +797,8 @@ mod tests {
             base + 0x30_000,
             base + 0x30_000,
             base + 0x18_0000,
+            base + 0x100_000,
+            base + 0x101_000,
         ])
         .unwrap();
         let ram = AddressRange::new(
@@ -771,7 +809,7 @@ mod tests {
         let plan = final_kernel_page_table_plan_from_regions(layout, [Ok(ram)]).unwrap();
 
         assert_eq!(plan.required_table_frames(), 5);
-        assert_eq!(plan.mappings().len(), 768);
+        assert_eq!(plan.mappings().len(), 767);
         for (address, attributes) in [
             (base, MappingAttributes::kernel_code()),
             (base + 0x20_000, MappingAttributes::kernel_rodata()),
@@ -785,6 +823,10 @@ mod tests {
                 attributes
             );
         }
+        assert_eq!(
+            plan.translate(VirtAddr::new(base + 0x100_000)).unwrap(),
+            None
+        );
         let uart = plan
             .translate(VirtAddr::new(PL011_VIRTUAL_BASE))
             .unwrap()
@@ -799,25 +841,44 @@ mod tests {
         assert_eq!(
             linked_kernel_image_layout([
                 base,
-                base + 0x4000,
+                base + 0x5000,
                 base,
                 base + 0x1001,
                 base + 0x2000,
                 base + 0x3000,
                 base + 0x3000,
+                base + 0x5000,
+                base + 0x3000,
                 base + 0x4000,
+            ]),
+            Err(FinalKernelMapError::InvalidKernelLayout)
+        );
+        assert_eq!(
+            linked_kernel_image_layout([
+                base,
+                base + 0x5000,
+                base,
+                base + 0x1000,
+                base + 0x1000,
+                base + 0x2000,
+                base + 0x2000,
+                base + 0x5000,
+                base + 0x3000,
+                base + 0x5000,
             ]),
             Err(FinalKernelMapError::InvalidKernelLayout)
         );
 
         let layout = linked_kernel_image_layout([
             base,
-            base + 0x4000,
+            base + 0x5000,
             base,
             base + 0x1000,
             base + 0x1000,
             base + 0x2000,
             base + 0x2000,
+            base + 0x5000,
+            base + 0x3000,
             base + 0x4000,
         ])
         .unwrap();

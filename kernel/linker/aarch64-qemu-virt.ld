@@ -10,6 +10,7 @@ KERNEL_PHYS_BASE = 0x0000000040080000;
 KERNEL_VIRT_OFFSET = 0xffffff8000000000;
 KERNEL_VIRT_BASE = KERNEL_PHYS_BASE + KERNEL_VIRT_OFFSET;
 BOOT_STACK_SIZE = 512K;
+BOOT_STACK_GUARD_SIZE = 4K;
 
 PHDRS
 {
@@ -66,7 +67,14 @@ SECTIONS
     . = ALIGN(8);
     __bss_end = .;
 
-    . = ALIGN(16);
+    . = ALIGN(4K);
+    .boot_stack_guard (NOLOAD) : AT(ADDR(.boot_stack_guard) - KERNEL_VIRT_OFFSET)
+    {
+        __boot_stack_guard_start = .;
+        . += BOOT_STACK_GUARD_SIZE;
+        __boot_stack_guard_end = .;
+    } :data
+
     .boot_stack (NOLOAD) : AT(ADDR(.boot_stack) - KERNEL_VIRT_OFFSET)
     {
         __boot_stack_bottom = .;
@@ -98,6 +106,11 @@ SECTIONS
 ASSERT(_start == KERNEL_VIRT_BASE, "bootstrap must be the first linked code")
 ASSERT((__boot_l1_page_table & 0xfff) == 0, "boot L1 table must be 4 KiB aligned")
 ASSERT((__boot_stack_top & 0xf) == 0, "boot stack must be 16-byte aligned")
+ASSERT((__boot_stack_guard_start & 0xfff) == 0 &&
+       __boot_stack_guard_end - __boot_stack_guard_start == BOOT_STACK_GUARD_SIZE,
+       "boot stack guard must be exactly one aligned page")
+ASSERT(__boot_stack_guard_end == __boot_stack_bottom,
+       "boot stack guard must immediately precede the stack")
 ASSERT((__text_start & 0xfff) == 0 && (__text_end & 0xfff) == 0,
        "final executable range must be page aligned")
 ASSERT((__rodata_start & 0xfff) == 0 && (__rodata_end & 0xfff) == 0,

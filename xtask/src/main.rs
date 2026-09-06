@@ -11,6 +11,7 @@ const KERNEL_PHYS_BASE: u64 = 0x0000_0000_4008_0000;
 const KERNEL_VIRT_BASE: u64 = 0xffff_ff80_4008_0000;
 const FINAL_KERNEL_PERMISSION_WINDOW_END: u64 = 0xffff_ff80_4020_0000;
 const BOOT_STACK_SIZE: u64 = 512 * 1024;
+const BOOT_STACK_GUARD_SIZE: u64 = 4 * 1024;
 const EXCEPTION_VECTOR_TABLE_SIZE: u64 = 2048;
 const INIT_ENTRY: usize = 0x0040_0000;
 const INIT_MESSAGE: &[u8] = b"Phoenix init: hello from EL0\n";
@@ -963,6 +964,8 @@ fn validate_symbol_layout(symbols: &BTreeMap<String, u64>, expect_el0_probe: boo
         "__bss_start",
         "__bss_end",
         "__boot_l1_page_table",
+        "__boot_stack_guard_start",
+        "__boot_stack_guard_end",
         "__boot_stack_bottom",
         "__boot_stack_top",
         "__exception_vectors",
@@ -990,6 +993,8 @@ fn validate_symbol_layout(symbols: &BTreeMap<String, u64>, expect_el0_probe: boo
     let bss_start = symbols["__bss_start"];
     let bss_end = symbols["__bss_end"];
     let table = symbols["__boot_l1_page_table"];
+    let stack_guard_start = symbols["__boot_stack_guard_start"];
+    let stack_guard_end = symbols["__boot_stack_guard_end"];
     let stack_bottom = symbols["__boot_stack_bottom"];
     let stack_top = symbols["__boot_stack_top"];
     let vectors = symbols["__exception_vectors"];
@@ -1035,8 +1040,15 @@ fn validate_symbol_layout(symbols: &BTreeMap<String, u64>, expect_el0_probe: boo
     if bss_end < bss_start {
         errors.push("BSS end precedes BSS start".to_owned());
     }
-    if stack_bottom < bss_end || stack_top - stack_bottom != BOOT_STACK_SIZE {
+    if stack_bottom < bss_end || stack_top.checked_sub(stack_bottom) != Some(BOOT_STACK_SIZE) {
         errors.push("bootstrap stack range is invalid".to_owned());
+    }
+    if stack_guard_start & (BOOT_STACK_GUARD_SIZE - 1) != 0
+        || stack_guard_end.checked_sub(stack_guard_start) != Some(BOOT_STACK_GUARD_SIZE)
+        || stack_guard_start < bss_end
+        || stack_guard_end != stack_bottom
+    {
+        errors.push("bootstrap stack guard range is invalid".to_owned());
     }
     if stack_top & 0xf != 0 {
         errors.push("bootstrap stack top is not 16-byte aligned".to_owned());
@@ -1411,7 +1423,7 @@ mod tests {
 
     #[test]
     fn validates_expected_boot_symbol_layout() {
-        let symbols = parse_nm_symbols(
+        let mut symbols = parse_nm_symbols(
             "ffffff8040080000 T __kernel_start\n\
              ffffff8040080000 T __text_start\n\
              ffffff8040080000 T _start\n\
@@ -1425,14 +1437,22 @@ mod tests {
              ffffff8040084000 D __boot_l1_page_table\n\
              ffffff8040085000 D __bss_start\n\
              ffffff8040085000 B __bss_end\n\
-             ffffff8040085000 B __boot_stack_bottom\n\
-             ffffff8040105000 B __boot_stack_top\n\
-             ffffff8040105000 B __kernel_end\n\
-             ffffff8040105000 B __data_end",
+             ffffff8040085000 B __boot_stack_guard_start\n\
+             ffffff8040086000 B __boot_stack_guard_end\n\
+             ffffff8040086000 B __boot_stack_bottom\n\
+             ffffff8040106000 B __boot_stack_top\n\
+             ffffff8040106000 B __kernel_end\n\
+             ffffff8040106000 B __data_end",
         );
 
         assert_eq!(symbols["_start"], KERNEL_VIRT_BASE);
         assert!(validate_symbol_layout(&symbols, false).is_empty());
+        symbols.insert("__boot_stack_guard_end".to_owned(), 0xffff_ff80_4008_7000);
+        assert!(
+            validate_symbol_layout(&symbols, false)
+                .iter()
+                .any(|error| error.contains("stack guard"))
+        );
     }
 
     #[test]
@@ -1454,12 +1474,14 @@ mod tests {
              ffffff8040085000 D __boot_l1_page_table\n\
              ffffff8040085000 D __bss_start\n\
              ffffff8040085000 B __bss_end\n\
-             ffffff8040085000 B __boot_stack_bottom\n\
-             ffffff8040105000 B __boot_stack_top\n\
-             ffffff8040106000 B __user_probe_stack_bottom\n\
-             ffffff8040107000 B __user_probe_stack_top\n\
-             ffffff8040107000 B __kernel_end\n\
-             ffffff8040107000 B __data_end",
+             ffffff8040085000 B __boot_stack_guard_start\n\
+             ffffff8040086000 B __boot_stack_guard_end\n\
+             ffffff8040086000 B __boot_stack_bottom\n\
+             ffffff8040106000 B __boot_stack_top\n\
+             ffffff8040107000 B __user_probe_stack_bottom\n\
+             ffffff8040108000 B __user_probe_stack_top\n\
+             ffffff8040108000 B __kernel_end\n\
+             ffffff8040108000 B __data_end",
         );
 
         assert!(validate_symbol_layout(&symbols, true).is_empty());

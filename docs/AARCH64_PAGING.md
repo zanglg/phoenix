@@ -59,8 +59,9 @@ live tables. This separates range and permission validation from system-register
 `kernel/src/arch/aarch64/user_page_table.rs` builds the lower-half user hierarchy on top of these
 descriptors. It reuses intermediate tables, atomically allocates their frames, and materializes all
 links and leaves through a private-table backend. `kernel_page_table.rs` builds a separate
-mixed-level upper-half hierarchy, applies ordered page-granular permission overrides to a direct
-map, atomically owns its table frames, and exposes publication only through a permanent borrow.
+mixed-level upper-half hierarchy, applies ordered page-granular permission overrides or explicit
+holes to a direct map, atomically owns its table frames, and exposes publication only through a
+permanent borrow.
 See `docs/AARCH64_USER_PAGE_TABLES.md` and `docs/FINAL_KERNEL_ADDRESS_SPACE.md` for their distinct
 ownership boundaries.
 
@@ -97,10 +98,11 @@ non-executable convenience constructor.
 Host tests cover canonical boundaries, table indices, mapping sizes, descriptor types and output
 addresses, privilege and execute bits, W^X rejection, alignment, physical width, deterministic
 ordering, overlap, capacity, translation, unmapping, mixed-level direct-map decomposition,
-permission overrides, table ownership, and retry-safe materialization. The focused final-map image
-is also Cross Compiled and ELF Inspected with the configured AArch64 bare-metal target.
+permission overrides, exact guard holes, table ownership, and retry-safe materialization. The
+focused final-map image is also Cross Compiled and ELF Inspected with the configured AArch64
+bare-metal target.
 
-Runtime installation remains tracked as `RUN-MMU-001` and `RUN-MMU-002` in
+Runtime installation remains tracked as `RUN-MMU-001`, `RUN-MMU-002`, and `RUN-KSTACK-001` in
 `docs/RUNTIME_VALIDATION.md`.
 
 ## TODO
@@ -108,7 +110,7 @@ Runtime installation remains tracked as `RUN-MMU-001` and `RUN-MMU-002` in
 - derive supported physical-address size from `ID_AA64MMFR0_EL1.PARange`;
 - replace the bootstrap private-table backend and retained ASID-zero activation with process-owned
   address-space lifecycle support;
-- add a guarded heap and guarded kernel/exception stacks to the final address space;
+- add a guarded heap and replace the static guarded boot stack with owned thread/exception stacks;
 - define live table-update locking and break-before-make beyond the current one-time publication;
 - define ASID allocation and TTBR0 lifetime for processes;
 - runtime-validate final `TTBR1_EL1`, then retire the temporary low RAM alias safely;

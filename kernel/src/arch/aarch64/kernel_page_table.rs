@@ -67,11 +67,11 @@ pub enum KernelTranslationTableRole {
     },
 }
 
-/// One permission override inside an otherwise uniform physical direct map.
+/// One mapped or deliberately absent interval inside a physical direct map.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DirectMapOverride {
     frames: FrameRange,
-    attributes: MappingAttributes,
+    attributes: Option<MappingAttributes>,
 }
 
 impl DirectMapOverride {
@@ -86,7 +86,21 @@ impl DirectMapOverride {
         if attributes.access().user_accessible() {
             return Err(KernelPageTableError::UserAccessibleMapping);
         }
-        Ok(Self { frames, attributes })
+        Ok(Self {
+            frames,
+            attributes: Some(attributes),
+        })
+    }
+
+    /// Define a nonempty physical-frame interval omitted from the direct map.
+    pub fn unmapped(frames: FrameRange) -> Result<Self, KernelPageTableError> {
+        if frames.is_empty() {
+            return Err(KernelPageTableError::InvalidOverrideOrder);
+        }
+        Ok(Self {
+            frames,
+            attributes: None,
+        })
     }
 
     /// Return the overridden physical-frame interval.
@@ -94,8 +108,8 @@ impl DirectMapOverride {
         self.frames
     }
 
-    /// Return the replacement kernel mapping attributes.
-    pub const fn attributes(self) -> MappingAttributes {
+    /// Return replacement attributes, or `None` for a deliberate mapping hole.
+    pub const fn attributes(self) -> Option<MappingAttributes> {
         self.attributes
     }
 }
@@ -221,9 +235,10 @@ impl<const TABLES: usize, const MAPPINGS: usize> KernelPageTablePlan<TABLES, MAP
     /// Map complete physical frames at one fixed higher-half offset.
     ///
     /// `overrides` must be strictly ordered and disjoint. Intersections split
-    /// the default direct map at exact page boundaries; the greedy range
-    /// mapper then selects the largest legal leaves for every piece. The
-    /// complete physical region is committed atomically.
+    /// the default direct map at exact page boundaries; an override may replace
+    /// permissions or deliberately leave a hole. The greedy range mapper then
+    /// selects the largest legal leaves for every mapped piece. The complete
+    /// physical region is committed atomically.
     pub fn map_direct_frames(
         &mut self,
         frames: FrameRange,
@@ -278,7 +293,7 @@ impl<const TABLES: usize, const MAPPINGS: usize> KernelPageTablePlan<TABLES, MAP
         let end = frames.end_frame_number();
         while current < end {
             let mut boundary = end;
-            let mut attributes = default_attributes;
+            let mut attributes = Some(default_attributes);
             for replacement in overrides {
                 let replacement_start = replacement.frames.start_frame_number();
                 let replacement_end = replacement.frames.end_frame_number();
@@ -304,12 +319,14 @@ impl<const TABLES: usize, const MAPPINGS: usize> KernelPageTablePlan<TABLES, MAP
             let length = frame_count
                 .checked_mul(PAGE_SIZE)
                 .ok_or(KernelPageTableError::Paging(PagingError::AddressOverflow))?;
-            self.map_range_inner(
-                VirtAddr::new(virtual_start),
-                PhysAddr::new(physical_start),
-                length,
-                attributes,
-            )?;
+            if let Some(attributes) = attributes {
+                self.map_range_inner(
+                    VirtAddr::new(virtual_start),
+                    PhysAddr::new(physical_start),
+                    length,
+                    attributes,
+                )?;
+            }
             current = boundary;
         }
         Ok(())
@@ -794,7 +811,7 @@ mod tests {
     }
 
     #[test]
-    fn direct_map_splits_kernel_permissions_without_losing_large_blocks() {
+    fn direct_map_splits_permissions_and_leaves_guard_holes() {
         let text = DirectMapOverride::new(
             frame_range(0x4008_0000, 2),
             MappingAttributes::kernel_code(),
@@ -805,17 +822,18 @@ mod tests {
             MappingAttributes::kernel_rodata(),
         )
         .unwrap();
+        let guard = DirectMapOverride::unmapped(frame_range(0x4008_3000, 1)).unwrap();
         let mut plan = KernelPageTablePlan::<3, 513>::new().unwrap();
         plan.map_direct_frames(
             frame_range(0x4000_0000, 1024),
             OFFSET,
             MappingAttributes::kernel_data(),
-            &[text, rodata],
+            &[text, rodata, guard],
         )
         .unwrap();
 
         assert_eq!(plan.required_table_frames(), 3);
-        assert_eq!(plan.mappings().len(), 513);
+        assert_eq!(plan.mappings().len(), 512);
         let ordinary = plan
             .translate(VirtAddr::new(OFFSET + 0x4000_0000))
             .unwrap()
@@ -828,6 +846,7 @@ mod tests {
             .translate(VirtAddr::new(OFFSET + 0x4008_2000))
             .unwrap()
             .unwrap();
+        let absent = plan.translate(VirtAddr::new(OFFSET + 0x4008_3000)).unwrap();
         let large = plan
             .translate(VirtAddr::new(OFFSET + 0x4021_2345))
             .unwrap()
@@ -836,6 +855,7 @@ mod tests {
         assert_eq!(ordinary.level, TranslationLevel::L3);
         assert_eq!(executable.attributes, MappingAttributes::kernel_code());
         assert_eq!(readonly.attributes, MappingAttributes::kernel_rodata());
+        assert_eq!(absent, None);
         assert_eq!(large.attributes, MappingAttributes::kernel_data());
         assert_eq!(large.level, TranslationLevel::L2);
         assert_eq!(large.physical_address, PhysAddr::new(0x4021_2345));
@@ -869,6 +889,10 @@ mod tests {
         assert_eq!(
             DirectMapOverride::new(frame_range(0x5000_0000, 1), MappingAttributes::user_data(),),
             Err(KernelPageTableError::UserAccessibleMapping)
+        );
+        assert_eq!(
+            DirectMapOverride::unmapped(frame_range(0x5000_0000, 0)),
+            Err(KernelPageTableError::InvalidOverrideOrder)
         );
     }
 

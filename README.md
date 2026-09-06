@@ -11,7 +11,7 @@ narrow support claim:
 - the Rust workspace follows stable Rust and declares Rust 1.95 as its minimum version;
 - the `no_std` kernel links as an AArch64 ELF and can be converted to a raw image;
 - static inspection verifies its machine type, entry, load addresses, page-table alignment,
-  BSS bounds, and 512 KiB boot-construction stack;
+  BSS bounds, one-page boot-stack guard, and 512 KiB boot-construction stack;
 - rust-analyzer can use the configured kernel target from an x86_64 development host;
 - host-side unit tests and validation are available through `cargo xtask`;
 - a bounded QEMU runner and boot-test harness are implemented and host tested;
@@ -30,8 +30,8 @@ narrow support claim:
 - DTB memory plus firmware/kernel/DTB reservations form a transactional boot allocator map;
 - an opt-in boot-memory probe cross-links the real DTB-to-allocation-to-readback path;
 - an opt-in final-kernel-map image builds allocator-owned TTBR1 tables with RX text, RO/NX
-  rodata, RW/NX RAM, and a page-granular PL011 mapping, then publishes them with barriers and TLB
-  invalidation; target execution is pending;
+  rodata, RW/NX RAM, an unmapped boot-stack guard, and a page-granular PL011 mapping, then
+  publishes them with barriers and TLB invalidation; target execution is pending;
 - runtime boot and serial output have **not** been validated because the current development
   environment has no QEMU.
 
@@ -100,7 +100,8 @@ linked program is documented in [`docs/FIRST_USER_PROGRAM.md`](docs/FIRST_USER_P
 the archive and end-to-end integration in [`docs/INITRAMFS.md`](docs/INITRAMFS.md) and
 [`docs/LOADED_INIT_PROBE.md`](docs/LOADED_INIT_PROBE.md). The user-memory boundary is documented in
 [`docs/USER_COPY.md`](docs/USER_COPY.md), and the direct initramfs descriptor layer in
-[`docs/FILE_DESCRIPTORS.md`](docs/FILE_DESCRIPTORS.md).
+[`docs/FILE_DESCRIPTORS.md`](docs/FILE_DESCRIPTORS.md). The currently implemented stack protection
+and its explicit limits are recorded in [`docs/KERNEL_STACKS.md`](docs/KERNEL_STACKS.md).
 
 ## LSP target
 

@@ -92,9 +92,10 @@ Discover and reserve physical memory, add a page-frame allocator, establish the 
 address space, install final page tables, and provide a guarded kernel heap and stacks. The
 descriptor and mixed-level kernel-table model is Host Tested. A focused Cross Compiled image now
 uses the real DTB allocator to create a direct map, separates text/rodata/data permissions, maps
-PL011 at page granularity, permanently retains the tables, and publishes TTBR1 with barriers and
-TLB invalidation. Target execution remains Runtime Pending. Temporary TTBR0 aliases, the heap, and
-guarded kernel stacks still remain.
+PL011 at page granularity, omits a linker-reserved guard below the boot-construction stack,
+permanently retains the tables, and publishes TTBR1 with barriers and TLB invalidation. Target
+execution remains Runtime Pending. The heap and owned per-thread/exception stacks still remain;
+the loaded-init path retires temporary TTBR0 aliases when it installs its user hierarchy.
 
 Observable result: allocator and mapping self-tests exercise success and failure paths without
 corrupting the bootstrap, DTB, image, or device mappings.

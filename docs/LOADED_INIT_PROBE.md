@@ -68,6 +68,7 @@ the success status.
 - the activation API requires a `'static` borrow of that complete owner;
 - executable pages are user RX and never writable; stack pages are user RW and never executable;
 - the guard page has no mapping;
+- the final TTBR1 map also omits the linker-reserved page below the live boot-construction stack;
 - table writes precede TTBR0 publication through `DSB ISHST`, followed by the documented
   invalidation and synchronization sequence;
 - the current bootstrap keeps instruction and data caches disabled, so copied code does not yet

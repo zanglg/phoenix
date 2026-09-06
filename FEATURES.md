@@ -62,9 +62,9 @@ _No unclassified entries._
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
 | MM-001 | Physical page allocator | In Progress | 0.1.0 | Allocator/map logic is Host Tested; target DTB borrowing and linker-bound derivation are Cross Compiled and Runtime Pending |
-| MM-002 | Virtual memory and kernel address space | In Progress | 0.1.0 | Final mixed-level TTBR1 planning, allocation, materialization, permission separation, and publication are built; QEMU evidence, low-alias retirement, heap, and guarded stacks remain |
+| MM-002 | Virtual memory and kernel address space | In Progress | 0.1.0 | Final mixed-level TTBR1 planning, allocation, materialization, permission separation, boot-stack guard, and publication are built; QEMU evidence, general low-alias retirement, and dynamic mappings remain |
 | MM-003 | Kernel heap and fallible allocation policy | Planned | 0.1.0 | Define allocation-failure behavior |
-| MM-004 | Kernel stacks and guard pages | Planned | 0.1.0 | Include exception-context requirements |
+| MM-004 | Kernel stacks and guard pages | In Progress | 0.1.0 | Final TTBR1 omits one linker-reserved page below the temporary boot stack; owned thread and exception stacks remain |
 | MM-005 | User address spaces and safe user copies | In Progress | 0.1.0 | Plans/materialization/ownership and bidirectional copies are Host Tested; loaded init uses an ownership-checked final-direct-map adapter; general fault recovery, lifecycle, and runtime evidence remain |
 | MM-006 | Shared memory and copy-on-write | Deferred | Unscheduled | Requires process VM |
 | MM-007 | Huge pages and block mappings | Captured | Unscheduled | Revisit after basic paging |

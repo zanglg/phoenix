@@ -35,12 +35,13 @@ remain disabled or deferred. The default image retains the coarse mapping; the o
 linked EL1 exception vector table before emitting its first console line, but keeps asynchronous
 exceptions masked.
 
-The linker reserves a zeroed BSS followed by a 512 KiB, 16-byte-aligned boot-construction stack.
-The larger temporary stack covers the statically inspected debug-build footprint of allocation-free
-page-table and process-image planning; it is not the future per-thread stack policy. Rust receives
-the higher-half stack address. QEMU `virt` PL011 is physically at `0x09000000`, but Rust accesses
-its temporary higher-half device alias at `0xffffff8009000000`; diagnostics therefore survive an
-opt-in replacement of TTBR0.
+The linker reserves a zeroed BSS, one page-aligned 4 KiB guard frame, and a 512 KiB,
+16-byte-aligned boot-construction stack. The coarse bootstrap mappings still map the guard; the
+final TTBR1 hierarchy deliberately omits it. The larger temporary stack covers the statically
+inspected debug-build footprint of allocation-free page-table and process-image planning; it is
+not the future per-thread stack policy. Rust receives the higher-half stack address. QEMU `virt`
+PL011 is physically at `0x09000000`, but Rust accesses its temporary higher-half device alias at
+`0xffffff8009000000`; diagnostics therefore survive an opt-in replacement of TTBR0.
 
 The linker additionally exposes page-aligned text, rodata, and writable-data boundaries and
 rejects an image extending beyond physical `0x40200000`. The final address-space contract is in
@@ -63,8 +64,8 @@ cargo xtask qemu-command
 ```
 
 These commands build and statically verify the ELF machine type, entry address, first physical
-and virtual load addresses, required boot symbols, page-table alignment, BSS ordering, stack
-size/alignment, raw image, and linker map. `cargo xtask ci` includes both commands.
+and virtual load addresses, required boot symbols, page-table alignment, BSS ordering, exact guard
+placement, stack size/alignment, raw image, and linker map. `cargo xtask ci` includes both commands.
 
 The bounded `cargo xtask test-boot` runner is documented in `docs/QEMU.md`. It is implemented and
 Host Tested at the command-construction and output-classification level, but has not been executed.

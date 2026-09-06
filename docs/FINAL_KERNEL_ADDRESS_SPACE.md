@@ -18,7 +18,8 @@ The linker emits page-aligned permission-domain symbols and enforces their order
 | --- | --- | --- |
 | Text, vectors, optional probe text | `__text_start..__text_end` minus the offset | Normal, read-only, executable |
 | Read-only data | `__rodata_start..__rodata_end` minus the offset | Normal, read-only, non-executable |
-| Data, BSS, boot tables, stacks | `__data_start..__data_end` minus the offset | Normal, read/write, non-executable |
+| Data, BSS, boot tables, usable stack pages | `__data_start..__data_end` minus the offset, excluding the guard | Normal, read/write, non-executable |
+| Boot-stack guard | `__boot_stack_guard_start..__boot_stack_guard_end` minus the offset | Deliberately unmapped |
 | Other DTB-declared RAM | Complete frames in each memory node | Normal, read/write, non-executable |
 | PL011 | Physical `0x09000000`, one 4 KiB page | Device-nGnRnE, read/write, non-executable |
 
@@ -38,8 +39,9 @@ the complete requested change in a copy before committing it and chooses the lar
 
 Permission overrides split the physical direct map at page boundaries. On the pinned 512 MiB
 machine, the first 2 MiB is represented by 512 L3 pages so that text, rodata, and data differ;
-the remaining 510 MiB uses 255 L2 blocks. The single PL011 page brings the exact topology to five
-table frames and 768 leaf mappings. The configured limits are eight table frames and 1024 leaves,
+the remaining 510 MiB uses 255 L2 blocks. Omitting the guard and adding the single PL011 page brings
+the exact topology to five table frames and 767 leaf mappings. The configured limits are eight
+table frames and 1024 leaves,
 so an unexpected DTB topology fails explicitly rather than truncating the address space.
 
 The platform builder consumes its unpublished plan as it appends each range, avoiding a second
@@ -49,8 +51,8 @@ all leaf-planning metadata and retains only the compact table-role/frame array; 
 that owner below 512 bytes.
 
 The QEMU platform builder verifies both ends of text, rodata, and data through the offline
-translation model and verifies the PL011 physical address, page level, and device attributes
-before any table frame is allocated.
+translation model, proves the boot-stack guard is absent, and verifies the PL011 physical address,
+page level, and device attributes before any table frame is allocated.
 
 ## Ownership and publication
 
@@ -69,9 +71,10 @@ publication operation. Publication executes:
 4. `TLBI VMALLE1IS`;
 5. `DSB ISH` and `ISB` before continuing.
 
-This replaces the coarse higher-half bootstrap hierarchy. It intentionally leaves `TTBR0_EL1`
-unchanged, so the temporary low device and RAM aliases remain until a later user address-space
-transition replaces TTBR0. Removing those aliases is a separate runtime-sensitive operation.
+This replaces the coarse higher-half bootstrap hierarchy. The standalone final-map probe
+intentionally leaves `TTBR0_EL1` unchanged, so its temporary low device and RAM aliases remain.
+The loaded-init path immediately replaces TTBR0 with its owned user hierarchy. General low-alias
+retirement outside that path remains a separate runtime-sensitive operation.
 
 ## Focused QEMU probe
 
@@ -115,7 +118,7 @@ load addresses, and the final success sentinel. None of this is runtime evidence
   the current 32-bit IPS envelope;
 - enable caches only after cache-maintenance and memory-ordering requirements are designed and
   runtime tested;
-- add guarded kernel and exception stacks;
+- replace the guarded boot-construction stack with owned per-thread and exception stacks;
 - define safe live mapping updates, break-before-make, local versus broadcast TLB maintenance,
   ASIDs, and SMP synchronization;
 
