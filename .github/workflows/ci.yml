@@ -20,6 +20,6 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
       - name: Validate without an emulator
         run: cargo xtask ci
