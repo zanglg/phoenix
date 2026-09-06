@@ -95,6 +95,10 @@ validate the barrier and TLB-maintenance sequence.
 Observable result: allocator and mapping self-tests exercise success and failure paths without
 corrupting the bootstrap, DTB, image, or device mappings.
 
+The Host Tested boot-map builder now normalizes DTB memory and removes firmware reservations, the
+loaded kernel, and the borrowed DTB before freezing the allocator. Real boot-argument and linker
+symbol integration remains Runtime Pending.
+
 ## 5. Interrupts and time
 
 Initialize the GIC and generic timer, define interrupt-context rules, dispatch IRQs, and provide a

@@ -11,6 +11,9 @@ reservation termination and overlap, structure grammar, exact end token, node/pr
 property-name offsets, and property payload bounds. Property values remain borrowed byte slices
 until explicitly decoded.
 
+`BootInfo` also exposes the validated total blob size. The boot memory-map builder combines that
+size with the physical boot argument so every page touched by the still-borrowed DTB is reserved.
+
 The strings block intentionally has no alignment requirement, as specified by DTSpec. The
 reservation and structure blocks require 8-byte and 4-byte offsets respectively.
 

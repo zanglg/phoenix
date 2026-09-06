@@ -29,6 +29,7 @@ not create speculative implementations for them.
 - `docs/AARCH64_PAGING.md`: temporary and final page-table model, permissions, and remaining work.
 - `docs/AARCH64_USER_PAGE_TABLES.md`: user-table topology, ownership, materialization, and activation boundary.
 - `docs/QEMU_VIRT_BOOTSTRAP_MEMORY.md`: checked target access to private RAM under the temporary TTBR1 alias.
+- `docs/BOOT_MEMORY_MAP.md`: DTB-to-allocator construction and mandatory boot reservations.
 - `docs/AARCH64_EXCEPTIONS.md`: vector, frame, syndrome, and remaining runtime-handler contract.
 - `docs/USER_ADDRESS_SPACE.md`: EL0 virtual region, permissions, mapping plan, and guarded stack.
 - `docs/ELF_LOADER.md`: strict initial executable subset and transactional loading requirements.

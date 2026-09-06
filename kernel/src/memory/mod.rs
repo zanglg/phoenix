@@ -2,8 +2,10 @@
 
 use core::cmp::{max, min};
 
+mod boot;
 mod physical;
 
+pub use boot::{BootMemoryError, memory_map_from_boot_info};
 pub use physical::{AllocationError, FrameAllocator, FrameRange, MemoryMap, MemoryMapError};
 
 /// Phoenix's base page size in bytes.

@@ -24,9 +24,9 @@ a heap:
 - an operation that exceeds metadata capacity returns an error without partially changing the
   map.
 
-The intended boot integration order is to add DTB memory ranges and then reserve firmware ranges,
-the kernel physical image, DTB blob, bootstrap page table, bootstrap stack, and any platform
-regions that must never be allocated.
+`memory_map_from_boot_info` implements the first boot integration: it adds DTB memory ranges and
+then reserves firmware reservation-map entries, the complete kernel physical image, and the DTB
+blob itself. Bootstrap tables and stacks are covered by the supplied full linker-image range.
 
 ## Frame allocator
 
@@ -57,7 +57,8 @@ AArch64 by `cargo xtask ci`.
 ## TODO and skipped work
 
 - choose the production range capacity using observed QEMU DTBs;
-- construct the runtime map from `BootInfo` and linker-provided physical bounds;
+- connect the Host Tested `BootInfo` map builder to linker-provided physical bounds at runtime;
+- parse and reserve `/reserved-memory` nodes;
 - reserve the DTB for the lifetime of its borrowed references;
 - add an early allocation audit log and runtime self-check;
 - select a scalable allocator only after allocation patterns are observable;

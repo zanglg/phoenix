@@ -55,6 +55,11 @@ impl<'a> BootInfo<'a> {
         self.bootargs
     }
 
+    /// Return the validated byte length of the complete source DTB blob.
+    pub const fn device_tree_size(self) -> usize {
+        self.tree.total_size()
+    }
+
     /// Iterate over usable physical ranges declared by root memory nodes.
     pub fn memory_regions(self) -> MemoryRegions<'a> {
         MemoryRegions::new(self.tree, self.cells)
@@ -295,7 +300,9 @@ mod tests {
     use crate::dtb::{
         DeviceTree, Error, FDT_BEGIN_NODE, FDT_END, FDT_END_NODE, FDT_MAGIC, FDT_PROP,
     };
-    use crate::memory::{AddressRange, PhysAddr};
+    use crate::memory::{
+        AddressRange, BootMemoryError, MemoryMapError, PhysAddr, memory_map_from_boot_info,
+    };
 
     fn push_u32(bytes: &mut Vec<u8>, value: u32) {
         bytes.extend_from_slice(&value.to_be_bytes());
@@ -402,6 +409,7 @@ mod tests {
 
         assert_eq!(info.boot_cpu_id(), 3);
         assert_eq!(info.bootargs(), Some("console=ttyAMA0"));
+        assert_eq!(info.device_tree_size(), blob.len());
         assert_eq!(
             info.memory_regions().collect::<Result<Vec<_>, _>>(),
             Ok(vec![
@@ -412,6 +420,55 @@ mod tests {
             ])
         );
         assert_eq!(info.reservations().count(), 1);
+    }
+
+    #[test]
+    fn boot_memory_map_reserves_firmware_kernel_and_device_tree() {
+        let reg = two_cell_reg(&[(0x4000_0000, 0x1000_0000)]);
+        let blob = boot_fixture(2, 2, &reg);
+        let info = DeviceTree::from_bytes(&blob).unwrap().boot_info().unwrap();
+        let kernel =
+            AddressRange::new(PhysAddr::new(0x4008_0000), PhysAddr::new(0x4009_0000)).unwrap();
+        let map = memory_map_from_boot_info::<4>(info, kernel, PhysAddr::new(0x4010_0000))
+            .expect("four normalized free ranges");
+        let ranges: Vec<_> = map
+            .free_ranges()
+            .iter()
+            .map(|range| (range.start_frame_number(), range.end_frame_number()))
+            .collect();
+
+        assert_eq!(
+            ranges,
+            [
+                (0x40000, 0x40080),
+                (0x40090, 0x40100),
+                (0x40101, 0x48000),
+                (0x48001, 0x50000),
+            ]
+        );
+        assert_eq!(
+            memory_map_from_boot_info::<3>(info, kernel, PhysAddr::new(0x4010_0000)),
+            Err(BootMemoryError::MemoryMap(MemoryMapError::CapacityExceeded))
+        );
+    }
+
+    #[test]
+    fn boot_memory_map_rejects_empty_kernel_and_exhausted_memory() {
+        let reg = two_cell_reg(&[(0x4008_0000, 0x1_0000)]);
+        let blob = boot_fixture(2, 2, &reg);
+        let info = DeviceTree::from_bytes(&blob).unwrap().boot_info().unwrap();
+        let kernel =
+            AddressRange::new(PhysAddr::new(0x4008_0000), PhysAddr::new(0x4009_0000)).unwrap();
+        let empty = AddressRange::new(PhysAddr::new(1), PhysAddr::new(1)).unwrap();
+
+        assert_eq!(
+            memory_map_from_boot_info::<2>(info, empty, PhysAddr::new(0x5000_0000)),
+            Err(BootMemoryError::EmptyKernelImage)
+        );
+        assert_eq!(
+            memory_map_from_boot_info::<2>(info, kernel, PhysAddr::new(0x5000_0000)),
+            Err(BootMemoryError::NoUsableFrames)
+        );
     }
 
     #[test]

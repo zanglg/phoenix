@@ -19,6 +19,7 @@ narrow support claim:
 - validated ELF segments and a guarded stack can be planned and assigned frames transactionally;
 - lower-half AArch64 user-table topology and descriptor materialization are host tested;
 - a checked QEMU `virt` bootstrap physical-memory backend is cross-compiled but runtime pending;
+- DTB memory plus firmware/kernel/DTB reservations form a transactional boot allocator map;
 - runtime boot and serial output have **not** been validated because the current development
   environment has no QEMU.
 
