@@ -29,6 +29,9 @@ translation regime:
 - `0xffffff8040000000..0xffffff807fffffff` maps physical
   `0x40000000..0x7fffffff` as normal memory.
 
+`TCR_EL1.AS` remains clear, so TTBR ASIDs are eight bits. Bootstrap translations use ASID zero;
+process address spaces reserve that value and begin at one. See `docs/AARCH64_ASIDS.md`.
+
 The MMU is enabled before entering Rust. Instruction and data caches, FP/SIMD, and interrupts
 remain disabled or deferred. The default image retains the coarse mapping; the opt-in
 `kernel-map-probe` replaces TTBR1 with the final permission-separated hierarchy. Rust installs the

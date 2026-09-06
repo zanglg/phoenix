@@ -135,12 +135,14 @@ links an EL0 entry, replaces TTBR0, verifies one returning unknown syscall, and 
 
 Allocator-owned user-table topology, retry-safe descriptor materialization, and an exact combined
 owner retaining populated leaf frames plus table frames are now Host Tested. The target
-bootstrap-memory backend and ownership-retaining ASID-zero activation are Cross Compiled. A
+bootstrap-memory backend, nonzero 8-bit ASID model, checked TTBR0 composition, and
+ownership-retaining ASID-1 activation are Cross Compiled. The ASID allocator deliberately never
+reuses an ID until retirement and invalidation exist. A
 Host Tested full-range `copy_from_user` uses resident physical ownership instead of dereferencing
 raw pointers. `copy_to_user` applies the same complete residency and permission checks. Process
 identity and the strict created/ready/running/exited state machine are now Host Tested, including a
 generation-checked fixed-capacity ownership table. Loaded init uses that state machine through its
-terminal exit. Table-owned runtime publication, threads, ASID allocation, retirement, general fault
+terminal exit. Table-owned runtime publication, threads, ASID reuse/retirement, general fault
 recovery, and runtime evidence still remain.
 
 Observable result: an EL0 program invokes syscalls, exits, and cannot directly access kernel

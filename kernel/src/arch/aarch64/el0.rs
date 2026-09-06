@@ -2,6 +2,7 @@
 
 use core::ptr;
 
+use crate::arch::aarch64::asid::{AddressSpaceId, AsidError};
 use crate::arch::aarch64::paging::{
     Descriptor, MappingAttributes, PagingError, TranslationIndices, TranslationLevel,
 };
@@ -43,6 +44,8 @@ pub enum El0ProbeError {
     Paging(PagingError),
     /// A fixed user virtual address violates the user-region contract.
     UserAddress(UserAddressError),
+    /// The fixed nonzero probe ASID violates the active translation regime.
+    Asid(AsidError),
 }
 
 /// Fully populated static translation root plus EL0 entry state.
@@ -51,6 +54,7 @@ pub struct PreparedEl0Probe {
     root: PageFrame,
     entry: UserAddr,
     stack_pointer: UserAddr,
+    asid: AddressSpaceId,
 }
 
 impl PreparedEl0Probe {
@@ -67,6 +71,11 @@ impl PreparedEl0Probe {
     /// Return the initial EL0 stack pointer.
     pub const fn stack_pointer(self) -> UserAddr {
         self.stack_pointer
+    }
+
+    /// Return the nonzero address-space identifier used by the probe.
+    pub const fn asid(self) -> AddressSpaceId {
+        self.asid
     }
 }
 
@@ -115,6 +124,7 @@ pub unsafe fn prepare_probe() -> Result<PreparedEl0Probe, El0ProbeError> {
     let stack_frame = linked_frame(stack_start)?;
     let entry = UserAddr::new(USER_CODE_BASE).map_err(El0ProbeError::UserAddress)?;
     let stack_pointer = UserAddr::new(USER_STACK_TOP).map_err(El0ProbeError::UserAddress)?;
+    let asid = AddressSpaceId::new(1).map_err(El0ProbeError::Asid)?;
     let code_indices =
         TranslationIndices::new(VirtAddr::new(USER_CODE_BASE)).map_err(El0ProbeError::Paging)?;
     let stack_indices =
@@ -160,6 +170,7 @@ pub unsafe fn prepare_probe() -> Result<PreparedEl0Probe, El0ProbeError> {
         root: l1_frame,
         entry,
         stack_pointer,
+        asid,
     })
 }
 
@@ -170,12 +181,17 @@ pub unsafe fn prepare_probe() -> Result<PreparedEl0Probe, El0ProbeError> {
 /// `probe` must have been returned by the only successful `prepare_probe`
 /// call, its table frames must remain exclusively owned and mapped as normal
 /// memory, `VBAR_EL1` and a valid EL1 stack must already be installed, and no
-/// concurrent CPU may use ASID zero.
+/// concurrent CPU may use the probe's ASID.
 pub unsafe fn activate_and_enter(probe: PreparedEl0Probe) -> ! {
     // SAFETY: the caller establishes the static probe's ownership, mappings,
     // exception-vector, and single-ASID requirements.
     unsafe {
-        super::user_entry::activate_and_enter(probe.root(), probe.entry(), probe.stack_pointer());
+        super::user_entry::activate_and_enter(
+            probe.root(),
+            probe.asid(),
+            probe.entry(),
+            probe.stack_pointer(),
+        );
     }
 }
 

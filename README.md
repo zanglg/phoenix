@@ -28,6 +28,8 @@ narrow support claim:
 - an architecture-neutral process state machine and generation-checked fixed-capacity registry are
   host tested; loaded init uses the state machine for ready, running, and exited transitions;
 - lower-half AArch64 user-table topology and descriptor materialization are host tested;
+- nonzero 8-bit AArch64 ASIDs, monotonic no-reuse allocation, and checked TTBR0 composition are
+  host tested; both EL0 paths use ASID 1;
 - a checked QEMU `virt` bootstrap physical-memory backend is cross-compiled but runtime pending;
 - DTB memory plus firmware/kernel/DTB reservations form a transactional boot allocator map;
 - an opt-in boot-memory probe cross-links the real DTB-to-allocation-to-readback path;
@@ -105,7 +107,8 @@ the archive and end-to-end integration in [`docs/INITRAMFS.md`](docs/INITRAMFS.m
 [`docs/FILE_DESCRIPTORS.md`](docs/FILE_DESCRIPTORS.md). The currently implemented stack protection
 and its explicit limits are recorded in [`docs/KERNEL_STACKS.md`](docs/KERNEL_STACKS.md).
 Process identity, lifecycle, ownership, and teardown deferrals are documented in
-[`docs/PROCESS_LIFECYCLE.md`](docs/PROCESS_LIFECYCLE.md).
+[`docs/PROCESS_LIFECYCLE.md`](docs/PROCESS_LIFECYCLE.md); the current nonzero/no-reuse ASID policy
+is in [`docs/AARCH64_ASIDS.md`](docs/AARCH64_ASIDS.md).
 
 ## LSP target
 

@@ -73,7 +73,8 @@ evidence that EL0 reached the transitions.
 ## TODO
 
 - make a process table, rather than the static probe aggregate, the authoritative runtime owner;
-- assign ASIDs with generations and retire TTBR0 before reclaiming page-table or user frames;
+- move the monotonic ASID-1 owner under the process table, then add epochs and retire TTBR0 before
+  reclaiming page-table or user frames;
 - separate processes from threads and define which state is process-wide versus schedulable;
 - add a scheduler-owned transition from running to ready or blocked without weakening the current
   terminal-state rules;
@@ -88,5 +89,5 @@ evidence that EL0 reached the transitions.
 
 Phoenix does not yet provide process creation, fork, exec replacement, threads, scheduling,
 blocking, wakeup, signals, wait, parent relationships, namespaces, credentials, per-process limits,
-ASID allocation, address-space teardown, or runtime resource reclamation. `ProcessTable` is a
+ASID reuse, address-space teardown, or runtime resource reclamation. `ProcessTable` is a
 bounded ownership mechanism, not a scheduler or a claim of POSIX process semantics.

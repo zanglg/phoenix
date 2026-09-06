@@ -63,4 +63,6 @@ under `Unreleased` and the Cargo version remains 0.0.0 until the 0.1.0 release g
   and static artifact validation of guard size and placement.
 - Architecture-neutral process IDs, strict lifecycle transitions, generation-safe bounded process
   ownership, reap semantics, and loaded-init ready/running/exited integration.
+- Nonzero 8-bit AArch64 ASIDs, monotonic no-reuse allocation, checked TTBR0 bit composition, and
+  ASID-1 activation for both the static and loaded EL0 paths.
 - Project, Agent, Roadmap, and kernel capability documentation.

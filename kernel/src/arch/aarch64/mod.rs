@@ -3,6 +3,7 @@
 #[cfg(target_arch = "aarch64")]
 use core::arch::asm;
 
+pub mod asid;
 pub mod exception;
 pub mod kernel_page_table;
 pub mod paging;

@@ -31,11 +31,11 @@ addresses using the documented kernel offset. The tables and stack are cleared u
 single-CPU ownership before publication.
 
 Table writes are followed by the same crate-private activation primitive used by allocator-backed
-address spaces: `DSB ISHST`, replacement of `TTBR0_EL1`, `ISB`, `TLBI VMALLE1`, `DSB ISH`, and
-`ISB`. The transition sets `SP_EL0`, `ELR_EL1`, and `SPSR_EL1` for EL0t with asynchronous exceptions
-masked, then executes `eret`. The installed TTBR1 higher-half mapping remains the kernel address
-space. The early console now uses its higher-half PL011 alias, so removing the bootstrap TTBR0
-identity/device table does not strand diagnostics.
+address spaces: `DSB ISHST`, replacement of `TTBR0_EL1` with fixed nonzero ASID 1, `ISB`,
+`TLBI VMALLE1`, `DSB ISH`, and `ISB`. The transition sets `SP_EL0`, `ELR_EL1`, and `SPSR_EL1` for
+EL0t with asynchronous exceptions masked, then executes `eret`. The installed TTBR1 higher-half
+mapping remains the kernel address space. The early console now uses its higher-half PL011 alias,
+so removing the bootstrap TTBR0 identity/device table does not strand diagnostics.
 
 ## Probe protocol
 
@@ -80,7 +80,7 @@ process teardown, scheduling, ELF loading, or general syscall support.
 
 - execute `cargo xtask test-el0` and record the complete transcript;
 - verify the EL0 exception frame, SPSR mode, PC, TTBR0 root, and user permissions under GDB;
-- replace `VMALLE1` with an ASID-aware policy before multiple address spaces exist;
+- replace `VMALLE1` with an exact ASID-aware invalidation policy before identifiers are reused;
 - install a permission-separated final TTBR1 so the kernel alias is no longer a coarse RWX block;
 - enable instruction/data caches only after the required coherency sequence is defined;
 - replace the linked assembly page with an ELF image populated through allocator-owned frames;

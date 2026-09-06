@@ -54,6 +54,7 @@ _No unclassified entries._
 | ARCH-002 | Exception vectors and register context | In Progress | 0.1.0 | Vector/frame ABI, assembly entry, and ESR decoding are built; runtime handling remains unverified |
 | ARCH-003 | CPU feature discovery | Deferred | Unscheduled | Avoid assuming emulator-only features |
 | ARCH-004 | FP/SIMD ownership and context policy | Deferred | Unscheduled | Kernel starts without FP/SIMD use |
+| ARCH-005 | AArch64 ASID allocation and TTBR0 encoding | In Progress | 0.1.0 | Nonzero 8-bit values, monotonic no-reuse allocation, and exact encoding are Host Tested; both EL0 paths use ASID 1, while retirement and reuse remain |
 | PORT-001 | RISC-V 64 port | Deferred | Unscheduled | Initial platform: QEMU `virt` |
 | PORT-002 | x86_64 port | Deferred | Unscheduled | Initial platform: QEMU `q35` |
 

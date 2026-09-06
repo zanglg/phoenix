@@ -62,17 +62,18 @@ one allocator transaction.
 
 This restriction is intentional. A root physical address is useful for static inspection, but the
 target activation API requires a permanently retained combined address-space owner, never a bare
-table root or page plan. It publishes table writes with `DSB ISHST`, replaces `TTBR0_EL1`, completes an ASID-zero
-stage-1 invalidation with `ISB`, `TLBI VMALLE1`, `DSB ISH`, and `ISB`, loads `SP_EL0`, `ELR_EL1`, and
-masked EL0t state, then executes `eret`. The register primitive is crate-private so other modules
-cannot bypass the ownership gate.
+table root or page plan. It publishes table writes with `DSB ISHST`, replaces `TTBR0_EL1` using a
+checked nonzero 8-bit ASID, completes a conservative all-ASID invalidation with `ISB`,
+`TLBI VMALLE1`, `DSB ISH`, and `ISB`, loads `SP_EL0`, `ELR_EL1`, and masked EL0t state, then
+executes `eret`. The register primitive is crate-private so other modules cannot bypass the
+ownership gate.
 
 The loaded-init path places the owner, final kernel tables, and remaining allocator state in a
 one-time static runtime slot before activation. The `'static` activation borrow prevents
 unpublished release while active, and the same owner authorizes physical-frame-based user reads
 and writes through an ownership-checked final-direct-map adapter during synchronous syscalls. The
 current terminal `exit` path halts rather than reclaiming it. Retirement and reclamation require a
-process owner and ASID-aware switch path.
+table-owned process resource and ASID-aware switch path.
 
 ## Invariants
 
@@ -103,7 +104,7 @@ unverified.
 ## TODO
 
 - replace the probe-local final-direct-map adapter with a process/VM-owned mapped-frame API;
-- assign and recycle nonzero ASIDs with generation handling;
+- replace monotonic nonzero ASID allocation with generation/epoch-aware recycling;
 - add ASID-aware retirement and reclamation after the address space moves under the process table;
 - define break-before-make for changes to published descriptors;
 - retain page-table accounting in the future process object;

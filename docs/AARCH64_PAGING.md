@@ -22,7 +22,9 @@ model. The kernel link offset is `0xffffff8000000000`, so physical RAM beginning
 `0x40000000` has its initial higher-half alias at `0xffffff8040000000`.
 
 The current descriptor model supports physical output addresses below 48 bits. Bootstrap uses a
-more conservative 32-bit IPS until CPU feature discovery replaces its fixed TCR value.
+more conservative 32-bit IPS until CPU feature discovery replaces its fixed TCR value. It leaves
+`TCR_EL1.AS` clear for an 8-bit ASID field; process ASIDs start at one and are described in
+`docs/AARCH64_ASIDS.md`.
 
 ## Temporary bootstrap tables
 
@@ -108,11 +110,11 @@ Runtime installation remains tracked as `RUN-MMU-001`, `RUN-MMU-002`, and `RUN-K
 ## TODO
 
 - derive supported physical-address size from `ID_AA64MMFR0_EL1.PARange`;
-- replace the bootstrap private-table backend and retained ASID-zero activation with process-owned
-  address-space lifecycle support;
+- replace the bootstrap private-table backend and retained ASID-1 activation with process-table
+  address-space ownership;
 - add a guarded heap and replace the static guarded boot stack with owned thread/exception stacks;
 - define live table-update locking and break-before-make beyond the current one-time publication;
-- define ASID allocation and TTBR0 lifetime for processes;
+- define safe ASID retirement, epochs, and reuse after TTBR0 lifetime ends;
 - runtime-validate final `TTBR1_EL1`, then retire the temporary low RAM alias safely;
 - decide whether a recursive/self-map region is needed alongside the implemented direct map.
 

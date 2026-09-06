@@ -1,5 +1,7 @@
 //! Owned AArch64 three-level translation tables for lower-half user pages.
 
+#[cfg(target_arch = "aarch64")]
+use crate::arch::aarch64::asid::AddressSpaceId;
 use crate::arch::aarch64::paging::{
     Access, AddressSpaceHalf, Descriptor, Execute, MappingAttributes, MemoryType, PagingError,
     TranslationIndices, TranslationLevel,
@@ -662,13 +664,13 @@ impl<const MAPPINGS: usize, const PAGES: usize, const TABLES: usize, const LEAVE
     ///
     /// # Safety
     ///
-    /// Call only on the single boot CPU while ASID zero is private. The
-    /// physical mapping used to construct and access the tables must remain
-    /// coherent, `VBAR_EL1` and an EL1 stack must be active, and no
-    /// caller may retain aliases to owned data or table frames. The address
-    /// space must be stored for the rest of the boot before this call.
+    /// Call only on the single boot CPU while `asid` is uniquely retained for
+    /// this address space. The physical mapping used to construct and access
+    /// the tables must remain coherent, `VBAR_EL1` and an EL1 stack must be
+    /// active, and no caller may retain aliases to owned data or table frames.
+    /// The address space and ASID must be stored for the rest of the boot.
     #[cfg(target_arch = "aarch64")]
-    pub unsafe fn activate_and_enter(&'static self) -> ! {
+    pub unsafe fn activate_and_enter(&'static self, asid: AddressSpaceId) -> ! {
         let root = self.root_frame();
         let entry = self.entry();
         let stack_pointer = self.stack_pointer();
@@ -676,7 +678,7 @@ impl<const MAPPINGS: usize, const PAGES: usize, const TABLES: usize, const LEAVE
         // all leaf frames forever. The caller supplies the remaining CPU-state
         // requirements and guarantees the owner is never replaced.
         unsafe {
-            super::user_entry::activate_and_enter(root, entry, stack_pointer);
+            super::user_entry::activate_and_enter(root, asid, entry, stack_pointer);
         }
     }
 

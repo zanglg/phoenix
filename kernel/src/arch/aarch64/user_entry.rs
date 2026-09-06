@@ -2,6 +2,7 @@
 
 use core::arch::asm;
 
+use super::asid::{AddressSpaceId, ttbr0_value};
 use crate::memory::PageFrame;
 use crate::user::UserAddr;
 
@@ -18,13 +19,14 @@ const USER_PSTATE: usize = 0x3c0;
 /// leaves remain owned and initialized. `entry` and `stack_pointer` must be
 /// mapped with their documented executable and writable permissions. EL1
 /// vectors and a valid kernel stack must be active, all table writes must be
-/// visible to the current PE, and no concurrent PE may use ASID zero.
+/// visible to the current PE, and no concurrent PE may use `asid`.
 pub(super) unsafe fn activate_and_enter(
     root: PageFrame,
+    asid: AddressSpaceId,
     entry: UserAddr,
     stack_pointer: UserAddr,
 ) -> ! {
-    let root = root.start_address().as_usize();
+    let ttbr0 = ttbr0_value(root, asid).expect("a materialized TTBR0 root fits its address field");
     let entry = entry.as_usize();
     let stack = stack_pointer.as_usize();
     // SAFETY: the caller supplies a fully owned and initialized root, entry,
@@ -33,7 +35,7 @@ pub(super) unsafe fn activate_and_enter(
     unsafe {
         asm!(
             "dsb ishst",
-            "msr TTBR0_EL1, {root}",
+            "msr TTBR0_EL1, {ttbr0}",
             "isb",
             "tlbi vmalle1",
             "dsb ish",
@@ -42,7 +44,7 @@ pub(super) unsafe fn activate_and_enter(
             "msr ELR_EL1, {entry}",
             "msr SPSR_EL1, {pstate}",
             "eret",
-            root = in(reg) root,
+            ttbr0 = in(reg) ttbr0,
             stack = in(reg) stack,
             entry = in(reg) entry,
             pstate = in(reg) USER_PSTATE,

@@ -67,6 +67,8 @@ use phoenix_kernel::abi::{
 };
 #[cfg(any(feature = "el0-probe", feature = "loaded-init-probe"))]
 use phoenix_kernel::abi::{Errno, NATIVE_SVC_IMMEDIATE, NativeSyscall, SyscallReturn};
+#[cfg(feature = "loaded-init-probe")]
+use phoenix_kernel::arch::aarch64::asid::{AddressSpaceId, AsidAllocator};
 #[cfg(all(feature = "el0-probe", not(feature = "loaded-init-probe")))]
 use phoenix_kernel::arch::aarch64::el0;
 #[cfg(any(feature = "el0-probe", feature = "loaded-init-probe"))]
@@ -166,10 +168,12 @@ type InitAddressSpace = PreparedUserAddressSpace<
 #[cfg(feature = "loaded-init-probe")]
 struct InitRuntime {
     process: ProcessControl,
+    _init_asid: AddressSpaceId,
     address_space: InitAddressSpace,
     kernel_tables: FinalKernelTables,
     files: ReadOnlyFileTable<'static, INIT_OPEN_FILES>,
     _allocator: FrameAllocator<INIT_MEMORY_RANGES>,
+    _asids: AsidAllocator,
 }
 #[cfg(feature = "loaded-init-probe")]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -579,6 +583,10 @@ fn run_loaded_init_probe(boot_argument: usize, console: &mut Console<EarlyPl011>
     drop(physical_memory);
     let kernel_root = kernel_tables.root_frame().start_address().as_usize();
     let init_id = ProcessId::new(0, 1).expect("the bootstrap init generation is nonzero");
+    let mut asids = AsidAllocator::new();
+    let init_asid = asids
+        .allocate()
+        .unwrap_or_else(|error| panic!("could not allocate init ASID: {error:?}"));
     let mut process = ProcessControl::new(init_id);
     process
         .make_ready()
@@ -588,10 +596,12 @@ fn run_loaded_init_probe(boot_argument: usize, console: &mut Console<EarlyPl011>
     let (prepared, kernel_tables) = unsafe {
         install_init_runtime(InitRuntime {
             process,
+            _init_asid: init_asid,
             address_space: prepared,
             kernel_tables,
             files: ReadOnlyFileTable::new(initramfs),
             _allocator: allocator,
+            _asids: asids,
         })
     };
 
@@ -616,9 +626,10 @@ fn run_loaded_init_probe(boot_argument: usize, console: &mut Console<EarlyPl011>
 
     let _ = writeln!(
         console,
-        "init: pid={}.{} entry={:#018x} stack={:#018x} pages={} root={:#018x}",
+        "init: pid={}.{} asid={} entry={:#018x} stack={:#018x} pages={} root={:#018x}",
         init_id.slot(),
         init_id.generation(),
+        init_asid.raw(),
         prepared.entry().as_usize(),
         prepared.stack_pointer().as_usize(),
         prepared.resident_page_count(),
@@ -629,10 +640,10 @@ fn run_loaded_init_probe(boot_argument: usize, console: &mut Console<EarlyPl011>
 
     // SAFETY: the runtime permanently owns every fully initialized leaf and
     // table frame. The bootstrap keeps caches disabled, vectors and the EL1
-    // stack are active, and this single-core probe is the only user of ASID
-    // zero.
+    // stack are active, and this single-core probe is the only user of the
+    // retained nonzero ASID.
     unsafe {
-        prepared.activate_and_enter();
+        prepared.activate_and_enter(init_asid);
     }
 }
 

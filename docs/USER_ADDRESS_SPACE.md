@@ -71,7 +71,7 @@ bad page counts, and stack underflow. The same module is Cross Compiled for AArc
 
 ## TODO
 
-- replace fixed ASID-zero TTBR0 installation with process-owned ASID allocation and retirement;
+- move the monotonic ASID-1 allocation under process ownership and add safe retirement/reuse;
 - add general recoverable-fault support beyond immutable owned mappings;
 - define stack growth limits and resource accounting;
 - validate kernel isolation and guard-page faults on QEMU.

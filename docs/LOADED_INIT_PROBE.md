@@ -41,7 +41,8 @@ At boot, the focused kernel variant:
 12. emits `PHOENIX_INIT_KERNEL_MAP_ENTER`, publishes TTBR1, and emits
     `PHOENIX_INIT_KERNEL_MAP_OK` only after execution continues through the final map;
 13. prints the planned entry, stack pointer, page count, table root, and `PHOENIX_INIT_ENTER`;
-14. publishes TTBR0, invalidates ASID-zero translations, loads EL0 registers, and executes `eret`;
+14. allocates nonzero ASID 1, publishes it with TTBR0, performs conservative all-ASID invalidation,
+    loads EL0 registers, and executes `eret`;
 15. validates and copies the init message from owned physical frames for bounded stdout `write`;
 16. opens `etc/motd`, copies its bytes into a writable stack buffer, checks EOF, and closes it;
 17. writes those copied bytes, transitions its process control to `Exited(42)`, and accepts native
@@ -77,8 +78,8 @@ the success status.
 - user copy resolves virtual ranges only through retained resident ownership and the checked
   physical backend, never by dereferencing a raw EL0 pointer;
 - file reads use a window/commit transaction, so a failed `copy_to_user` does not advance offset;
-- ASID zero and the active runtime remain live forever because the terminal probe halts rather
-  than returning or reclaiming ownership.
+- ASID 1, its monotonic allocator, and the active runtime remain live forever because the terminal
+  probe halts rather than returning or reclaiming ownership.
 - the runtime control must reach `Ready` before final publication, `Running` before `eret`, and
   `Exited` exactly once before terminal success.
 
