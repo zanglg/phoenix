@@ -25,6 +25,7 @@ pub const EL0_SUCCESS_SENTINEL: &str = "PHOENIX_EL0_OK";
 pub const EL0_FAILURE_SENTINEL: &str = "PHOENIX_EL0_FAIL";
 pub const INIT_SUCCESS_SENTINEL: &str = "PHOENIX_INIT_OK";
 pub const INIT_FAILURE_SENTINEL: &str = "PHOENIX_INIT_FAIL";
+pub const INIT_USER_OUTPUT: &str = "Phoenix init: hello from EL0\n";
 
 struct QemuCommand {
     arguments: Vec<OsString>,
@@ -76,6 +77,7 @@ impl QemuCommand {
 enum TerminalOutput {
     Success,
     Failure,
+    ProtocolFailure,
     Panic,
     Exception,
 }
@@ -114,12 +116,20 @@ impl ExpectedOutput {
             Self::Boot | Self::Memory => None,
         }
     }
+
+    const fn required_output(self) -> Option<&'static str> {
+        match self {
+            Self::Init => Some(INIT_USER_OUTPUT),
+            Self::Boot | Self::Memory | Self::El0 => None,
+        }
+    }
 }
 
 #[derive(Debug)]
 enum TestOutcome {
     Success,
     Failure,
+    ProtocolFailure,
     Panic,
     Exception,
     Timeout,
@@ -217,6 +227,7 @@ fn test_kernel(image: &Path, log: &Path, workspace_root: &Path, expected: Expect
         outcome,
         TestOutcome::Success
             | TestOutcome::Failure
+            | TestOutcome::ProtocolFailure
             | TestOutcome::Panic
             | TestOutcome::Exception
             | TestOutcome::Timeout
@@ -257,6 +268,17 @@ fn test_kernel(image: &Path, log: &Path, workspace_root: &Path, expected: Expect
                 expected
                     .failure_sentinel()
                     .expect("failure outcome requires a failure sentinel")
+            );
+            false
+        }
+        TestOutcome::ProtocolFailure => {
+            eprintln!("QEMU_TEST_RESULT=protocol-failure");
+            eprintln!(
+                "error: observed {} without required output {:?}",
+                expected.sentinel(),
+                expected
+                    .required_output()
+                    .expect("protocol failure requires prerequisite output")
             );
             false
         }
@@ -389,6 +411,7 @@ fn observe(
                 match terminal {
                     TerminalOutput::Success => TestOutcome::Success,
                     TerminalOutput::Failure => TestOutcome::Failure,
+                    TerminalOutput::ProtocolFailure => TestOutcome::ProtocolFailure,
                     TerminalOutput::Panic => TestOutcome::Panic,
                     TerminalOutput::Exception => TestOutcome::Exception,
                 },
@@ -432,7 +455,13 @@ fn drain_output(receiver: &Receiver<StreamEvent>, output: &mut Vec<u8>) {
 }
 
 fn classify_output(output: &[u8], expected: ExpectedOutput) -> Option<TerminalOutput> {
-    let success = find_bytes(output, expected.sentinel().as_bytes());
+    let terminal_success = find_bytes(output, expected.sentinel().as_bytes());
+    let prerequisite_present = expected.required_output().is_none_or(|required| {
+        terminal_success
+            .is_some_and(|terminal| find_bytes(&output[..terminal], required.as_bytes()).is_some())
+    });
+    let success = terminal_success.filter(|_| prerequisite_present);
+    let protocol_failure = terminal_success.filter(|_| !prerequisite_present);
     let failure = expected
         .failure_sentinel()
         .and_then(|sentinel| find_bytes(output, sentinel.as_bytes()));
@@ -440,6 +469,7 @@ fn classify_output(output: &[u8], expected: ExpectedOutput) -> Option<TerminalOu
     let exception = find_bytes(output, EXCEPTION_SENTINEL.as_bytes());
     [
         success.map(|position| (position, TerminalOutput::Success)),
+        protocol_failure.map(|position| (position, TerminalOutput::ProtocolFailure)),
         failure.map(|position| (position, TerminalOutput::Failure)),
         panic.map(|position| (position, TerminalOutput::Panic)),
         exception.map(|position| (position, TerminalOutput::Exception)),
@@ -475,7 +505,7 @@ mod tests {
 
     use super::{
         BOOT_SUCCESS_SENTINEL, CPU, EL0_FAILURE_SENTINEL, EL0_SUCCESS_SENTINEL, EXCEPTION_SENTINEL,
-        ExpectedOutput, INIT_FAILURE_SENTINEL, INIT_SUCCESS_SENTINEL, MACHINE,
+        ExpectedOutput, INIT_FAILURE_SENTINEL, INIT_SUCCESS_SENTINEL, INIT_USER_OUTPUT, MACHINE,
         MEMORY_SUCCESS_SENTINEL, PANIC_SENTINEL, QemuCommand, TerminalOutput, classify_output,
         has_named_item, shell_quote,
     };
@@ -590,6 +620,13 @@ mod tests {
         );
         assert_eq!(
             classify_output(INIT_SUCCESS_SENTINEL.as_bytes(), ExpectedOutput::Init),
+            Some(TerminalOutput::ProtocolFailure)
+        );
+        assert_eq!(
+            classify_output(
+                format!("{INIT_USER_OUTPUT}{INIT_SUCCESS_SENTINEL}").as_bytes(),
+                ExpectedOutput::Init
+            ),
             Some(TerminalOutput::Success)
         );
         assert_eq!(

@@ -12,6 +12,7 @@ const KERNEL_VIRT_BASE: u64 = 0xffff_ff80_4008_0000;
 const BOOT_STACK_SIZE: u64 = 64 * 1024;
 const EXCEPTION_VECTOR_TABLE_SIZE: u64 = 2048;
 const INIT_ENTRY: usize = 0x0040_0000;
+const INIT_MESSAGE: &[u8] = b"Phoenix init: hello from EL0\n";
 
 fn main() -> ExitCode {
     let mut args = env::args().skip(1);
@@ -759,7 +760,13 @@ fn inspect_init() -> bool {
         return false;
     };
     let symbols = parse_nm_symbols(&symbol_output);
-    for symbol in ["_start", "__init_start", "__init_end"] {
+    for symbol in [
+        "_start",
+        "__init_start",
+        "__init_end",
+        "__init_message_start",
+        "__init_message_end",
+    ] {
         if !symbols.contains_key(symbol) {
             errors.push(format!("required init symbol '{symbol}' is missing"));
         }
@@ -776,10 +783,23 @@ fn inspect_init() -> bool {
     {
         errors.push("init linked text is empty or exceeds one page".to_owned());
     }
+    match (
+        symbols.get("__init_message_start"),
+        symbols.get("__init_message_end"),
+    ) {
+        (Some(start), Some(end)) if end.checked_sub(*start) == Some(INIT_MESSAGE.len() as u64) => {}
+        _ => errors.push("init message symbols do not describe the expected bytes".to_owned()),
+    }
+    if !bytes
+        .windows(INIT_MESSAGE.len())
+        .any(|window| window == INIT_MESSAGE)
+    {
+        errors.push("init ELF does not contain the expected userspace message".to_owned());
+    }
 
     if errors.is_empty() {
         println!("ok: init ELF is accepted by the Phoenix loader");
-        println!("ok: init entry, RX page, symbols, size bound, and map");
+        println!("ok: init entry, RX page, message, symbols, size bound, and map");
         true
     } else {
         for error in errors {

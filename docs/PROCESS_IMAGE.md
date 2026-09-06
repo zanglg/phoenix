@@ -63,6 +63,10 @@ byte slices, so the source ELF and stack-image storage may be released immediate
 population. The AArch64 layer can consume this resident owner with matching materialized tables to
 create one prepared address-space owner.
 
+The same resident metadata is now the authority for checked `copy_from_user`: a complete requested
+range must resolve to readable owned pages before the physical backend reads any bytes. This avoids
+trusting or directly dereferencing a raw EL0 pointer.
+
 ## Invariants
 
 - the complete ELF was validated before process-image planning begins;
@@ -102,7 +106,7 @@ artifact.
 ## Skipped work
 
 This module does not implement physical-memory access, a permanent direct map, hardware page-table
-mutation, TLB invalidation, safe user copying, process identifiers, scheduling, VFS lookup,
+mutation, TLB invalidation, copy-to-user, process identifiers, scheduling, VFS lookup,
 initramfs, stack growth, demand paging, copy-on-write, ASLR, dynamic linking, TLS, or signals. The
 static `el0-probe` remains a separate, smaller conformance bridge for isolating failures in this
 larger dynamic path.

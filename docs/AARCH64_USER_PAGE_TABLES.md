@@ -59,15 +59,17 @@ by the inactive address space; its unpublished release reclaims data and table f
 one allocator transaction.
 
 This restriction is intentional. A root physical address is useful for static inspection, but the
-target activation API consumes the combined address-space owner, never a bare table root or page
-plan. It publishes table writes with `DSB ISHST`, replaces `TTBR0_EL1`, completes an ASID-zero
+target activation API requires a permanently retained combined address-space owner, never a bare
+table root or page plan. It publishes table writes with `DSB ISHST`, replaces `TTBR0_EL1`, completes an ASID-zero
 stage-1 invalidation with `ISB`, `TLBI VMALLE1`, `DSB ISH`, and `ISB`, loads `SP_EL0`, `ELR_EL1`, and
 masked EL0t state, then executes `eret`. The register primitive is crate-private so other modules
 cannot bypass the ownership gate.
 
-Because the transition never returns, the consumed owner remains logically live for the entire
-active address-space lifetime. The current terminal `exit` path halts rather than reclaiming it.
-Retirement and reclamation require a process owner and ASID-aware switch path.
+The loaded-init path places the owner and remaining allocator state in a one-time static runtime
+slot before activation. The `'static` activation borrow prevents unpublished release while active,
+and the same owner authorizes physical-frame-based user reads during synchronous syscalls. The
+current terminal `exit` path halts rather than reclaiming it. Retirement and reclamation require a
+process owner and ASID-aware switch path.
 
 ## Invariants
 
@@ -90,7 +92,7 @@ Host tests cover table reuse across adjacent pages, distinct L2 and L1 regions, 
 ordering, unaligned and unreadable pages, duplicates, table and leaf capacity, transactional
 out-of-memory behavior, exact descriptor links and outputs, injected materialization failure,
 clean retry, leaf-identity mismatch, combined ownership, and atomic complete release. The module is
-Cross Compiled for the AArch64 bare-metal target, including the ownership-consuming activation
+Cross Compiled for the AArch64 bare-metal target, including the ownership-retaining activation
 path. A focused loaded-init variant now reaches this API with allocator-owned program, stack, and
 table frames. Runtime register, barrier, invalidation, permission, and `eret` effects remain
 unverified.
@@ -102,7 +104,7 @@ unverified.
 - add ASID-aware retirement and reclamation after process ownership exists;
 - define break-before-make for changes to published descriptors;
 - retain page-table accounting in the future process object;
-- add safe user-copy fault recovery before implementing `write`;
+- add copy-to-user and recoverable fault handling for mutable/concurrent address spaces;
 - validate descriptor walks, access permissions, guard faults, and switching under QEMU/GDB.
 
 ## Skipped work

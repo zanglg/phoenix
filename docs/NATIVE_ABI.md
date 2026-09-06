@@ -23,10 +23,16 @@ vector with exception class `SupervisorCallAArch64` and immediate zero.
 | Number | Name | Intended arguments | Status |
 | ---: | --- | --- | --- |
 | 0 | `exit` | `x0=status` | Implemented only by the opt-in static and loaded-init probes |
-| 1 | `write` | `x0=fd`, `x1=user buffer`, `x2=length` | Assigned, not implemented |
+| 1 | `write` | `x0=fd`, `x1=user buffer`, `x2=length` | Implemented only by the loaded-init stdout probe |
 
 Unknown numbers are preserved and the opt-in probe returns `NotImplemented`; they are not parser errors. These
 assignments may change while the revision and project version remain zero.
+
+The probe `write` accepts only descriptor 1 and at most 256 bytes. It validates the complete range
+against retained resident-page ownership, reads through the checked physical-memory backend, emits
+bytes exactly to PL011, and returns the full length. It returns `BadFileDescriptor`,
+`InvalidArgument`, or `BadAddress` before emitting output when validation fails. It does not yet
+support short writes or a general file table. See `docs/USER_COPY.md`.
 
 ## Process entry stack
 
@@ -57,16 +63,16 @@ space. This rule is checked when constructing a return value.
 ## Validation
 
 Host tests cover known and unknown numbers, all argument positions, register adaptation, PC
-preservation, maximum success values, named negative errors, and the boundary outside the error
-window. The types and adapter are Cross Compiled for AArch64.
+preservation, maximum success values, named negative errors, the boundary outside the error
+window, and bounded stdout-request validation. The types and adapter are Cross Compiled for
+AArch64.
 
 ## TODO
 
 - generalize the probe-only SVC recognition into a production dispatcher;
 - implement `exit` process teardown after process ownership exists;
-- implement bounded console `write` using fault-safe user copies;
 - define short writes, interruption, and maximum transfer sizes;
-- decide file-descriptor values and stderr/stdout initialization;
+- replace the probe descriptor with a process file table and define stderr initialization;
 - separate ABI revisioning from the project version when revision 1 is proposed;
 - execute both EL0 conformance programs and retain their QEMU transcripts.
 

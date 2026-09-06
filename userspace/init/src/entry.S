@@ -7,6 +7,7 @@
 
 .section .text.entry, "ax"
 .balign 4096
+.equ INIT_MESSAGE_LENGTH, 29
 
 .global _start
 .type _start, %function
@@ -78,6 +79,14 @@ _start:
     ldrb    w9, [x12, #12]
     cbnz    w9, .Lfailed
 
+    mov     x0, #1
+    adr     x1, __init_message_start
+    mov     x2, #INIT_MESSAGE_LENGTH
+    mov     x8, #1
+    svc     #0
+    cmp     x0, #INIT_MESSAGE_LENGTH
+    b.ne    .Lfailed
+
     mov     x0, #42
     mov     x8, #0
     svc     #0
@@ -91,3 +100,15 @@ _start:
     b       .Lunreachable
 
 .size _start, . - _start
+
+.section .rodata.message, "a"
+.balign 16
+.global __init_message_start
+__init_message_start:
+    .ascii "Phoenix init: hello from EL0\n"
+.global __init_message_end
+__init_message_end:
+
+.if (__init_message_end - __init_message_start) != INIT_MESSAGE_LENGTH
+    .error "init message length constant is stale"
+.endif

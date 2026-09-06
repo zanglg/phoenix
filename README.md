@@ -22,6 +22,8 @@ narrow support claim:
 - a deterministic, strictly parsed `newc` initramfs carries that exact executable at `init`;
 - an opt-in loaded-init image finds `init` in the archive and connects the real DTB allocator, ELF
   population, native stack, dynamic user tables, ownership-gated `eret`, and terminal `exit(42)`;
+- checked cross-page `copy_from_user` and a 256-byte stdout probe let init emit a verified message
+  without dereferencing a raw user virtual pointer;
 - lower-half AArch64 user-table topology and descriptor materialization are host tested;
 - a checked QEMU `virt` bootstrap physical-memory backend is cross-compiled but runtime pending;
 - DTB memory plus firmware/kernel/DTB reservations form a transactional boot allocator map;
@@ -89,7 +91,8 @@ standalone-init path. Each requires its own final marker. See
 [`docs/EL0_PROBE.md`](docs/EL0_PROBE.md) for their exact validation boundaries. The separately
 linked program is documented in [`docs/FIRST_USER_PROGRAM.md`](docs/FIRST_USER_PROGRAM.md), and
 the archive and end-to-end integration in [`docs/INITRAMFS.md`](docs/INITRAMFS.md) and
-[`docs/LOADED_INIT_PROBE.md`](docs/LOADED_INIT_PROBE.md).
+[`docs/LOADED_INIT_PROBE.md`](docs/LOADED_INIT_PROBE.md). The user-memory boundary is documented in
+[`docs/USER_COPY.md`](docs/USER_COPY.md).
 
 ## LSP target
 

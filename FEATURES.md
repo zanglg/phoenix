@@ -64,7 +64,7 @@ _No unclassified entries._
 | MM-002 | Virtual memory and kernel address space | In Progress | 0.1.0 | Descriptors, plans, and checked bootstrap private-frame access are built; final TTBR1 and runtime validation remain |
 | MM-003 | Kernel heap and fallible allocation policy | Planned | 0.1.0 | Define allocation-failure behavior |
 | MM-004 | Kernel stacks and guard pages | Planned | 0.1.0 | Include exception-context requirements |
-| MM-005 | User address spaces and safe user copies | In Progress | 0.1.0 | Plans/materialization/ownership are Host Tested; ownership-gated ASID-zero activation is Cross Compiled; user copies and runtime evidence remain |
+| MM-005 | User address spaces and safe user copies | In Progress | 0.1.0 | Plans/materialization/ownership and physical-frame `copy_from_user` are Host Tested; retained ASID-zero activation is Cross Compiled; copy-to-user, general fault recovery, and runtime evidence remain |
 | MM-006 | Shared memory and copy-on-write | Deferred | Unscheduled | Requires process VM |
 | MM-007 | Huge pages and block mappings | Captured | Unscheduled | Revisit after basic paging |
 | MM-008 | DMA, cache coherence, and IOMMU policy | Deferred | Unscheduled | Required for robust device support |
@@ -89,9 +89,9 @@ _No unclassified entries._
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
 | PROC-001 | Process and thread lifecycle | Planned | 0.1.0 | Includes identifiers and teardown |
-| ABI-001 | Native Phoenix syscall ABI | In Progress | 0.1.0 | Revision-0 values and probe-only unknown/exit dispatch are built; production dispatch is Runtime Pending |
+| ABI-001 | Native Phoenix syscall ABI | In Progress | 0.1.0 | Revision-0 values plus probe-only unknown, bounded stdout write, and exit dispatch are built; production dispatch is Runtime Pending |
 | ABI-002 | ELF loader, user stack, TLS, and auxiliary vector | In Progress | 0.1.0 | ELF planning/population and native argc/argv/envp/minimal-auxv stack construction are Host Tested and connected in a Cross Compiled loaded-init path; target execution and TLS remain |
-| ABI-003 | Separately linked first native user program | In Progress | 0.1.0 | One-page RX AArch64 init ELF is loader-accepted, embedded exactly, and wired through dynamic handoff; runtime is pending |
+| ABI-003 | Separately linked first native user program | In Progress | 0.1.0 | One-page RX AArch64 init validates stack, performs bounded stdout write, and exits through the dynamic handoff; runtime is pending |
 | PROC-002 | Signals and exception delivery | Deferred | Unscheduled | Requires process lifecycle |
 | IPC-001 | Pipes, message passing, and shared memory IPC | Deferred | Unscheduled | Split when designs become concrete |
 | IPC-002 | Wait, poll, and event readiness | Captured | Unscheduled | Coordinate with file descriptors |
@@ -139,7 +139,7 @@ _No unclassified entries._
 | OBS-001 | Structured logging and runtime ring buffer | Planned | 0.1.0 | Builds on early console |
 | OBS-002 | Panic register dump, symbols, and stack traces | In Progress | 0.1.0 | Fatal exception path reports vector, PC, status, ESR, and FAR; symbolization and stack traces remain |
 | OBS-003 | Tracing and profiling | Captured | Unscheduled | Avoid committing to a format early |
-| TEST-001 | QEMU boot smoke and focused probes with timeout and sentinels | In Progress | 0.1.0 | Boot, memory, static EL0, and dynamically loaded init harness variants are implemented; QEMU execution remains Runtime Pending |
+| TEST-001 | QEMU boot smoke and focused probes with timeout and sentinels | In Progress | 0.1.0 | Boot, memory, static EL0, and loaded init/write harnesses are implemented; init success also requires exact user output; QEMU execution remains Runtime Pending |
 | TEST-002 | Host-side unit and property tests | Implemented | 0.1.0 | Console, build identity, config, and ELF-layout logic |
 | TEST-003 | Fuzzing and fault injection | Deferred | Unscheduled | Add with parsers and failure paths |
 | HARD-001 | Unsafe-code review and invariant audit | Deferred | Continuous | Applies as unsafe code appears |

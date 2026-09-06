@@ -10,6 +10,7 @@ use crate::dtb::{DeviceTree, Error as DeviceTreeError};
 use crate::memory::AddressRange;
 use crate::memory::{PAGE_SIZE, PageFrame, PhysAddr};
 use crate::process_image::ProcessImageMemory;
+use crate::user_copy::UserMemoryReader;
 
 const PL011_BASE: usize = 0xffff_ff80_0900_0000;
 const BOOTSTRAP_RAM_PHYSICAL_START: usize = 0x4000_0000;
@@ -261,6 +262,19 @@ impl ProcessImageMemory for BootstrapPhysicalMemory {
             ptr::copy(bytes.as_ptr(), destination, bytes.len());
         }
         Ok(())
+    }
+}
+
+impl UserMemoryReader for BootstrapPhysicalMemory {
+    type Error = BootstrapMemoryError;
+
+    fn read_frame(
+        &mut self,
+        frame: PageFrame,
+        offset: usize,
+        output: &mut [u8],
+    ) -> Result<(), Self::Error> {
+        BootstrapPhysicalMemory::read_frame(self, frame, offset, output)
     }
 }
 

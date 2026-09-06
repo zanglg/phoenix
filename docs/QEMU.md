@@ -91,6 +91,7 @@ terminal sentinel determines the result:
 - `PHOENIX_EL0_FAIL`: fail `test-el0` immediately;
 - `PHOENIX_INIT_OK`: pass for `test-init` only;
 - `PHOENIX_INIT_FAIL`: fail `test-init` immediately;
+- `PHOENIX_INIT_OK` without the earlier exact `Phoenix init: hello from EL0` line: protocol fail;
 - QEMU exit before the required terminal sentinel: fail;
 - timeout: fail and terminate QEMU;
 - more than 1 MiB without a sentinel: fail and terminate QEMU;
@@ -100,7 +101,7 @@ Because the kernel currently halts after output, the harness terminates QEMU aft
 terminal sentinel. It writes boot output to
 `target/phoenix/aarch64-unknown-none-softfloat/debug/qemu-boot.log`, memory-probe output to the
 adjacent `qemu-memory.log`, and EL0 output to `qemu-el0.log`. It emits one stable summary such as
-`QEMU_TEST_RESULT=pass`, `probe-failure`, `panic`, `timeout`, or `early-exit`. Loaded-init output is
+`QEMU_TEST_RESULT=pass`, `probe-failure`, `protocol-failure`, `panic`, `timeout`, or `early-exit`. Loaded-init output is
 written to `qemu-init.log`. A missing emulator is an error for runtime commands, never a skipped or
 passing test. `test-memory`, `test-el0`, and `test-init` ignore the intermediate
 `PHOENIX_BOOT_OK` marker, so none can pass before its own path completes.

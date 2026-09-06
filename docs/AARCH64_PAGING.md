@@ -97,7 +97,8 @@ Runtime installation remains tracked as `RUN-MMU-001` and `RUN-MMU-002` in
 ## TODO
 
 - derive supported physical-address size from `ID_AA64MMFR0_EL1.PARange`;
-- implement the target private-table backend and ownership-consuming activation;
+- replace the bootstrap private-table backend and retained ASID-zero activation with process-owned
+  address-space lifecycle support;
 - map kernel text, rodata, data, stack, heap, DTB, and MMIO with precise permissions;
 - define table-update locking, break-before-make, barriers, and TLB invalidation;
 - define ASID allocation and TTBR0 lifetime for processes;

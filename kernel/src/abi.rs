@@ -10,6 +10,8 @@ pub const NATIVE_SVC_IMMEDIATE: u16 = 0;
 pub const SYSCALL_ARGUMENT_COUNT: usize = 6;
 /// Largest error number recognized in the signed return-value encoding.
 pub const MAX_ERROR_NUMBER: u16 = 4095;
+/// Native file descriptor reserved for standard output at process creation.
+pub const STANDARD_OUTPUT: u64 = 1;
 
 /// Initially assigned native system-call operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -47,6 +49,48 @@ impl NativeSyscall {
 pub struct SyscallRequest {
     operation: NativeSyscall,
     arguments: [u64; SYSCALL_ARGUMENT_COUNT],
+}
+
+/// Validated bounded standard-output request for the initial console bridge.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ConsoleWriteRequest {
+    user_buffer: u64,
+    length: usize,
+}
+
+impl ConsoleWriteRequest {
+    /// Validate the operation, standard-output descriptor, and configured byte bound.
+    pub fn from_syscall(request: SyscallRequest, maximum: usize) -> Result<Self, Errno> {
+        if request.operation() != NativeSyscall::Write {
+            return Err(Errno::InvalidArgument);
+        }
+        if request.argument(0) != Some(STANDARD_OUTPUT) {
+            return Err(Errno::BadFileDescriptor);
+        }
+        let raw_length = request
+            .argument(2)
+            .expect("argument two is always retained");
+        let length = usize::try_from(raw_length).map_err(|_| Errno::InvalidArgument)?;
+        if length > maximum {
+            return Err(Errno::InvalidArgument);
+        }
+        Ok(Self {
+            user_buffer: request
+                .argument(1)
+                .expect("argument one is always retained"),
+            length,
+        })
+    }
+
+    /// Return the untrusted raw user-buffer address for checked copying.
+    pub const fn user_buffer(self) -> u64 {
+        self.user_buffer
+    }
+
+    /// Return the validated bounded byte count.
+    pub const fn length(self) -> usize {
+        self.length
+    }
 }
 
 impl SyscallRequest {
@@ -154,8 +198,8 @@ pub enum DecodedSyscallReturn {
 #[cfg(test)]
 mod tests {
     use super::{
-        DecodedSyscallReturn, Errno, NativeSyscall, SyscallRequest, SyscallReturn,
-        SyscallReturnError,
+        ConsoleWriteRequest, DecodedSyscallReturn, Errno, NativeSyscall, STANDARD_OUTPUT,
+        SyscallRequest, SyscallReturn, SyscallReturnError,
     };
 
     #[test]
@@ -195,6 +239,36 @@ mod tests {
         assert_eq!(
             SyscallReturn::from_raw((-4096_i64) as u64).decode(),
             DecodedSyscallReturn::Success((-4096_i64) as u64)
+        );
+    }
+
+    #[test]
+    fn console_write_request_checks_operation_descriptor_and_bound() {
+        let request = SyscallRequest::new(1, [STANDARD_OUTPUT, 0x40_0000, 12, 0, 0, 0]);
+        let write = ConsoleWriteRequest::from_syscall(request, 12).unwrap();
+        assert_eq!(write.user_buffer(), 0x40_0000);
+        assert_eq!(write.length(), 12);
+
+        assert_eq!(
+            ConsoleWriteRequest::from_syscall(
+                SyscallRequest::new(0, [STANDARD_OUTPUT, 0, 0, 0, 0, 0]),
+                12
+            ),
+            Err(Errno::InvalidArgument)
+        );
+        assert_eq!(
+            ConsoleWriteRequest::from_syscall(
+                SyscallRequest::new(1, [2, 0x40_0000, 12, 0, 0, 0]),
+                12
+            ),
+            Err(Errno::BadFileDescriptor)
+        );
+        assert_eq!(
+            ConsoleWriteRequest::from_syscall(
+                SyscallRequest::new(1, [STANDARD_OUTPUT, 0x40_0000, 13, 0, 0, 0]),
+                12
+            ),
+            Err(Errno::InvalidArgument)
         );
     }
 }

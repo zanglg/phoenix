@@ -21,9 +21,9 @@ The initial program expects this exact native stack input:
 - null terminators and a 16-byte-aligned stack pointer.
 
 It checks the argument count, non-null pointers, selected string bytes and terminators, every
-current auxiliary key/value, and stack alignment. Success invokes native `exit(42)` through
-`SVC #0`; any mismatch invokes `exit(1)`. Both paths enter an infinite loop if a broken kernel
-returns from the terminal syscall.
+current auxiliary key/value, and stack alignment. It then invokes native `write(1, message, 29)`,
+requires an exact 29-byte return, and calls `exit(42)`. A mismatch invokes `exit(1)`. All terminal
+paths enter an infinite loop if a broken kernel returns from `exit`.
 
 `cargo xtask build-init` produces the development ELF, an embeddable ELF with debug sections
 removed, and a linker map. `cargo xtask inspect-init` feeds the exact embeddable artifact into
@@ -43,6 +43,8 @@ all of these checks.
 - the initramfs entry contains that exact artifact and the focused kernel contains the exact
   archive, not merely files with matching names;
 - the only load segment is user-readable, user-executable, and never writable;
+- the linked message has a statically checked 29-byte extent within that RX segment;
+- successful exit is reachable only after `write` returned the complete message length;
 - program success and stack-validation failure have distinct exit statuses;
 - building or inspecting the program cannot imply EL0 execution.
 
@@ -50,9 +52,9 @@ all of these checks.
 
 The AArch64 assembler and linker validate every instruction and the linker assertions. Static
 inspection validates loader acceptance, machine/type/header fields through the parser, entry,
-load count, final permissions, rounded virtual extent, in-memory size, named symbols, file-size
-bound, and nonempty linker map. The source was also disassembled during implementation to verify
-both `SVC #0` paths and expected stack offsets. The loaded-init kernel path that consumes this
+load count, final permissions, rounded virtual extent, in-memory size, message bytes and symbols,
+file-size bound, and nonempty linker map. The source was also assembled during implementation to
+verify the `write` and `exit` SVC paths and expected stack offsets. The loaded-init kernel path that consumes this
 artifact is documented in `docs/LOADED_INIT_PROBE.md`. Target execution is tracked by
 `RUN-INIT-001`.
 
@@ -60,7 +62,7 @@ artifact is documented in `docs/LOADED_INIT_PROBE.md`. Target execution is track
 
 - execute `cargo xtask test-init` and record the complete target evidence;
 - implement production process exit and teardown instead of halting in the probe dispatcher;
-- implement native `write` after fault-safe user copying exists;
+- replace the probe-only stdout write with a real descriptor-backed syscall;
 - move from a conformance-only init to a small Rust runtime once its startup ABI is stable enough;
 - supply the checked initramfs independently from the kernel build and govern it with a manifest.
 
@@ -68,5 +70,6 @@ artifact is documented in `docs/LOADED_INIT_PROBE.md`. Target execution is track
 
 This program is not a shell, service manager, libc, POSIX environment, Linux binary, dynamically
 linked executable, or production `init`. Although packaged as the first initramfs member, it
-performs no file lookup or I/O and owns no file descriptors. Its single purpose is to verify the
-first real loader-to-EL0 handoff with the smallest auditable separately linked artifact.
+performs no file lookup and knows only the probe's fixed stdout descriptor. Its single purpose is
+to verify the first real loader-to-EL0 and user-copy handoff with the smallest auditable separately
+linked artifact.

@@ -36,12 +36,14 @@ At boot, the focused kernel variant:
 9. combines populated leaf ownership and table ownership into one prepared address space;
 10. prints the planned entry, stack pointer, page count, table root, and `PHOENIX_INIT_ENTER`;
 11. publishes TTBR0, invalidates ASID-zero translations, loads EL0 registers, and executes `eret`;
-12. accepts native `exit(42)` as `PHOENIX_INIT_OK`; any other exit status emits
-    `PHOENIX_INIT_FAIL`.
+12. validates and copies the init message from owned physical frames for bounded stdout `write`;
+13. accepts native `exit(42)` as `PHOENIX_INIT_OK` only after a successful nonempty write; any
+    other terminal state emits `PHOENIX_INIT_FAIL`.
 
 The user program independently checks its aligned stack pointer, argc, argv/envp pointers and
 strings, both list terminators, page-size and entry auxiliary entries, Phoenix ABI revision, and
-auxiliary terminator before choosing the success status.
+auxiliary terminator, writes `Phoenix init: hello from EL0\n`, verifies the full return length, and
+only then chooses the success status.
 
 ## Ownership and ordering invariants
 
@@ -50,15 +52,18 @@ auxiliary terminator before choosing the success status.
 - the archive is completely validated before `init` is selected, and its ELF plus initial-stack
   bytes remain borrowed until every destination page has been cleared and populated;
 - no user-table root is published before all leaf bytes and all table descriptors are complete;
-- the activation API consumes the one owner containing every leaf and table frame;
+- a one-time static runtime retains the address-space owner and remaining allocator state forever;
+- the activation API requires a `'static` borrow of that complete owner;
 - executable pages are user RX and never writable; stack pages are user RW and never executable;
 - the guard page has no mapping;
 - table writes precede TTBR0 publication through `DSB ISHST`, followed by the documented
   invalidation and synchronization sequence;
 - the current bootstrap keeps instruction and data caches disabled, so copied code does not yet
   require an active cache-maintenance sequence;
-- ASID zero and the active address-space frames remain live forever because the terminal probe
-  halts rather than returning or reclaiming ownership.
+- user copy resolves virtual ranges only through retained resident ownership and the checked
+  physical backend, never by dereferencing a raw EL0 pointer;
+- ASID zero and the active runtime remain live forever because the terminal probe halts rather
+  than returning or reclaiming ownership.
 
 ## Fixed capacities
 
@@ -70,14 +75,15 @@ bounds, not stable process limits.
 ## Validation
 
 Host tests cover the constituent ELF parser, process-image transaction and retry behavior, initial
-stack, allocator, dynamic table topology/materialization, combined ownership, syscall decoding,
-and QEMU terminal-output classification. Target compilation validates the complete concrete
-composition, `include_bytes` artifact handoff, target memory backend, activation assembly, and
-exception dispatcher. Static inspection proves that the built kernel contains the exact initramfs
-whose `init` entry was accepted by the loader.
+stack, allocator, dynamic table topology/materialization, combined ownership, bounded write
+validation, cross-page user copying, syscall decoding, and QEMU terminal-output classification.
+Target compilation validates the complete concrete composition, `include_bytes` artifact handoff,
+target memory backend, activation assembly, and exception dispatcher. Static inspection proves
+that the built kernel contains the exact initramfs whose `init` entry was accepted by the loader.
 
 Runtime validation is `RUN-INIT-001`. Success requires `cargo xtask test-init` to observe
-`PHOENIX_INIT_OK`; the preceding boot and entry markers cannot satisfy it. Panic, exception,
+the exact userspace message followed by `PHOENIX_INIT_OK`; the preceding boot and entry markers
+cannot satisfy it. A success marker without the message is a protocol failure. Panic, exception,
 `PHOENIX_INIT_FAIL`, early QEMU exit, timeout, excessive output, and stream errors all fail.
 
 ## TODO
@@ -91,12 +97,12 @@ Runtime validation is `RUN-INIT-001`. Success requires `cargo xtask test-init` t
 - accept a checked initramfs supplied independently by firmware or a bootloader instead of
   compile-time embedding;
 - replace fixed probe capacities with accounted process limits where dynamic scale is needed;
-- add safe user-copy support before implementing native `write`.
+- replace the bounded probe write with process-owned descriptors and general fault policy.
 
 ## Skipped work
 
 This path is not a scheduler, process table, general `exec`, mounted initramfs filesystem, VFS,
-file-descriptor model, console-using userspace runtime, dynamic linker, TLS implementation, ASLR,
+file-descriptor model, general console runtime, dynamic linker, TLS implementation, ASLR,
 demand pager, teardown, or production init. It keeps caches, interrupts, timers, and SMP disabled.
 Its purpose is to make the earliest real user-program handoff complete and reviewable without
 hiding unfinished system facilities behind a successful marker.

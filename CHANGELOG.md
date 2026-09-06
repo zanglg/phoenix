@@ -41,8 +41,8 @@ under `Unreleased` and the Cargo version remains 0.0.0 until the 0.1.0 release g
   parsing, reservations, frame allocation, higher-half byte readback, scrub, and release.
 - Allocation-free native initial user stack with argc, argv, envp, minimal auxiliary vector,
   16-byte alignment, checked capacity, and page-offset-aware process-image population.
-- Ownership-gated AArch64 user-address-space activation that consumes the complete leaf/table
-  owner before publishing TTBR0 and entering EL0t.
+- Ownership-gated AArch64 user-address-space activation that requires a permanently retained
+  complete leaf/table owner before publishing TTBR0 and entering EL0t.
 - Separately linked AArch64 `phoenix-init` conformance ELF plus canonical build and static
   inspection through the production loader contract.
 - Opt-in loaded-init kernel variant and bounded QEMU protocol connecting the real DTB allocator,
@@ -50,4 +50,6 @@ under `Unreleased` and the Cargo version remains 0.0.0 until the 0.1.0 release g
   terminal `exit(42)`, with exact embedded-artifact inspection.
 - Strict allocation-free `newc` initramfs validation, canonical lookup, deterministic host
   packaging of the first init ELF, and exact archive embedding in the loaded-init kernel.
+- Fully prevalidated cross-page `copy_from_user`, retained loaded-init runtime ownership, bounded
+  stdout syscall handling, and a userspace message/return-value conformance check.
 - Project, Agent, Roadmap, and kernel capability documentation.

@@ -125,13 +125,14 @@ userspace, and a small documented native Phoenix syscall ABI.
 Host-verifiable prerequisites now include lower-39-bit user mapping and guarded-stack plans plus
 the revision-0 AArch64 register and return-value convention. An opt-in statically backed probe now
 links an EL0 entry, replaces TTBR0, verifies one returning unknown syscall, and terminates through
-`exit(42)`. Runtime evidence, target-memory access, address-space activation, safe user copy, and
-process lifecycle remain.
+`exit(42)`. Runtime evidence and process lifecycle remain.
 
 Allocator-owned user-table topology, retry-safe descriptor materialization, and an exact combined
 owner retaining populated leaf frames plus table frames are now Host Tested. The target
-bootstrap-memory backend and ownership-consuming ASID-zero activation are Cross Compiled; process
-ownership, ASID allocation, retirement, safe user copy, and runtime evidence still remain.
+bootstrap-memory backend and ownership-retaining ASID-zero activation are Cross Compiled. A
+Host Tested full-range `copy_from_user` uses resident physical ownership instead of dereferencing
+raw pointers; copy-to-user, process ownership, ASID allocation, retirement, general fault recovery,
+and runtime evidence still remain.
 
 Observable result: an EL0 program invokes syscalls, exits, and cannot directly access kernel
 memory.
@@ -153,7 +154,8 @@ by the real loader, and inspected as one RX page. A deterministic, strictly vali
 initramfs carries the exact executable under canonical path `init`. A focused kernel variant finds
 it there and connects the real boot DTB and allocator through ELF/stack population, dynamically
 allocated user tables, the combined ownership gate, `eret`, stack self-validation, and native
-`exit(42)`. This entire path is Cross Compiled and ELF Inspected but remains Runtime Pending.
+bounded stdout `write` plus `exit(42)`. This entire path is Cross Compiled and ELF Inspected but
+remains Runtime Pending.
 
 Observable result: Phoenix boots from a clean checkout, starts `init`, runs at least one child
 program, performs console and in-memory file I/O, and shuts down or reports test completion.

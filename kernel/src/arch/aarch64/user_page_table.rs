@@ -7,6 +7,7 @@ use crate::arch::aarch64::paging::{
 use crate::memory::{AllocationError, FrameAllocator, PageFrame, VirtAddr};
 use crate::process_image::PopulatedProcessImage;
 use crate::user::{UserAddr, UserPermissions};
+use crate::user_copy::{UserCopyError, UserMemoryReader, copy_from_user};
 
 const ENTRIES_PER_TABLE: usize = 512;
 
@@ -610,7 +611,7 @@ impl<const MAPPINGS: usize, const PAGES: usize, const TABLES: usize, const LEAVE
         Ok(Self { image, tables })
     }
 
-    /// Return the physical L1 root for a future ownership-consuming activation API.
+    /// Return the physical L1 root retained by this address-space owner.
     pub fn root_frame(&self) -> PageFrame {
         self.tables.root_frame()
     }
@@ -630,22 +631,33 @@ impl<const MAPPINGS: usize, const PAGES: usize, const TABLES: usize, const LEAVE
         self.image.pages().len()
     }
 
-    /// Consume the complete owner, install its root in TTBR0, and enter EL0t.
+    /// Copy a fully checked range from resident user frames into a kernel buffer.
+    pub fn copy_from_user<M: UserMemoryReader>(
+        &self,
+        memory: &mut M,
+        raw_start: u64,
+        output: &mut [u8],
+    ) -> Result<(), UserCopyError<M::Error>> {
+        copy_from_user(&self.image, memory, raw_start, output)
+    }
+
+    /// Install this permanently retained owner in TTBR0 and enter EL0t.
     ///
     /// # Safety
     ///
     /// Call only on the single boot CPU while ASID zero is private. The
     /// bootstrap physical-memory mapping used to construct the tables must
     /// remain coherent, `VBAR_EL1` and an EL1 stack must be active, and no
-    /// caller may retain aliases to owned data or table frames.
+    /// caller may retain aliases to owned data or table frames. The address
+    /// space must be stored for the rest of the boot before this call.
     #[cfg(target_arch = "aarch64")]
-    pub unsafe fn activate_and_enter(self) -> ! {
+    pub unsafe fn activate_and_enter(&'static self) -> ! {
         let root = self.root_frame();
         let entry = self.entry();
         let stack_pointer = self.stack_pointer();
-        // SAFETY: consuming `self` retains exclusive ownership of the complete
-        // table hierarchy and all leaf frames forever because this call cannot
-        // return. The caller supplies the remaining CPU-state requirements.
+        // SAFETY: the `'static` borrow retains the complete table hierarchy and
+        // all leaf frames forever. The caller supplies the remaining CPU-state
+        // requirements and guarantees the owner is never replaced.
         unsafe {
             super::user_entry::activate_and_enter(root, entry, stack_pointer);
         }

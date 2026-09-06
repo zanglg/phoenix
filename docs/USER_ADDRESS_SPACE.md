@@ -2,7 +2,8 @@
 
 This document defines the architecture-neutral validation and planning layer for Phoenix's first
 EL0 address spaces. The separate process-image layer assigns and populates frames transactionally,
-and the AArch64 layer materializes unpublished translation tables. Activation remains separate.
+and the AArch64 layer materializes unpublished translation tables. Activation remains an
+architecture-specific operation on the combined owner.
 
 ## Current implementation
 
@@ -31,6 +32,10 @@ stack pointer itself remains canonical and can be 16-byte aligned.
 The native initial-stack builder can move that pointer downward while constructing argc, argv,
 envp, and auxiliary-vector bytes. Process-image population clears and initializes those stack pages
 before any translation root is publishable. The exact ABI is in `docs/INITIAL_USER_STACK.md`.
+
+The first `copy_from_user` implementation validates a complete range against populated
+virtual-to-physical ownership metadata, then reads through an explicit physical-memory backend. It
+never creates a reference from an untrusted user virtual pointer. See `docs/USER_COPY.md`.
 
 ## Permission policy
 
@@ -65,8 +70,8 @@ bad page counts, and stack underflow. The same module is Cross Compiled for AArc
 
 ## TODO
 
-- add ASID allocation and TTBR0 installation;
-- define checked `copy_from_user` and `copy_to_user` with recoverable faults;
+- replace fixed ASID-zero TTBR0 installation with process-owned ASID allocation and retirement;
+- add `copy_to_user` and general recoverable-fault support beyond immutable owned mappings;
 - define stack growth limits and resource accounting;
 - validate kernel isolation and guard-page faults on QEMU.
 
