@@ -1,7 +1,8 @@
 # Initial ELF Loader Contract
 
 This document describes the accepted executable format and current parser. Phoenix can validate a
-strict ELF image but does not yet allocate, copy, map, or execute it.
+strict ELF image and transactionally plan and assign its pages, but does not yet populate physical
+memory, install hardware mappings, or execute the image.
 
 ## Current implementation
 
@@ -28,18 +29,19 @@ This strict subset intentionally rejects some valid general-purpose ELF files. P
 first user linker script, so requiring clean page boundaries removes permission-merging ambiguity
 from the earliest loader.
 
-## Intended loading transaction
+## Current planning transaction
 
-The future loader must, in order:
+`ProcessImagePlan` now performs the first parts of the loading transaction:
 
 1. validate the whole image before allocating resources;
 2. reserve all required virtual ranges in one user plan;
-3. allocate zeroed frames for every mapped page;
-4. copy exactly `p_filesz` bytes and leave `p_memsz - p_filesz` zero;
-5. keep bytes between `p_memsz` and the rounded page end zero;
-6. install non-executable writable mappings for population if required;
-7. transition to final W^X permissions before EL0 entry;
-8. roll back every frame and table on any failure.
+3. include a non-overlapping guarded stack;
+4. create one clear-and-copy operation per mapped page;
+5. assign all physical frames atomically against an allocator snapshot.
+
+The future materializer must continue by clearing every frame, copying exactly the planned source
+bytes, retaining zeroes through the rounded page end, installing final W^X permissions, and rolling
+back every frame and table on any failure. See `docs/PROCESS_IMAGE.md` for the ownership boundary.
 
 Executable bytes must never be writable at EL0. The source image may be released only after every
 borrow and copy completes.
@@ -63,7 +65,7 @@ compilation checks that the parser remains `no_std` compatible.
 ## TODO
 
 - add the first user linker script and reproducibly build a tiny AArch64 test executable;
-- implement the transactional frame population and mapping operation above;
+- implement physical frame population and hardware mapping for the transactional plan;
 - construct the initial guarded stack and auxiliary vector;
 - decide whether program headers must themselves be available through `AT_PHDR`;
 - record a formal process-image ownership model;

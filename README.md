@@ -16,6 +16,7 @@ narrow support claim:
 - host-side unit tests and validation are available through `cargo xtask`;
 - a bounded QEMU runner and boot-test harness are implemented and host tested;
 - an opt-in first-EL0 probe is cross-linked and statically inspected, but not runtime verified;
+- validated ELF segments and a guarded stack can be planned and assigned frames transactionally;
 - runtime boot and serial output have **not** been validated because the current development
   environment has no QEMU.
 

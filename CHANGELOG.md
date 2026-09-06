@@ -29,4 +29,5 @@ under `Unreleased` and the Cargo version remains 0.0.0 until the 0.1.0 release g
 - Native ABI revision-0 syscall values plus AArch64 `x8`/`x0..x5` request and signed return-register adaptation.
 - Opt-in, statically validated first-EL0 probe with private TTBR0 tables, RX code, guarded zeroed stack, `eret`, returning unknown syscall, and terminal `exit(42)` path.
 - Separate bounded `test-el0` QEMU protocol that cannot pass on the earlier boot marker.
+- Transactional process-image planning for ELF segments plus a guarded stack, with per-page clear/copy work, unique frame ownership, and all-or-nothing allocation and release.
 - Project, Agent, Roadmap, and kernel capability documentation.

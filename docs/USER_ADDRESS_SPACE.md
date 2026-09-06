@@ -1,7 +1,8 @@
 # User Address Space
 
 This document defines the architecture-neutral validation and planning layer for Phoenix's first
-EL0 address spaces. It does not allocate frames, create translation tables, or copy user memory.
+EL0 address spaces. The separate process-image layer can now assign frames transactionally; neither
+layer creates translation tables or copies user memory.
 
 ## Current implementation
 
@@ -59,9 +60,7 @@ bad page counts, and stack underflow. The same module is Cross Compiled for AArc
 
 ## TODO
 
-- combine ELF segments and the guarded stack into one process address-space plan;
-- allocate zeroed frames transactionally and materialize user page tables;
-- define ownership and rollback when any mapping step fails;
+- populate the transactionally assigned frames and materialize user page tables;
 - add ASID allocation and TTBR0 installation;
 - define checked `copy_from_user` and `copy_to_user` with recoverable faults;
 - build the initial argc/argv/envp/auxv stack with 16-byte alignment;
