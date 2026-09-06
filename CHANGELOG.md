@@ -18,4 +18,5 @@ under `Unreleased` and the Cargo version remains 0.0.0 until the 0.1.0 release g
 - Standalone host-side xtask commands for environment checks, tests, builds, and validation.
 - Explicit Host Tested, Cross Compiled, ELF Inspected, Runtime Pending, and Runtime Verified states.
 - Checked architecture-neutral physical/virtual addresses, pages, frames, and half-open ranges.
+- Strict allocation-free DTB header, reservation-map, structure, and strings parsing.
 - Project, Agent, Roadmap, and kernel capability documentation.
