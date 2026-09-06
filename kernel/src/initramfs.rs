@@ -27,6 +27,8 @@ pub enum PathError {
     CurrentDirectory,
     /// The path contains a parent-directory component.
     ParentDirectory,
+    /// The path contains a NUL byte and cannot name an archive object.
+    InteriorNul,
 }
 
 /// Failure while validating a complete uncompressed `newc` archive.
@@ -365,7 +367,8 @@ fn parse_record(bytes: &[u8], offset: usize) -> Result<ParsedRecord<'_>, Initram
 
     let path =
         str::from_utf8(name_bytes).map_err(|_| InitramfsError::InvalidNameEncoding { offset })?;
-    validate_path(path).map_err(|reason| InitramfsError::InvalidPath { offset, reason })?;
+    validate_canonical_path(path)
+        .map_err(|reason| InitramfsError::InvalidPath { offset, reason })?;
 
     let kind = match mode & FILE_TYPE_MASK {
         REGULAR_FILE => {
@@ -445,7 +448,8 @@ fn validate_zero_padding(bytes: &[u8], start: usize, end: usize) -> Result<(), I
     Ok(())
 }
 
-fn validate_path(path: &str) -> Result<(), PathError> {
+/// Validate one canonical path relative to the initramfs root.
+pub fn validate_canonical_path(path: &str) -> Result<(), PathError> {
     if path.is_empty() {
         return Err(PathError::Empty);
     }
@@ -454,6 +458,9 @@ fn validate_path(path: &str) -> Result<(), PathError> {
     }
     if path.ends_with('/') {
         return Err(PathError::TrailingSlash);
+    }
+    if path.as_bytes().contains(&0) {
+        return Err(PathError::InteriorNul);
     }
     for component in path.split('/') {
         match component {

@@ -12,6 +12,8 @@ pub const SYSCALL_ARGUMENT_COUNT: usize = 6;
 pub const MAX_ERROR_NUMBER: u16 = 4095;
 /// Native file descriptor reserved for standard output at process creation.
 pub const STANDARD_OUTPUT: u64 = 1;
+/// Only open mode accepted by the initial read-only filesystem bridge.
+pub const OPEN_READ_ONLY: u64 = 0;
 
 /// Initially assigned native system-call operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -20,6 +22,12 @@ pub enum NativeSyscall {
     Exit,
     /// Write bytes to a file descriptor (`number=1`).
     Write,
+    /// Read bytes from a file descriptor (`number=2`).
+    Read,
+    /// Open a canonical path (`number=3`).
+    Open,
+    /// Close a file descriptor (`number=4`).
+    Close,
     /// Unassigned number retained for forward-compatible rejection.
     Unknown(u64),
 }
@@ -30,6 +38,9 @@ impl NativeSyscall {
         match number {
             0 => Self::Exit,
             1 => Self::Write,
+            2 => Self::Read,
+            3 => Self::Open,
+            4 => Self::Close,
             number => Self::Unknown(number),
         }
     }
@@ -39,6 +50,9 @@ impl NativeSyscall {
         match self {
             Self::Exit => 0,
             Self::Write => 1,
+            Self::Read => 2,
+            Self::Open => 3,
+            Self::Close => 4,
             Self::Unknown(number) => number,
         }
     }
@@ -56,6 +70,119 @@ pub struct SyscallRequest {
 pub struct ConsoleWriteRequest {
     user_buffer: u64,
     length: usize,
+}
+
+/// Validated bounded read request for the initial file bridge.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FileReadRequest {
+    descriptor: u64,
+    user_buffer: u64,
+    length: usize,
+}
+
+impl FileReadRequest {
+    /// Validate the operation and configured byte bound.
+    pub fn from_syscall(request: SyscallRequest, maximum: usize) -> Result<Self, Errno> {
+        if request.operation() != NativeSyscall::Read {
+            return Err(Errno::InvalidArgument);
+        }
+        let raw_length = request
+            .argument(2)
+            .expect("argument two is always retained");
+        let length = usize::try_from(raw_length).map_err(|_| Errno::InvalidArgument)?;
+        if length > maximum {
+            return Err(Errno::InvalidArgument);
+        }
+        Ok(Self {
+            descriptor: request
+                .argument(0)
+                .expect("argument zero is always retained"),
+            user_buffer: request
+                .argument(1)
+                .expect("argument one is always retained"),
+            length,
+        })
+    }
+
+    /// Return the raw process-local descriptor.
+    pub const fn descriptor(self) -> u64 {
+        self.descriptor
+    }
+
+    /// Return the untrusted destination address.
+    pub const fn user_buffer(self) -> u64 {
+        self.user_buffer
+    }
+
+    /// Return the validated maximum byte count.
+    pub const fn length(self) -> usize {
+        self.length
+    }
+}
+
+/// Validated bounded path request for the initial read-only open operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FileOpenRequest {
+    path_buffer: u64,
+    path_length: usize,
+}
+
+impl FileOpenRequest {
+    /// Validate operation, nonempty path bound, and read-only mode.
+    pub fn from_syscall(request: SyscallRequest, maximum_path: usize) -> Result<Self, Errno> {
+        if request.operation() != NativeSyscall::Open || request.argument(2) != Some(OPEN_READ_ONLY)
+        {
+            return Err(Errno::InvalidArgument);
+        }
+        let raw_length = request
+            .argument(1)
+            .expect("argument one is always retained");
+        let path_length = usize::try_from(raw_length).map_err(|_| Errno::InvalidArgument)?;
+        if path_length == 0 || path_length > maximum_path {
+            return Err(Errno::InvalidArgument);
+        }
+        Ok(Self {
+            path_buffer: request
+                .argument(0)
+                .expect("argument zero is always retained"),
+            path_length,
+        })
+    }
+
+    /// Return the untrusted path byte address.
+    pub const fn path_buffer(self) -> u64 {
+        self.path_buffer
+    }
+
+    /// Return the validated nonzero path byte count.
+    pub const fn path_length(self) -> usize {
+        self.path_length
+    }
+}
+
+/// Validated close request for the initial file bridge.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FileCloseRequest {
+    descriptor: u64,
+}
+
+impl FileCloseRequest {
+    /// Validate the syscall operation and retain its descriptor.
+    pub fn from_syscall(request: SyscallRequest) -> Result<Self, Errno> {
+        if request.operation() != NativeSyscall::Close {
+            return Err(Errno::InvalidArgument);
+        }
+        Ok(Self {
+            descriptor: request
+                .argument(0)
+                .expect("argument zero is always retained"),
+        })
+    }
+
+    /// Return the raw process-local descriptor.
+    pub const fn descriptor(self) -> u64 {
+        self.descriptor
+    }
 }
 
 impl ConsoleWriteRequest {
@@ -126,14 +253,24 @@ impl SyscallRequest {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u16)]
 pub enum Errno {
+    /// No filesystem object exists at the requested path.
+    NoSuchFile = 2,
+    /// An internal I/O transaction could not be completed consistently.
+    InputOutput = 5,
     /// File descriptor is not open for the requested operation.
     BadFileDescriptor = 9,
-    /// A user pointer cannot be accessed for the complete request.
-    BadAddress = 14,
     /// Memory allocation failed.
     NoMemory = 12,
+    /// A filesystem object does not grant the requested access.
+    PermissionDenied = 13,
+    /// A user pointer cannot be accessed for the complete request.
+    BadAddress = 14,
+    /// An open operation selected a directory where a file was required.
+    IsDirectory = 21,
     /// An argument value is outside the operation's contract.
     InvalidArgument = 22,
+    /// The process has exhausted its open-file capacity.
+    TooManyOpenFiles = 24,
     /// The system call is unknown or not implemented.
     NotImplemented = 38,
 }
@@ -198,14 +335,19 @@ pub enum DecodedSyscallReturn {
 #[cfg(test)]
 mod tests {
     use super::{
-        ConsoleWriteRequest, DecodedSyscallReturn, Errno, NativeSyscall, STANDARD_OUTPUT,
-        SyscallRequest, SyscallReturn, SyscallReturnError,
+        ConsoleWriteRequest, DecodedSyscallReturn, Errno, FileCloseRequest, FileOpenRequest,
+        FileReadRequest, NativeSyscall, OPEN_READ_ONLY, STANDARD_OUTPUT, SyscallRequest,
+        SyscallReturn, SyscallReturnError,
     };
 
     #[test]
     fn syscall_numbers_preserve_unknown_values() {
         assert_eq!(NativeSyscall::decode(0), NativeSyscall::Exit);
         assert_eq!(NativeSyscall::decode(1), NativeSyscall::Write);
+        assert_eq!(NativeSyscall::decode(2), NativeSyscall::Read);
+        assert_eq!(NativeSyscall::decode(3), NativeSyscall::Open);
+        assert_eq!(NativeSyscall::decode(4), NativeSyscall::Close);
+        assert_eq!(NativeSyscall::Close.number(), 4);
         assert_eq!(NativeSyscall::decode(99), NativeSyscall::Unknown(99));
         assert_eq!(NativeSyscall::Unknown(u64::MAX).number(), u64::MAX);
     }
@@ -268,6 +410,47 @@ mod tests {
                 SyscallRequest::new(1, [STANDARD_OUTPUT, 0x40_0000, 13, 0, 0, 0]),
                 12
             ),
+            Err(Errno::InvalidArgument)
+        );
+    }
+
+    #[test]
+    fn file_requests_validate_operations_modes_and_bounds() {
+        let open = FileOpenRequest::from_syscall(
+            SyscallRequest::new(3, [0x40_1000, 8, OPEN_READ_ONLY, 0, 0, 0]),
+            8,
+        )
+        .unwrap();
+        assert_eq!(open.path_buffer(), 0x40_1000);
+        assert_eq!(open.path_length(), 8);
+        assert_eq!(
+            FileOpenRequest::from_syscall(
+                SyscallRequest::new(3, [0, 0, OPEN_READ_ONLY, 0, 0, 0]),
+                8
+            ),
+            Err(Errno::InvalidArgument)
+        );
+        assert_eq!(
+            FileOpenRequest::from_syscall(SyscallRequest::new(3, [0, 4, 1, 0, 0, 0]), 8),
+            Err(Errno::InvalidArgument)
+        );
+
+        let read =
+            FileReadRequest::from_syscall(SyscallRequest::new(2, [3, 0x7f_f000, 64, 0, 0, 0]), 64)
+                .unwrap();
+        assert_eq!(read.descriptor(), 3);
+        assert_eq!(read.user_buffer(), 0x7f_f000);
+        assert_eq!(read.length(), 64);
+        assert_eq!(
+            FileReadRequest::from_syscall(SyscallRequest::new(2, [3, 0, 65, 0, 0, 0]), 64),
+            Err(Errno::InvalidArgument)
+        );
+
+        let close =
+            FileCloseRequest::from_syscall(SyscallRequest::new(4, [3, 0, 0, 0, 0, 0])).unwrap();
+        assert_eq!(close.descriptor(), 3);
+        assert_eq!(
+            FileCloseRequest::from_syscall(SyscallRequest::new(2, [3, 0, 0, 0, 0, 0])),
             Err(Errno::InvalidArgument)
         );
     }

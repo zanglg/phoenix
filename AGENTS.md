@@ -37,7 +37,8 @@ not create speculative implementations for them.
 - `docs/ELF_LOADER.md`: strict initial executable subset and transactional loading requirements.
 - `docs/PROCESS_IMAGE.md`: executable/stack page planning and transactional frame ownership.
 - `docs/INITIAL_USER_STACK.md`: native argc/argv/envp/auxv layout and process-image integration.
-- `docs/USER_COPY.md`: checked physical-frame user reads and bounded console-write contract.
+- `docs/USER_COPY.md`: checked bidirectional physical-frame user copies and bounded I/O contract.
+- `docs/FILE_DESCRIPTORS.md`: read-only initramfs file table and transactional offset contract.
 - `docs/FIRST_USER_PROGRAM.md`: standalone init ELF contract and static validation boundary.
 - `docs/INITRAMFS.md`: strict initial archive subset, lookup rules, validation, and deferrals.
 - `docs/LOADED_INIT_PROBE.md`: end-to-end archive-to-ELF loading, ownership, entry, and runtime boundary.

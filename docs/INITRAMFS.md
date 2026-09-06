@@ -30,22 +30,22 @@ its value. Size, offset, and alignment arithmetic is checked before slicing. Ite
 only after the complete immutable source has passed validation.
 
 Exact lookup returns borrowed entry bytes. `regular_file` rejects directories;
-`executable_file` additionally requires at least one Unix execute bit. No data is copied or
-extracted into a filesystem by this layer.
+`executable_file` additionally requires at least one Unix execute bit. The first read-only file
+table borrows these bytes directly without extraction; see `docs/FILE_DESCRIPTORS.md`.
 
 ## Deterministic package
 
 `cargo xtask build-init` first creates and strips the standalone AArch64 init ELF. It then emits
-`phoenix-initramfs.cpio` with one executable regular file at canonical path `init` and one trailer.
-The package uses fixed ownership, timestamps, device numbers, inode values, permissions, ordering,
-and zero padding. It does not invoke a host `cpio` program.
+`phoenix-initramfs.cpio` with executable `init`, directory `etc`, read-only `etc/motd`, and one
+trailer. The package uses fixed ownership, timestamps, device numbers, inode values, permissions,
+ordering, payloads, and zero padding. It does not invoke a host `cpio` program.
 
 `cargo xtask inspect-init` parses the generated archive with the production parser and requires:
 
-- exactly one non-trailer entry;
-- canonical path `init`;
-- regular-file type and permission `0755`;
-- byte-for-byte identity with the separately inspected ELF.
+- exactly three non-trailer entries in deterministic order;
+- canonical executable `init`, permission `0755`, byte-identical to the separately inspected ELF;
+- canonical directory `etc`, permission `0755`, with no payload;
+- canonical regular file `etc/motd`, permission `0444`, with the exact conformance payload.
 
 The loaded-init build receives the archive path through a build-only environment variable. Its
 kernel artifact inspection requires the complete archive byte sequence to appear unchanged. At
@@ -78,10 +78,9 @@ Runtime execution is covered by `RUN-INIT-001`.
 ## TODO
 
 - run the archive-to-init path through `cargo xtask test-init` and retain evidence;
-- introduce a read-only inode/dentry ownership model rather than treating the archive as direct
-  executable storage;
+- replace direct archive lookup with VFS inode/dentry ownership when another backend exists;
 - define extraction, memory accounting, and lifetime rules for a writable in-memory root;
-- add directories and a second program when the first VFS lookup consumer exists;
+- add a second executable after process creation and general `exec` ownership exist;
 - decide whether reproducible package manifests should become a checked source file;
 - add fuzzing against the bounded parser before accepting externally supplied archives;
 - decide how firmware or a bootloader supplies initramfs bytes after compile-time embedding ends;

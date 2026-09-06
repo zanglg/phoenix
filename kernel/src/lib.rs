@@ -11,6 +11,7 @@ pub mod build_info;
 pub mod console;
 pub mod dtb;
 pub mod elf;
+pub mod file;
 pub mod initramfs;
 pub mod memory;
 pub mod process_image;

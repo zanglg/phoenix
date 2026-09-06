@@ -7,7 +7,9 @@ use crate::arch::aarch64::paging::{
 use crate::memory::{AllocationError, FrameAllocator, PageFrame, VirtAddr};
 use crate::process_image::PopulatedProcessImage;
 use crate::user::{UserAddr, UserPermissions};
-use crate::user_copy::{UserCopyError, UserMemoryReader, copy_from_user};
+use crate::user_copy::{
+    UserCopyError, UserMemoryReader, UserMemoryWriter, copy_from_user, copy_to_user,
+};
 
 const ENTRIES_PER_TABLE: usize = 512;
 
@@ -639,6 +641,16 @@ impl<const MAPPINGS: usize, const PAGES: usize, const TABLES: usize, const LEAVE
         output: &mut [u8],
     ) -> Result<(), UserCopyError<M::Error>> {
         copy_from_user(&self.image, memory, raw_start, output)
+    }
+
+    /// Copy a fully checked kernel byte slice into resident user frames.
+    pub fn copy_to_user<M: UserMemoryWriter>(
+        &self,
+        memory: &mut M,
+        raw_start: u64,
+        input: &[u8],
+    ) -> Result<(), UserCopyError<M::Error>> {
+        copy_to_user(&self.image, memory, raw_start, input)
     }
 
     /// Install this permanently retained owner in TTBR0 and enter EL0t.

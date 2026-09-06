@@ -52,4 +52,6 @@ under `Unreleased` and the Cargo version remains 0.0.0 until the 0.1.0 release g
   packaging of the first init ELF, and exact archive embedding in the loaded-init kernel.
 - Fully prevalidated cross-page `copy_from_user`, retained loaded-init runtime ownership, bounded
   stdout syscall handling, and a userspace message/return-value conformance check.
+- Fully prevalidated `copy_to_user`, a generation-safe fixed-capacity read-only initramfs file
+  table, bounded `open`/`read`/`close` probes, and end-to-end initramfs file-I/O conformance logic.
 - Project, Agent, Roadmap, and kernel capability documentation.

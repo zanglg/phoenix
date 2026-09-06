@@ -13,6 +13,8 @@ const BOOT_STACK_SIZE: u64 = 64 * 1024;
 const EXCEPTION_VECTOR_TABLE_SIZE: u64 = 2048;
 const INIT_ENTRY: usize = 0x0040_0000;
 const INIT_MESSAGE: &[u8] = b"Phoenix init: hello from EL0\n";
+const INIT_PATH: &[u8] = b"etc/motd";
+const INIT_FILE: &[u8] = b"Phoenix initramfs: file I/O works\n";
 
 fn main() -> ExitCode {
     let mut args = env::args().skip(1);
@@ -496,7 +498,7 @@ fn append_newc_record(
     data: &[u8],
 ) -> Result<(), String> {
     let file_size = u32::try_from(data.len())
-        .map_err(|_| "init ELF is too large for a newc file-size field".to_owned())?;
+        .map_err(|_| "record payload is too large for a newc file-size field".to_owned())?;
     let name_size = path
         .len()
         .checked_add(1)
@@ -524,9 +526,13 @@ fn append_newc_record(
 
 fn make_initramfs(init_elf: &[u8]) -> Result<Vec<u8>, String> {
     const REGULAR_EXECUTABLE: u32 = 0o100_755;
+    const REGULAR_READ_ONLY: u32 = 0o100_444;
+    const DIRECTORY: u32 = 0o040_755;
 
     let mut output = Vec::new();
     append_newc_record(&mut output, 1, "init", REGULAR_EXECUTABLE, init_elf)?;
+    append_newc_record(&mut output, 2, "etc", DIRECTORY, &[])?;
+    append_newc_record(&mut output, 3, "etc/motd", REGULAR_READ_ONLY, INIT_FILE)?;
     append_newc_record(&mut output, 0, "TRAILER!!!", 0, &[])?;
     Ok(output)
 }
@@ -673,27 +679,51 @@ fn inspect_init() -> bool {
         Ok(archive_bytes) => {
             match phoenix_kernel::initramfs::Initramfs::from_bytes(&archive_bytes) {
                 Ok(archive) => {
-                    if archive.len() != 1 {
+                    if archive.len() != 3 {
                         errors.push(format!(
-                            "initramfs has {} entries, expected exactly one",
+                            "initramfs has {} entries, expected exactly three",
                             archive.len()
                         ));
                     }
                     match archive.find("init") {
-                    Some(entry)
-                        if entry.kind()
-                            == phoenix_kernel::initramfs::InitramfsEntryKind::RegularFile
-                            && entry.permissions() == 0o755
-                            && entry.data() == bytes =>
-                    {
-                        println!("ok: deterministic initramfs contains the exact init ELF");
+                        Some(entry)
+                            if entry.kind()
+                                == phoenix_kernel::initramfs::InitramfsEntryKind::RegularFile
+                                && entry.permissions() == 0o755
+                                && entry.data() == bytes => {}
+                        Some(_) => errors.push(
+                            "initramfs init is not an executable regular file with the exact ELF bytes"
+                                .to_owned(),
+                        ),
+                        None => errors
+                            .push("initramfs does not contain canonical path 'init'".to_owned()),
                     }
-                    Some(_) => errors.push(
-                        "initramfs init is not an executable regular file with the exact ELF bytes"
-                            .to_owned(),
-                    ),
-                    None => errors.push("initramfs does not contain canonical path 'init'".to_owned()),
-                }
+                    match archive.find("etc") {
+                        Some(entry)
+                            if entry.kind()
+                                == phoenix_kernel::initramfs::InitramfsEntryKind::Directory
+                                && entry.permissions() == 0o755
+                                && entry.data().is_empty() => {}
+                        _ => errors.push(
+                            "initramfs does not contain canonical directory 'etc'".to_owned(),
+                        ),
+                    }
+                    match archive.find("etc/motd") {
+                        Some(entry)
+                            if entry.kind()
+                                == phoenix_kernel::initramfs::InitramfsEntryKind::RegularFile
+                                && entry.permissions() == 0o444
+                                && entry.data() == INIT_FILE =>
+                        {
+                            println!(
+                                "ok: deterministic initramfs contains exact init and motd files"
+                            );
+                        }
+                        _ => errors.push(
+                            "initramfs does not contain the exact read-only etc/motd file"
+                                .to_owned(),
+                        ),
+                    }
                 }
                 Err(error) => errors.push(format!(
                     "Phoenix initramfs parser rejects generated archive: {error:?}"
@@ -766,6 +796,8 @@ fn inspect_init() -> bool {
         "__init_end",
         "__init_message_start",
         "__init_message_end",
+        "__init_path_start",
+        "__init_path_end",
     ] {
         if !symbols.contains_key(symbol) {
             errors.push(format!("required init symbol '{symbol}' is missing"));
@@ -796,10 +828,23 @@ fn inspect_init() -> bool {
     {
         errors.push("init ELF does not contain the expected userspace message".to_owned());
     }
+    match (
+        symbols.get("__init_path_start"),
+        symbols.get("__init_path_end"),
+    ) {
+        (Some(start), Some(end)) if end.checked_sub(*start) == Some(INIT_PATH.len() as u64) => {}
+        _ => errors.push("init path symbols do not describe the expected bytes".to_owned()),
+    }
+    if !bytes
+        .windows(INIT_PATH.len())
+        .any(|window| window == INIT_PATH)
+    {
+        errors.push("init ELF does not contain the expected canonical path".to_owned());
+    }
 
     if errors.is_empty() {
         println!("ok: init ELF is accepted by the Phoenix loader");
-        println!("ok: init entry, RX page, message, symbols, size bound, and map");
+        println!("ok: init entry, RX page, message/path, symbols, size bound, and map");
         true
     } else {
         for error in errors {
@@ -1231,7 +1276,7 @@ fn ci() -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        KERNEL_VIRT_BASE, make_initramfs, parse_lsp_target, parse_nm_symbols,
+        INIT_FILE, KERNEL_VIRT_BASE, make_initramfs, parse_lsp_target, parse_nm_symbols,
         validate_symbol_layout,
     };
 
@@ -1242,10 +1287,25 @@ mod tests {
         assert_eq!(first, second);
 
         let archive = phoenix_kernel::initramfs::Initramfs::from_bytes(&first).unwrap();
-        assert_eq!(archive.len(), 1);
+        assert_eq!(archive.len(), 3);
+        assert_eq!(
+            archive
+                .entries()
+                .map(|entry| entry.path())
+                .collect::<Vec<_>>(),
+            ["init", "etc", "etc/motd"]
+        );
         let init = archive.find("init").unwrap();
         assert_eq!(init.data(), b"ELF fixture");
         assert_eq!(init.permissions(), 0o755);
+        let directory = archive.find("etc").unwrap();
+        assert_eq!(
+            directory.kind(),
+            phoenix_kernel::initramfs::InitramfsEntryKind::Directory
+        );
+        let motd = archive.find("etc/motd").unwrap();
+        assert_eq!(motd.data(), INIT_FILE);
+        assert_eq!(motd.permissions(), 0o444);
     }
 
     #[test]

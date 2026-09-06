@@ -31,7 +31,9 @@ use phoenix_kernel::platform::aarch64::qemu_virt::{
 use phoenix_kernel::process_image::ProcessImageMemory;
 
 #[cfg(feature = "loaded-init-probe")]
-use phoenix_kernel::abi::ConsoleWriteRequest;
+use phoenix_kernel::abi::{
+    ConsoleWriteRequest, FileCloseRequest, FileOpenRequest, FileReadRequest,
+};
 #[cfg(any(feature = "el0-probe", feature = "loaded-init-probe"))]
 use phoenix_kernel::abi::{Errno, NATIVE_SVC_IMMEDIATE, NativeSyscall, SyscallReturn};
 #[cfg(all(feature = "el0-probe", not(feature = "loaded-init-probe")))]
@@ -44,6 +46,8 @@ use phoenix_kernel::arch::aarch64::syscall;
 use phoenix_kernel::arch::aarch64::user_page_table::{PreparedUserAddressSpace, UserPageTablePlan};
 #[cfg(feature = "loaded-init-probe")]
 use phoenix_kernel::elf::ElfImage;
+#[cfg(feature = "loaded-init-probe")]
+use phoenix_kernel::file::{FileError, ReadOnlyFileTable};
 #[cfg(feature = "loaded-init-probe")]
 use phoenix_kernel::initramfs::Initramfs;
 #[cfg(feature = "loaded-init-probe")]
@@ -94,6 +98,12 @@ const INIT_STACK_BYTES: usize = 512;
 #[cfg(feature = "loaded-init-probe")]
 const INIT_WRITE_LIMIT: usize = 256;
 #[cfg(feature = "loaded-init-probe")]
+const INIT_READ_LIMIT: usize = 256;
+#[cfg(feature = "loaded-init-probe")]
+const INIT_PATH_LIMIT: usize = 128;
+#[cfg(feature = "loaded-init-probe")]
+const INIT_OPEN_FILES: usize = 4;
+#[cfg(feature = "loaded-init-probe")]
 type InitAddressSpace = PreparedUserAddressSpace<
     INIT_IMAGE_MAPPINGS,
     INIT_IMAGE_PAGES,
@@ -103,6 +113,7 @@ type InitAddressSpace = PreparedUserAddressSpace<
 #[cfg(feature = "loaded-init-probe")]
 struct InitRuntime {
     address_space: InitAddressSpace,
+    files: ReadOnlyFileTable<'static, INIT_OPEN_FILES>,
     _allocator: FrameAllocator<INIT_MEMORY_RANGES>,
 }
 #[cfg(feature = "loaded-init-probe")]
@@ -301,13 +312,13 @@ fn run_loaded_init_probe(boot_argument: usize, console: &mut Console<EarlyPl011>
     });
     // SAFETY: this single-CPU boot path initializes the slot exactly once
     // before EL0 can issue an exception. The slot is never replaced or freed.
-    let runtime = unsafe {
+    let prepared = unsafe {
         install_init_runtime(InitRuntime {
             address_space: prepared,
+            files: ReadOnlyFileTable::new(initramfs),
             _allocator: allocator,
         })
     };
-    let prepared = &runtime.address_space;
 
     let _ = writeln!(
         console,
@@ -320,7 +331,7 @@ fn run_loaded_init_probe(boot_argument: usize, console: &mut Console<EarlyPl011>
     let _ = writeln!(console, "{INIT_ENTER_SENTINEL}");
     console.sink_mut().flush();
 
-    // SAFETY: `runtime` permanently owns every fully initialized leaf and
+    // SAFETY: the runtime permanently owns every fully initialized leaf and
     // table frame. The bootstrap keeps caches disabled, vectors and the EL1
     // stack are active, and this single-core probe is the only user of ASID
     // zero.
@@ -330,23 +341,40 @@ fn run_loaded_init_probe(boot_argument: usize, console: &mut Console<EarlyPl011>
 }
 
 #[cfg(feature = "loaded-init-probe")]
-unsafe fn install_init_runtime(runtime: InitRuntime) -> &'static InitRuntime {
+unsafe fn install_init_runtime(runtime: InitRuntime) -> &'static InitAddressSpace {
     let slot = &raw mut INIT_RUNTIME;
     // SAFETY: the caller guarantees unique one-time initialization and eternal
     // retention; raw pointers avoid manufacturing a reference before init.
     unsafe {
         (*slot).write(runtime);
-        &*(*slot).as_ptr()
+        let runtime = (*slot).as_ptr();
+        &*core::ptr::addr_of!((*runtime).address_space)
     }
 }
 
 #[cfg(feature = "loaded-init-probe")]
-unsafe fn active_init_runtime() -> &'static InitRuntime {
+unsafe fn active_init_address_space() -> &'static InitAddressSpace {
     let slot = &raw const INIT_RUNTIME;
     // SAFETY: only lower-EL SVC dispatch calls this function, and EL0 entry is
-    // possible only after `install_init_runtime` completed. The slot is
-    // never subsequently mutated or freed.
-    unsafe { &*(*slot).as_ptr() }
+    // possible only after `install_init_runtime` completed. The address-space
+    // field is never subsequently mutated or freed.
+    unsafe {
+        let runtime = (*slot).as_ptr();
+        &*core::ptr::addr_of!((*runtime).address_space)
+    }
+}
+
+#[cfg(feature = "loaded-init-probe")]
+unsafe fn active_init_files() -> &'static mut ReadOnlyFileTable<'static, INIT_OPEN_FILES> {
+    let slot = &raw mut INIT_RUNTIME;
+    // SAFETY: lower-EL syscall dispatch is single-core and non-reentrant in
+    // this probe. Initialization precedes EL0 entry. This returns only the
+    // file-table field, disjoint from the permanently shared address space,
+    // and each mutable borrow ends before another syscall can begin.
+    unsafe {
+        let runtime = (*slot).as_mut_ptr();
+        &mut *core::ptr::addr_of_mut!((*runtime).files)
+    }
 }
 
 /// Common target of the assembly exception vectors.
@@ -420,6 +448,27 @@ fn handle_probe_syscall(frame: &mut ExceptionFrame, slot: Option<VectorSlot>) ->
             syscall::set_return(frame, SyscallReturn::error(Errno::NotImplemented));
             true
         }
+        NativeSyscall::Read => {
+            #[cfg(feature = "loaded-init-probe")]
+            handle_init_read(frame, request);
+            #[cfg(all(feature = "el0-probe", not(feature = "loaded-init-probe")))]
+            syscall::set_return(frame, SyscallReturn::error(Errno::NotImplemented));
+            true
+        }
+        NativeSyscall::Open => {
+            #[cfg(feature = "loaded-init-probe")]
+            handle_init_open(frame, request);
+            #[cfg(all(feature = "el0-probe", not(feature = "loaded-init-probe")))]
+            syscall::set_return(frame, SyscallReturn::error(Errno::NotImplemented));
+            true
+        }
+        NativeSyscall::Close => {
+            #[cfg(feature = "loaded-init-probe")]
+            handle_init_close(frame, request);
+            #[cfg(all(feature = "el0-probe", not(feature = "loaded-init-probe")))]
+            syscall::set_return(frame, SyscallReturn::error(Errno::NotImplemented));
+            true
+        }
         NativeSyscall::Unknown(_) => {
             syscall::set_return(frame, SyscallReturn::error(Errno::NotImplemented));
             true
@@ -441,9 +490,9 @@ fn handle_init_write(frame: &mut ExceptionFrame, request: phoenix_kernel::abi::S
     // address-space installation and while the bootstrap TTBR1 RAM alias is
     // still active. The user-copy layer accepts only frames retained by it.
     let result = unsafe {
-        let runtime = active_init_runtime();
+        let address_space = active_init_address_space();
         let mut memory = BootstrapPhysicalMemory::assume_bootstrap_mapping();
-        runtime.address_space.copy_from_user(
+        address_space.copy_from_user(
             &mut memory,
             write.user_buffer(),
             &mut buffer[..write.length()],
@@ -466,6 +515,125 @@ fn handle_init_write(frame: &mut ExceptionFrame, request: phoenix_kernel::abi::S
         frame,
         SyscallReturn::success(write.length() as u64).expect("bounded write length is successful"),
     );
+}
+
+#[cfg(feature = "loaded-init-probe")]
+fn handle_init_open(frame: &mut ExceptionFrame, request: phoenix_kernel::abi::SyscallRequest) {
+    let open = match FileOpenRequest::from_syscall(request, INIT_PATH_LIMIT) {
+        Ok(open) => open,
+        Err(error) => {
+            syscall::set_return(frame, SyscallReturn::error(error));
+            return;
+        }
+    };
+    let mut path_bytes = [0_u8; INIT_PATH_LIMIT];
+    // SAFETY: syscall dispatch starts only after runtime publication, and the
+    // checked physical backend reads only frames retained by the active owner.
+    let copied = unsafe {
+        let address_space = active_init_address_space();
+        let mut memory = BootstrapPhysicalMemory::assume_bootstrap_mapping();
+        address_space.copy_from_user(
+            &mut memory,
+            open.path_buffer(),
+            &mut path_bytes[..open.path_length()],
+        )
+    };
+    if copied.is_err() {
+        syscall::set_return(frame, SyscallReturn::error(Errno::BadAddress));
+        return;
+    }
+    let Ok(path) = core::str::from_utf8(&path_bytes[..open.path_length()]) else {
+        syscall::set_return(frame, SyscallReturn::error(Errno::InvalidArgument));
+        return;
+    };
+    // SAFETY: this synchronous single-core dispatcher has the only live
+    // mutable borrow of the process-local file table.
+    let opened = unsafe { active_init_files().open(path) };
+    match opened {
+        Ok(descriptor) => syscall::set_return(
+            frame,
+            SyscallReturn::success(descriptor).expect("small descriptor is a success value"),
+        ),
+        Err(error) => syscall::set_return(frame, SyscallReturn::error(file_errno(error))),
+    }
+}
+
+#[cfg(feature = "loaded-init-probe")]
+fn handle_init_read(frame: &mut ExceptionFrame, request: phoenix_kernel::abi::SyscallRequest) {
+    let read = match FileReadRequest::from_syscall(request, INIT_READ_LIMIT) {
+        Ok(read) => read,
+        Err(error) => {
+            syscall::set_return(frame, SyscallReturn::error(error));
+            return;
+        }
+    };
+    // SAFETY: this synchronous single-core dispatcher has the only live
+    // mutable borrow of the process-local file table. The returned window
+    // borrows immutable initramfs storage rather than the table itself.
+    let window = match unsafe { active_init_files().read_window(read.descriptor(), read.length()) }
+    {
+        Ok(window) => window,
+        Err(error) => {
+            syscall::set_return(frame, SyscallReturn::error(file_errno(error)));
+            return;
+        }
+    };
+    // SAFETY: runtime publication precedes dispatch; the destination is
+    // checked against writable frames retained by the active owner, and the
+    // bootstrap physical alias is still active.
+    let copied = unsafe {
+        let address_space = active_init_address_space();
+        let mut memory = BootstrapPhysicalMemory::assume_bootstrap_mapping();
+        address_space.copy_to_user(&mut memory, read.user_buffer(), window.bytes())
+    };
+    if copied.is_err() {
+        syscall::set_return(frame, SyscallReturn::error(Errno::BadAddress));
+        return;
+    }
+    // SAFETY: no other execution can mutate this single-core probe table
+    // between obtaining and committing the window.
+    if let Err(error) = unsafe { active_init_files().commit_read(window) } {
+        syscall::set_return(frame, SyscallReturn::error(file_errno(error)));
+        return;
+    }
+    syscall::set_return(
+        frame,
+        SyscallReturn::success(window.bytes().len() as u64)
+            .expect("bounded read length is a success value"),
+    );
+}
+
+#[cfg(feature = "loaded-init-probe")]
+fn handle_init_close(frame: &mut ExceptionFrame, request: phoenix_kernel::abi::SyscallRequest) {
+    let close = match FileCloseRequest::from_syscall(request) {
+        Ok(close) => close,
+        Err(error) => {
+            syscall::set_return(frame, SyscallReturn::error(error));
+            return;
+        }
+    };
+    // SAFETY: this synchronous single-core dispatcher has exclusive access to
+    // the process-local table for the duration of the close operation.
+    match unsafe { active_init_files().close(close.descriptor()) } {
+        Ok(()) => syscall::set_return(
+            frame,
+            SyscallReturn::success(0).expect("zero is a success value"),
+        ),
+        Err(error) => syscall::set_return(frame, SyscallReturn::error(file_errno(error))),
+    }
+}
+
+#[cfg(feature = "loaded-init-probe")]
+const fn file_errno(error: FileError) -> Errno {
+    match error {
+        FileError::InvalidPath(_) => Errno::InvalidArgument,
+        FileError::NotFound => Errno::NoSuchFile,
+        FileError::IsDirectory => Errno::IsDirectory,
+        FileError::PermissionDenied => Errno::PermissionDenied,
+        FileError::TooManyOpenFiles | FileError::GenerationExhausted => Errno::TooManyOpenFiles,
+        FileError::BadDescriptor => Errno::BadFileDescriptor,
+        FileError::StaleRead => Errno::InputOutput,
+    }
 }
 
 #[panic_handler]

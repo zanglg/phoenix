@@ -63,8 +63,8 @@ Build the opt-in DTB, allocator, and RAM-access integration image and require it
 cargo xtask test-memory
 ```
 
-Build the standalone init, embed it in the dynamic loader path, and require its stack-validated
-terminal marker:
+Build the standalone init, embed it in the dynamic loader path, and require its stack/file-I/O
+validated terminal marker:
 
 ```bash
 cargo xtask test-init
@@ -91,7 +91,7 @@ terminal sentinel determines the result:
 - `PHOENIX_EL0_FAIL`: fail `test-el0` immediately;
 - `PHOENIX_INIT_OK`: pass for `test-init` only;
 - `PHOENIX_INIT_FAIL`: fail `test-init` immediately;
-- `PHOENIX_INIT_OK` without the earlier exact `Phoenix init: hello from EL0` line: protocol fail;
+- `PHOENIX_INIT_OK` without the earlier exact ordered greeting and `etc/motd` output: protocol fail;
 - QEMU exit before the required terminal sentinel: fail;
 - timeout: fail and terminate QEMU;
 - more than 1 MiB without a sentinel: fail and terminate QEMU;

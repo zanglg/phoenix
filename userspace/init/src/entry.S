@@ -1,13 +1,17 @@
 /* Phoenix's first separately linked user program.
  *
  * It validates the exact native revision-0 initial stack prepared by the
- * kernel, exits with status 42 on success, and exits with status 1 on any
- * mismatch. It owns no runtime, relocations, writable data, or TLS.
+ * kernel, reads one initramfs file into its stack, exits with status 42 on
+ * success, and exits with status 1 on any mismatch. It owns no runtime,
+ * relocations, writable data, or TLS.
  */
 
 .section .text.entry, "ax"
 .balign 4096
 .equ INIT_MESSAGE_LENGTH, 29
+.equ INIT_PATH_LENGTH, 8
+.equ INIT_FILE_LENGTH, 34
+.equ INIT_READ_CAPACITY, 64
 
 .global _start
 .type _start, %function
@@ -87,6 +91,45 @@ _start:
     cmp     x0, #INIT_MESSAGE_LENGTH
     b.ne    .Lfailed
 
+    adr     x0, __init_path_start
+    mov     x1, #INIT_PATH_LENGTH
+    mov     x2, #0
+    mov     x8, #3
+    svc     #0
+    cmp     x0, #3
+    b.ne    .Lfailed
+    mov     x19, x0
+
+    sub     sp, sp, #INIT_READ_CAPACITY
+    mov     x0, x19
+    mov     x1, sp
+    mov     x2, #INIT_READ_CAPACITY
+    mov     x8, #2
+    svc     #0
+    cmp     x0, #INIT_FILE_LENGTH
+    b.ne    .Lfailed
+
+    mov     x2, x0
+    mov     x0, #1
+    mov     x1, sp
+    mov     x8, #1
+    svc     #0
+    cmp     x0, #INIT_FILE_LENGTH
+    b.ne    .Lfailed
+
+    mov     x0, x19
+    mov     x1, sp
+    mov     x2, #INIT_READ_CAPACITY
+    mov     x8, #2
+    svc     #0
+    cbnz    x0, .Lfailed
+
+    mov     x0, x19
+    mov     x8, #4
+    svc     #0
+    cbnz    x0, .Lfailed
+    add     sp, sp, #INIT_READ_CAPACITY
+
     mov     x0, #42
     mov     x8, #0
     svc     #0
@@ -109,6 +152,17 @@ __init_message_start:
 .global __init_message_end
 __init_message_end:
 
+.balign 8
+.global __init_path_start
+__init_path_start:
+    .ascii "etc/motd"
+.global __init_path_end
+__init_path_end:
+
 .if (__init_message_end - __init_message_start) != INIT_MESSAGE_LENGTH
     .error "init message length constant is stale"
+.endif
+
+.if (__init_path_end - __init_path_start) != INIT_PATH_LENGTH
+    .error "init path length constant is stale"
 .endif

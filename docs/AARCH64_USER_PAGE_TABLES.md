@@ -67,9 +67,9 @@ cannot bypass the ownership gate.
 
 The loaded-init path places the owner and remaining allocator state in a one-time static runtime
 slot before activation. The `'static` activation borrow prevents unpublished release while active,
-and the same owner authorizes physical-frame-based user reads during synchronous syscalls. The
-current terminal `exit` path halts rather than reclaiming it. Retirement and reclamation require a
-process owner and ASID-aware switch path.
+and the same owner authorizes physical-frame-based user reads and writes during synchronous
+syscalls. The current terminal `exit` path halts rather than reclaiming it. Retirement and
+reclamation require a process owner and ASID-aware switch path.
 
 ## Invariants
 
@@ -104,7 +104,7 @@ unverified.
 - add ASID-aware retirement and reclamation after process ownership exists;
 - define break-before-make for changes to published descriptors;
 - retain page-table accounting in the future process object;
-- add copy-to-user and recoverable fault handling for mutable/concurrent address spaces;
+- add recoverable fault handling for mutable/concurrent address spaces;
 - validate descriptor walks, access permissions, guard faults, and switching under QEMU/GDB.
 
 ## Skipped work

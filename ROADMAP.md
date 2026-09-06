@@ -11,8 +11,9 @@ passed. The broader, unscheduled capability surface remains in `FEATURES.md`.
 ## Current position
 
 The engineering foundation and **Host-verifiable architecture foundations** are complete.
-**Bootstrap and early console** remains Runtime Pending because emulator validation is outstanding.
-The active no-emulator work is **Exceptions and diagnostics**.
+Hardware-dependent work in earlier sections remains Runtime Pending because emulator validation is
+outstanding. The active no-emulator work is the host-verifiable portion of **Executables and
+minimal system**; this does not imply that intervening runtime dependencies have passed.
 
 ## Completed foundation
 
@@ -131,8 +132,8 @@ Allocator-owned user-table topology, retry-safe descriptor materialization, and 
 owner retaining populated leaf frames plus table frames are now Host Tested. The target
 bootstrap-memory backend and ownership-retaining ASID-zero activation are Cross Compiled. A
 Host Tested full-range `copy_from_user` uses resident physical ownership instead of dereferencing
-raw pointers; copy-to-user, process ownership, ASID allocation, retirement, general fault recovery,
-and runtime evidence still remain.
+raw pointers. `copy_to_user` applies the same complete residency and permission checks. Process
+ownership, ASID allocation, retirement, general fault recovery, and runtime evidence still remain.
 
 Observable result: an EL0 program invokes syscalls, exits, and cannot directly access kernel
 memory.
@@ -146,16 +147,18 @@ The strict ELF64/AArch64 validation layer and the combined program/guarded-stack
 Tested. Frame ownership is assigned and released transactionally, complete page zero/copy is
 enforced through an explicit populated type state, and the native argc/argv/envp/minimal-auxv stack
 is included with 16-byte alignment. The QEMU bootstrap backend can perform target writes while its
-coarse high alias remains active. A strict initramfs lookup and the complete dynamic executable
-entry path are Cross Compiled; VFS ownership, process lifecycle, and runtime evidence remain.
+coarse high alias remains active. A strict initramfs lookup, fixed-capacity read-only file table,
+transactional file offsets, and the complete dynamic executable entry path are Cross Compiled;
+general VFS ownership, process lifecycle, and runtime evidence remain.
 
 The first standalone AArch64 `init` ELF is reproducibly linked, stripped for embedding, accepted
 by the real loader, and inspected as one RX page. A deterministic, strictly validated `newc`
 initramfs carries the exact executable under canonical path `init`. A focused kernel variant finds
 it there and connects the real boot DTB and allocator through ELF/stack population, dynamically
-allocated user tables, the combined ownership gate, `eret`, stack self-validation, and native
-bounded stdout `write` plus `exit(42)`. This entire path is Cross Compiled and ELF Inspected but
-remains Runtime Pending.
+allocated user tables, the combined ownership gate, `eret`, stack self-validation, and bounded
+`write`, `open`, `read`, `close`, and `exit` calls. Init reads an exact file from its initramfs into
+writable user memory and verifies EOF before successful exit. This entire path is Cross Compiled
+and ELF Inspected but remains Runtime Pending.
 
 Observable result: Phoenix boots from a clean checkout, starts `init`, runs at least one child
 program, performs console and in-memory file I/O, and shuts down or reports test completion.

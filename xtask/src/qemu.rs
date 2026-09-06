@@ -25,7 +25,8 @@ pub const EL0_SUCCESS_SENTINEL: &str = "PHOENIX_EL0_OK";
 pub const EL0_FAILURE_SENTINEL: &str = "PHOENIX_EL0_FAIL";
 pub const INIT_SUCCESS_SENTINEL: &str = "PHOENIX_INIT_OK";
 pub const INIT_FAILURE_SENTINEL: &str = "PHOENIX_INIT_FAIL";
-pub const INIT_USER_OUTPUT: &str = "Phoenix init: hello from EL0\n";
+pub const INIT_USER_OUTPUT: &str =
+    "Phoenix init: hello from EL0\nPhoenix initramfs: file I/O works\n";
 
 struct QemuCommand {
     arguments: Vec<OsString>,
@@ -620,6 +621,13 @@ mod tests {
         );
         assert_eq!(
             classify_output(INIT_SUCCESS_SENTINEL.as_bytes(), ExpectedOutput::Init),
+            Some(TerminalOutput::ProtocolFailure)
+        );
+        assert_eq!(
+            classify_output(
+                format!("Phoenix init: hello from EL0\n{INIT_SUCCESS_SENTINEL}").as_bytes(),
+                ExpectedOutput::Init
+            ),
             Some(TerminalOutput::ProtocolFailure)
         );
         assert_eq!(

@@ -34,8 +34,9 @@ valuable evidence but cannot close an entry in this ledger.
 | RUN-EXC-002 | Preserve and restore the exception frame | Runtime Pending | All `x0..x30`, SP, PC, status, syndrome, and fault-address values match controlled probes |
 | RUN-ELF-001 | Populate and map a validated AArch64 ELF image | Runtime Pending | File bytes, zero-fill, page permissions, entry address, and rollback behavior match the image contract |
 | RUN-STACK-001 | Consume the native initial user stack | Runtime Pending | EL0 observes aligned SP, exact argc/argv/envp strings, page size, entry, ABI revision, and both terminators |
-| RUN-UCOPY-001 | Copy an active user range through retained frame ownership | Runtime Pending | Valid and invalid same-page/cross-page probe reads return exact bytes or `BadAddress` without a kernel fault |
-| RUN-INIT-001 | Execute the separately linked native init ELF | Runtime Pending | `cargo xtask test-init` selects the exact inspected RX image from initramfs, loads it through dynamic ownership, validates its stack, emits `Phoenix init: hello from EL0` through `write`, and reaches `PHOENIX_INIT_OK` through `exit(42)` |
+| RUN-UCOPY-001 | Copy an active user range through retained frame ownership | Runtime Pending | Valid and invalid same-page/cross-page reads and writes return exact bytes or `BadAddress` without a kernel fault |
+| RUN-FS-001 | Read a process-local initramfs descriptor into user memory | Runtime Pending | `open("etc/motd")`, bounded `read`, EOF, and `close` preserve exact bytes, offsets, and errors through the syscall path |
+| RUN-INIT-001 | Execute the separately linked native init ELF | Runtime Pending | `cargo xtask test-init` selects the exact inspected RX image, validates its stack, emits its greeting and exact `etc/motd` bytes through checked I/O, then reaches `PHOENIX_INIT_OK` through `exit(42)` |
 | RUN-EL0-001 | Enter and return from the first EL0 program | Runtime Pending | `cargo xtask test-el0` reaches `PHOENIX_EL0_OK` after TTBR0 switch, EL0 `eret`, returning unknown syscall, and `exit(42)` |
 | RUN-ABI-001 | Dispatch native `SVC #0` calls | Runtime Pending | Register arguments, return values, unknown calls, `write`, and `exit` match ABI revision 0 |
 

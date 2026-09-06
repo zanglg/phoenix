@@ -37,13 +37,15 @@ At boot, the focused kernel variant:
 10. prints the planned entry, stack pointer, page count, table root, and `PHOENIX_INIT_ENTER`;
 11. publishes TTBR0, invalidates ASID-zero translations, loads EL0 registers, and executes `eret`;
 12. validates and copies the init message from owned physical frames for bounded stdout `write`;
-13. accepts native `exit(42)` as `PHOENIX_INIT_OK` only after a successful nonempty write; any
-    other terminal state emits `PHOENIX_INIT_FAIL`.
+13. opens `etc/motd`, copies its bytes into a writable stack buffer, checks EOF, and closes it;
+14. writes those copied bytes and accepts native `exit(42)` as `PHOENIX_INIT_OK` only after output;
+    any other terminal state emits `PHOENIX_INIT_FAIL`.
 
 The user program independently checks its aligned stack pointer, argc, argv/envp pointers and
 strings, both list terminators, page-size and entry auxiliary entries, Phoenix ABI revision, and
-auxiliary terminator, writes `Phoenix init: hello from EL0\n`, verifies the full return length, and
-only then chooses the success status.
+auxiliary terminator, all file-I/O returns, and exact EOF behavior. It emits
+`Phoenix init: hello from EL0\n` followed by `Phoenix initramfs: file I/O works\n` before choosing
+the success status.
 
 ## Ownership and ordering invariants
 
@@ -62,6 +64,7 @@ only then chooses the success status.
   require an active cache-maintenance sequence;
 - user copy resolves virtual ranges only through retained resident ownership and the checked
   physical backend, never by dereferencing a raw EL0 pointer;
+- file reads use a window/commit transaction, so a failed `copy_to_user` does not advance offset;
 - ASID zero and the active runtime remain live forever because the terminal probe halts rather
   than returning or reclaiming ownership.
 
@@ -76,14 +79,15 @@ bounds, not stable process limits.
 
 Host tests cover the constituent ELF parser, process-image transaction and retry behavior, initial
 stack, allocator, dynamic table topology/materialization, combined ownership, bounded write
-validation, cross-page user copying, syscall decoding, and QEMU terminal-output classification.
+validation, bidirectional cross-page user copying, file-table transactions, syscall decoding, and
+QEMU terminal-output classification.
 Target compilation validates the complete concrete composition, `include_bytes` artifact handoff,
 target memory backend, activation assembly, and exception dispatcher. Static inspection proves
 that the built kernel contains the exact initramfs whose `init` entry was accepted by the loader.
 
-Runtime validation is `RUN-INIT-001`. Success requires `cargo xtask test-init` to observe
-the exact userspace message followed by `PHOENIX_INIT_OK`; the preceding boot and entry markers
-cannot satisfy it. A success marker without the message is a protocol failure. Panic, exception,
+Runtime validation is `RUN-INIT-001`. Success requires `cargo xtask test-init` to observe both exact
+userspace lines followed by `PHOENIX_INIT_OK`; the preceding boot and entry markers cannot satisfy
+it. A success marker without their exact ordered sequence is a protocol failure. Panic, exception,
 `PHOENIX_INIT_FAIL`, early QEMU exit, timeout, excessive output, and stream errors all fail.
 
 ## TODO
@@ -97,12 +101,12 @@ cannot satisfy it. A success marker without the message is a protocol failure. P
 - accept a checked initramfs supplied independently by firmware or a bootloader instead of
   compile-time embedding;
 - replace fixed probe capacities with accounted process limits where dynamic scale is needed;
-- replace the bounded probe write with process-owned descriptors and general fault policy.
+- replace bounded probe I/O with process-owned descriptors and general fault policy.
 
 ## Skipped work
 
 This path is not a scheduler, process table, general `exec`, mounted initramfs filesystem, VFS,
-file-descriptor model, general console runtime, dynamic linker, TLS implementation, ASLR,
+general file-descriptor model, general console runtime, dynamic linker, TLS implementation, ASLR,
 demand pager, teardown, or production init. It keeps caches, interrupts, timers, and SMP disabled.
 Its purpose is to make the earliest real user-program handoff complete and reviewable without
 hiding unfinished system facilities behind a successful marker.

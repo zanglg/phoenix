@@ -24,6 +24,9 @@ vector with exception class `SupervisorCallAArch64` and immediate zero.
 | ---: | --- | --- | --- |
 | 0 | `exit` | `x0=status` | Implemented only by the opt-in static and loaded-init probes |
 | 1 | `write` | `x0=fd`, `x1=user buffer`, `x2=length` | Implemented only by the loaded-init stdout probe |
+| 2 | `read` | `x0=fd`, `x1=user buffer`, `x2=length` | Implemented only by the loaded-init file probe |
+| 3 | `open` | `x0=path bytes`, `x1=path length`, `x2=mode` | Implemented only by the loaded-init file probe |
+| 4 | `close` | `x0=fd` | Implemented only by the loaded-init file probe |
 
 Unknown numbers are preserved and the opt-in probe returns `NotImplemented`; they are not parser errors. These
 assignments may change while the revision and project version remain zero.
@@ -33,6 +36,13 @@ against retained resident-page ownership, reads through the checked physical-mem
 bytes exactly to PL011, and returns the full length. It returns `BadFileDescriptor`,
 `InvalidArgument`, or `BadAddress` before emitting output when validation fails. It does not yet
 support short writes or a general file table. See `docs/USER_COPY.md`.
+
+The probe `open` accepts a nonempty canonical UTF-8 path of at most 128 bytes and mode zero
+(`OPEN_READ_ONLY`). It returns the lowest free regular-file descriptor starting at 3. The probe
+`read` accepts at most 256 bytes, copies available data into a fully prevalidated writable user
+range, returns zero at EOF, and advances the open-file offset only after the copy succeeds. `close`
+releases that descriptor. The loaded-init table has four regular-file slots. These direct
+initramfs semantics are detailed in `docs/FILE_DESCRIPTORS.md`.
 
 ## Process entry stack
 
@@ -45,8 +55,9 @@ defined in `docs/INITIAL_USER_STACK.md`.
 
 Success is a non-negative value from zero through `i64::MAX`. Errors are encoded in `x0` as the
 two's-complement negative of a positive error number from 1 through 4095. The initially named
-errors are `BadFileDescriptor` (9), `NoMemory` (12), `BadAddress` (14), `InvalidArgument` (22), and
-`NotImplemented` (38). Decoding retains unnamed error numbers.
+errors are `NoSuchFile` (2), `InputOutput` (5), `BadFileDescriptor` (9), `NoMemory` (12),
+`PermissionDenied` (13), `BadAddress` (14), `IsDirectory` (21), `InvalidArgument` (22),
+`TooManyOpenFiles` (24), and `NotImplemented` (38). Decoding retains unnamed error numbers.
 
 Values above `i64::MAX` cannot be encoded as success because they collide with the signed error
 space. This rule is checked when constructing a return value.
@@ -64,20 +75,20 @@ space. This rule is checked when constructing a return value.
 
 Host tests cover known and unknown numbers, all argument positions, register adaptation, PC
 preservation, maximum success values, named negative errors, the boundary outside the error
-window, and bounded stdout-request validation. The types and adapter are Cross Compiled for
-AArch64.
+window, and bounded stdout/open/read/close request validation. File-table behavior and both user
+copy directions have separate host tests. The types and adapter are Cross Compiled for AArch64.
 
 ## TODO
 
 - generalize the probe-only SVC recognition into a production dispatcher;
 - implement `exit` process teardown after process ownership exists;
-- define short writes, interruption, and maximum transfer sizes;
-- replace the probe descriptor with a process file table and define stderr initialization;
+- define partial I/O, interruption, and production transfer limits;
+- move the probe table into process ownership and define stdin/stderr initialization;
 - separate ABI revisioning from the project version when revision 1 is proposed;
 - execute both EL0 conformance programs and retain their QEMU transcripts.
 
 ## Skipped work
 
 Linux ABI compatibility, POSIX completeness, ioctl, signals, restartable calls, futexes, polling,
-sockets, filesystems, capabilities, tracing, seccomp, 32-bit compatibility, and vDSO calls are not
-part of revision 0. No syscall behavior is currently claimed as Runtime Verified.
+sockets, general VFS semantics, capabilities, tracing, seccomp, 32-bit compatibility, and vDSO
+calls are not part of revision 0. No syscall behavior is currently claimed as Runtime Verified.

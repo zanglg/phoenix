@@ -33,9 +33,10 @@ The native initial-stack builder can move that pointer downward while constructi
 envp, and auxiliary-vector bytes. Process-image population clears and initializes those stack pages
 before any translation root is publishable. The exact ABI is in `docs/INITIAL_USER_STACK.md`.
 
-The first `copy_from_user` implementation validates a complete range against populated
-virtual-to-physical ownership metadata, then reads through an explicit physical-memory backend. It
-never creates a reference from an untrusted user virtual pointer. See `docs/USER_COPY.md`.
+The first bidirectional user-copy implementation validates a complete range against populated
+virtual-to-physical ownership metadata, then accesses frames through an explicit physical-memory
+backend. It never creates a reference from an untrusted user virtual pointer and requires write
+permission for kernel-to-user copies. See `docs/USER_COPY.md`.
 
 ## Permission policy
 
@@ -71,7 +72,7 @@ bad page counts, and stack underflow. The same module is Cross Compiled for AArc
 ## TODO
 
 - replace fixed ASID-zero TTBR0 installation with process-owned ASID allocation and retirement;
-- add `copy_to_user` and general recoverable-fault support beyond immutable owned mappings;
+- add general recoverable-fault support beyond immutable owned mappings;
 - define stack growth limits and resource accounting;
 - validate kernel isolation and guard-page faults on QEMU.
 
