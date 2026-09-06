@@ -53,7 +53,7 @@ this order:
 - [x] checked physical/virtual addresses, pages, frames, and ranges;
 - [x] strict read-only DTB parsing and boot-information extraction;
 - [x] physical-memory region normalization, reservation, and frame allocation;
-- [ ] AArch64 translation indices and page-table descriptor construction;
+- [x] AArch64 translation indices, descriptor construction, and offline mapping plans;
 - [ ] exception-frame layout, vector-table layout, and syndrome decoding.
 
 Each mechanism must be Host Tested where behavior is pure, Cross Compiled for AArch64, and kept
@@ -74,7 +74,10 @@ instead of silently hanging QEMU.
 ## 4. Memory management
 
 Discover and reserve physical memory, add a page-frame allocator, establish the kernel virtual
-address space, install final page tables, and provide a guarded kernel heap and stacks.
+address space, install final page tables, and provide a guarded kernel heap and stacks. The
+descriptor and offline mapping model is Host Tested; target work still needs to allocate table
+frames, materialize the permission-separated layout, install it, retire temporary aliases, and
+validate the barrier and TLB-maintenance sequence.
 
 Observable result: allocator and mapping self-tests exercise success and failure paths without
 corrupting the bootstrap, DTB, image, or device mappings.

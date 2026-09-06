@@ -11,7 +11,6 @@ pub mod console;
 pub mod dtb;
 pub mod memory;
 
-#[cfg(target_arch = "aarch64")]
 pub mod arch;
 
 pub mod platform;

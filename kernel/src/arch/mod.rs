@@ -1,4 +1,4 @@
 //! Architecture-specific CPU support.
 
-#[cfg(target_arch = "aarch64")]
+/// AArch64 hardware support and host-testable architectural models.
 pub mod aarch64;

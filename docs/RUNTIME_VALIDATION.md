@@ -26,6 +26,8 @@ valuable evidence but cannot close an entry in this ledger.
 | RUN-SMOKE-001 | Bounded automated boot smoke test | Runtime Pending | Verified command exits or is terminated predictably after sentinel |
 | RUN-DTB-001 | Parse the QEMU-provided DTB in early boot | Runtime Pending | Real blob validates and yields expected CPU, memory, chosen, and reservation data |
 | RUN-MM-001 | Initialize the frame allocator from discovered memory | Runtime Pending | Allocations avoid the image, DTB, boot tables, stack, and firmware reservations |
+| RUN-MMU-001 | Install final permission-separated kernel tables | Runtime Pending | Text, rodata, data, stack, DTB, and MMIO mappings behave with documented permissions |
+| RUN-MMU-002 | Retire temporary aliases and maintain the TLB | Runtime Pending | Execution survives table switch, barriers, invalidation, and low-RAM alias removal |
 
 ## Validation procedure template
 

@@ -26,6 +26,7 @@ not create speculative implementations for them.
 - `.cargo/lsp.toml`: rust-analyzer's default kernel target.
 - `kernel/src/arch/aarch64/boot.S`: first AArch64 bootstrap implementation.
 - `docs/BOOT.md`: current boot contract and runtime-validation boundary.
+- `docs/AARCH64_PAGING.md`: temporary and final page-table model, permissions, and remaining work.
 - `docs/RUNTIME_VALIDATION.md`: hardware-dependent checks deferred until an emulator is available.
 - `FEATURES.md`: comprehensive capability catalog.
 - `ROADMAP.md`: ordered path to the first formal release.
