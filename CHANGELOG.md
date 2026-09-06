@@ -31,4 +31,5 @@ under `Unreleased` and the Cargo version remains 0.0.0 until the 0.1.0 release g
 - Separate bounded `test-el0` QEMU protocol that cannot pass on the earlier boot marker.
 - Transactional process-image planning for ELF segments plus a guarded stack, with per-page clear/copy work, unique frame ownership, and all-or-nothing allocation and release.
 - Retry-safe populated-image type state over an abstract private-frame backend, with full-page clearing before initialized ELF bytes are copied.
+- Allocator-owned AArch64 user-table topology with intermediate-table reuse, transactional frame assignment, retry-safe descriptor materialization, and exact combined leaf/table ownership before activation.
 - Project, Agent, Roadmap, and kernel capability documentation.

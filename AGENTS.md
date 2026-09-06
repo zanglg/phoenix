@@ -27,6 +27,7 @@ not create speculative implementations for them.
 - `kernel/src/arch/aarch64/boot.S`: first AArch64 bootstrap implementation.
 - `docs/BOOT.md`: current boot contract and runtime-validation boundary.
 - `docs/AARCH64_PAGING.md`: temporary and final page-table model, permissions, and remaining work.
+- `docs/AARCH64_USER_PAGE_TABLES.md`: user-table topology, ownership, materialization, and activation boundary.
 - `docs/AARCH64_EXCEPTIONS.md`: vector, frame, syndrome, and remaining runtime-handler contract.
 - `docs/USER_ADDRESS_SPACE.md`: EL0 virtual region, permissions, mapping plan, and guarded stack.
 - `docs/ELF_LOADER.md`: strict initial executable subset and transactional loading requirements.

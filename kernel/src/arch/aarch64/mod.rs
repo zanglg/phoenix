@@ -6,6 +6,7 @@ use core::arch::asm;
 pub mod exception;
 pub mod paging;
 pub mod syscall;
+pub mod user_page_table;
 
 #[cfg(all(target_arch = "aarch64", feature = "el0-probe"))]
 pub mod el0;

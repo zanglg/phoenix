@@ -17,6 +17,7 @@ narrow support claim:
 - a bounded QEMU runner and boot-test harness are implemented and host tested;
 - an opt-in first-EL0 probe is cross-linked and statically inspected, but not runtime verified;
 - validated ELF segments and a guarded stack can be planned and assigned frames transactionally;
+- lower-half AArch64 user-table topology and descriptor materialization are host tested;
 - runtime boot and serial output have **not** been validated because the current development
   environment has no QEMU.
 

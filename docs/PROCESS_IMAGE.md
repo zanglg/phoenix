@@ -54,6 +54,11 @@ reports the page index and whether clearing or initialization failed, and return
 frame ownership object. A retry starts by clearing all pages again, so bytes from a partial attempt
 cannot survive unnoticed.
 
+The successful populated type retains only resident virtual address, physical frame, permission,
+and purpose metadata. It no longer borrows initialized byte slices, so the source ELF storage may
+be released immediately after population. The AArch64 layer can consume this resident owner with
+matching materialized tables to create one prepared address-space owner.
+
 ## Invariants
 
 - the complete ELF was validated before process-image planning begins;
@@ -65,7 +70,9 @@ cannot survive unnoticed.
 - fixed-capacity exhaustion occurs before any external state changes;
 - assigning or releasing frames is all-or-nothing with respect to the supplied allocator;
 - only a successful complete clear-and-copy pass creates the populated type state;
-- only the allocated ownership object may authorize population, mapping, or release of its frames;
+- successful population ends every borrow of source ELF bytes;
+- ownership moves linearly from allocated, to populated, to the prepared architecture address
+  space; none of these resource owners is copyable;
 - the source ELF bytes must outlive planning and population.
 
 ## Validation
@@ -73,15 +80,14 @@ cannot survive unnoticed.
 Host tests cover multi-page text and data, partial final pages, zero-only stack pages, virtual
 ordering independent of program-header order, guard collision, mapping and page metadata limits,
 deterministic frame pairing, exact release, out-of-memory rollback, a failed release against a
-wrong allocator snapshot, complete zeroing, partial final pages, injected write failure, and clean
-retry. Target checks compile the same ownership model for bare-metal AArch64.
+wrong allocator snapshot, complete zeroing, partial final pages, injected write failure, clean
+retry, release of source storage, and combination with matching AArch64 table ownership. Target
+checks compile the same ownership model for bare-metal AArch64.
 
 ## TODO
 
 - implement the `ProcessImageMemory` backend through a documented physical direct map;
 - make instruction-cache maintenance explicit before newly copied executable bytes can run;
-- translate generic user permissions into allocator-owned AArch64 L3 descriptors;
-- allocate and own all required intermediate translation-table frames transactionally;
 - define when a complete address space becomes visible through an ASID and `TTBR0_EL1`;
 - construct `argc`, `argv`, `envp`, and the minimal auxiliary vector on the guarded stack;
 - load a reproducibly built embedded ELF fixture through this path and validate it in QEMU;

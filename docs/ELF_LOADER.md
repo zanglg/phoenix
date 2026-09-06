@@ -1,8 +1,9 @@
 # Initial ELF Loader Contract
 
 This document describes the accepted executable format and current parser. Phoenix can validate a
-strict ELF image and transactionally plan and assign its pages, but does not yet populate physical
-memory, install hardware mappings, or execute the image.
+strict ELF image, transactionally plan and assign its pages, and drive abstract population plus
+AArch64 table materialization. It does not yet provide the target physical-memory backend, install
+the resulting root, or execute this production image.
 
 ## Current implementation
 
@@ -69,7 +70,6 @@ compilation checks that the parser remains `no_std` compatible.
 - implement physical frame population and hardware mapping for the transactional plan;
 - construct the initial guarded stack and auxiliary vector;
 - decide whether program headers must themselves be available through `AT_PHDR`;
-- record a formal process-image ownership model;
 - add property/fuzz tests with a bounded malformed-input corpus;
 - validate instruction-cache maintenance before executing freshly copied code;
 - execute the loaded image under QEMU and retain its ELF metadata as test evidence.

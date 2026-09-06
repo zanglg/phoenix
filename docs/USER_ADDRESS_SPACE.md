@@ -40,7 +40,8 @@ User permissions are explicit read/write/execute booleans with these enforced ru
 - guard pages are absent mappings, not no-permission descriptors.
 
 The generic permission type is deliberately separate from AArch64 descriptor bits. Materialization
-will translate it through the architecture layer without exposing an AArch64 type to process code.
+translates it through the architecture layer without exposing an AArch64 type to process code. The
+current AArch64 table owner is documented in `docs/AARCH64_USER_PAGE_TABLES.md`.
 
 ## Invariants
 

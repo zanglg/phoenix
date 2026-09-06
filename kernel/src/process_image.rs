@@ -354,7 +354,7 @@ impl<'a, const MAPPINGS: usize, const PAGES: usize> AllocatedProcessImage<'a, MA
         self,
         memory: &mut M,
     ) -> Result<
-        PopulatedProcessImage<'a, MAPPINGS, PAGES>,
+        PopulatedProcessImage<MAPPINGS, PAGES>,
         ProcessImagePopulationError<'a, M::Error, MAPPINGS, PAGES>,
     > {
         for index in 0..self.plan.page_count {
@@ -379,7 +379,23 @@ impl<'a, const MAPPINGS: usize, const PAGES: usize> AllocatedProcessImage<'a, MA
                 });
             }
         }
-        Ok(PopulatedProcessImage { image: self })
+        let mut pages = [None; PAGES];
+        for (index, slot) in pages[..self.plan.page_count].iter_mut().enumerate() {
+            let planned = self.plan.pages[index].expect("active process-image page slot");
+            *slot = Some(ResidentUserPage {
+                virtual_start: planned.virtual_start(),
+                frame: self.frames[index].expect("allocated process-image frame slot"),
+                permissions: planned.permissions(),
+                kind: planned.kind(),
+            });
+        }
+        Ok(PopulatedProcessImage {
+            address_space: self.plan.address_space,
+            pages,
+            page_count: self.plan.page_count,
+            entry: self.plan.entry,
+            stack: self.plan.stack,
+        })
     }
 
     /// Return every owned frame to the allocator as one transaction.
@@ -401,21 +417,73 @@ impl<'a, const MAPPINGS: usize, const PAGES: usize> AllocatedProcessImage<'a, MA
     }
 }
 
-/// Process-image frames whose complete clear-and-copy plan has succeeded.
-#[derive(Debug, Eq, PartialEq)]
-pub struct PopulatedProcessImage<'a, const MAPPINGS: usize, const PAGES: usize> {
-    image: AllocatedProcessImage<'a, MAPPINGS, PAGES>,
+/// One resident user page after all source bytes have been copied.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ResidentUserPage {
+    virtual_start: UserAddr,
+    frame: PageFrame,
+    permissions: UserPermissions,
+    kind: UserMappingKind,
 }
 
-impl<'a, const MAPPINGS: usize, const PAGES: usize> PopulatedProcessImage<'a, MAPPINGS, PAGES> {
-    /// Return the immutable executable and virtual mapping plan.
-    pub const fn plan(&self) -> &ProcessImagePlan<'a, MAPPINGS, PAGES> {
-        self.image.plan()
+impl ResidentUserPage {
+    /// Return the resident user virtual page start.
+    pub const fn virtual_start(self) -> UserAddr {
+        self.virtual_start
+    }
+
+    /// Return the physical frame containing final initialized bytes.
+    pub const fn frame(self) -> PageFrame {
+        self.frame
+    }
+
+    /// Return the final user mapping permissions.
+    pub const fn permissions(self) -> UserPermissions {
+        self.permissions
+    }
+
+    /// Return whether this page belongs to a program segment or the stack.
+    pub const fn kind(self) -> UserMappingKind {
+        self.kind
+    }
+}
+
+/// Process-image frames whose complete clear-and-copy plan has succeeded.
+///
+/// This type intentionally does not borrow the source ELF bytes. Successful
+/// population is the point at which the loader may release its input image.
+#[derive(Debug, Eq, PartialEq)]
+pub struct PopulatedProcessImage<const MAPPINGS: usize, const PAGES: usize> {
+    address_space: UserAddressSpacePlan<MAPPINGS>,
+    pages: [Option<ResidentUserPage>; PAGES],
+    page_count: usize,
+    entry: UserAddr,
+    stack: UserStackLayout,
+}
+
+impl<const MAPPINGS: usize, const PAGES: usize> PopulatedProcessImage<MAPPINGS, PAGES> {
+    /// Return the executable entry address.
+    pub const fn entry(&self) -> UserAddr {
+        self.entry
+    }
+
+    /// Return the guarded stack layout and initial stack pointer.
+    pub const fn stack(&self) -> UserStackLayout {
+        self.stack
+    }
+
+    /// Return the immutable user virtual mapping plan.
+    pub const fn address_space(&self) -> &UserAddressSpacePlan<MAPPINGS> {
+        &self.address_space
     }
 
     /// Iterate over populated frames in user virtual-address order.
-    pub fn pages(&self) -> impl ExactSizeIterator<Item = AllocatedUserPage<'a>> + '_ {
-        self.image.pages()
+    pub fn pages(
+        &self,
+    ) -> impl ExactSizeIterator<Item = ResidentUserPage> + DoubleEndedIterator + '_ {
+        self.pages[..self.page_count]
+            .iter()
+            .map(|page| page.expect("active resident user page slot"))
     }
 
     /// Return all frames to their allocator when the image was never published.
@@ -426,10 +494,17 @@ impl<'a, const MAPPINGS: usize, const PAGES: usize> PopulatedProcessImage<'a, MA
         self,
         allocator: &mut FrameAllocator<MEMORY_RANGES>,
     ) -> Result<(), (Self, AllocationError)> {
-        match self.image.release(allocator) {
-            Ok(()) => Ok(()),
-            Err((image, error)) => Err((Self { image }, error)),
+        let mut candidate = *allocator;
+        let mut index = self.page_count;
+        while index > 0 {
+            index -= 1;
+            let page = self.pages[index].expect("active resident user page slot");
+            if let Err(error) = candidate.deallocate(page.frame()) {
+                return Err((self, error));
+            }
         }
+        *allocator = candidate;
+        Ok(())
     }
 }
 
@@ -445,7 +520,7 @@ mod tests {
         ProcessImagePlan,
     };
     use crate::elf::ElfImage;
-    use crate::memory::{AddressRange, MemoryMap, PAGE_SIZE, PhysAddr};
+    use crate::memory::{AddressRange, MemoryMap, PAGE_SIZE, PageFrame, PhysAddr};
     use crate::user::{
         UserAddr, UserAddressError, UserMappingKind, UserPermissions, UserStackLayout,
     };
@@ -640,6 +715,77 @@ mod tests {
         populated.release(&mut allocator).unwrap();
     }
 
+    #[test]
+    fn populated_image_releases_source_borrow_and_combines_with_aarch64_tables() {
+        use crate::arch::aarch64::user_page_table::{
+            AddressSpaceAssemblyErrorReason, PreparedUserAddressSpace, UserPageTablePlan,
+        };
+
+        let mut map = MemoryMap::<1>::new();
+        map.add_usable(physical_bytes(0x50_0000, 0x50_7000))
+            .unwrap();
+        let mut allocator = map.into_allocator();
+        let original = allocator;
+        let mut memory = TestMemory::new(0x50_0000, 7);
+        let populated = {
+            let bytes = fixture(0x40_0000, 0x50_0000, 1, 1);
+            let image = ElfImage::parse(&bytes).unwrap();
+            let stack = UserStackLayout::new(UserAddr::new(0x80_0000).unwrap(), 1, 1).unwrap();
+            ProcessImagePlan::<3, 3>::new(image, stack)
+                .unwrap()
+                .allocate(&mut allocator)
+                .unwrap()
+                .populate(&mut memory)
+                .unwrap()
+        };
+
+        assert_eq!(populated.entry(), UserAddr::new(0x40_0000).unwrap());
+        let mut wrong_tables = UserPageTablePlan::<4, 3>::new().unwrap();
+        for (index, page) in populated.pages().enumerate() {
+            let frame = if index == 1 {
+                PageFrame::from_start(PhysAddr::new(0xdead_0000)).unwrap()
+            } else {
+                page.frame()
+            };
+            wrong_tables
+                .map_page(page.virtual_start(), frame, page.permissions())
+                .unwrap();
+        }
+        let wrong_tables = wrong_tables.allocate(&mut allocator).unwrap();
+        let wrong_tables = wrong_tables.materialize(&mut memory).unwrap();
+        let error = PreparedUserAddressSpace::new(populated, wrong_tables)
+            .expect_err("one leaf points at the wrong physical frame");
+        assert_eq!(
+            error.reason(),
+            AddressSpaceAssemblyErrorReason::PageMismatch { index: 1 }
+        );
+        let (populated, wrong_tables) = error.into_parts();
+        wrong_tables.release_unpublished(&mut allocator).unwrap();
+
+        let mut tables = UserPageTablePlan::<4, 3>::new().unwrap();
+        tables.map_process_image(&populated).unwrap();
+        assert_eq!(tables.leaves().len(), populated.pages().len());
+        assert!(
+            tables
+                .leaves()
+                .zip(populated.pages())
+                .all(|(leaf, page)| leaf.virtual_start() == page.virtual_start()
+                    && leaf.physical_frame() == page.frame()
+                    && leaf.permissions() == page.permissions())
+        );
+        let tables = tables.allocate(&mut allocator).unwrap();
+        let tables = tables.materialize(&mut memory).unwrap();
+        let prepared = PreparedUserAddressSpace::new(populated, tables).unwrap();
+        assert_eq!(prepared.entry(), UserAddr::new(0x40_0000).unwrap());
+        assert_eq!(prepared.resident_page_count(), 3);
+        assert_eq!(
+            prepared.root_frame().start_address(),
+            PhysAddr::new(0x50_3000)
+        );
+        prepared.release_unpublished(&mut allocator).unwrap();
+        assert_eq!(allocator, original);
+    }
+
     fn physical_bytes(start: usize, end: usize) -> AddressRange<PhysAddr> {
         AddressRange::new(PhysAddr::new(start), PhysAddr::new(end)).unwrap()
     }
@@ -712,6 +858,26 @@ mod tests {
                 .ok_or(TestMemoryError::InvalidWrite)?;
             self.pages[index][offset..end].copy_from_slice(bytes);
             Ok(())
+        }
+    }
+
+    impl crate::arch::aarch64::user_page_table::TranslationTableMemory for TestMemory {
+        type Error = TestMemoryError;
+
+        fn clear_table(&mut self, frame: crate::memory::PageFrame) -> Result<(), Self::Error> {
+            ProcessImageMemory::clear_frame(self, frame)
+        }
+
+        fn write_descriptor(
+            &mut self,
+            frame: crate::memory::PageFrame,
+            index: usize,
+            descriptor: crate::arch::aarch64::paging::Descriptor,
+        ) -> Result<(), Self::Error> {
+            let offset = index
+                .checked_mul(core::mem::size_of::<u64>())
+                .ok_or(TestMemoryError::InvalidWrite)?;
+            ProcessImageMemory::write_frame(self, frame, offset, &descriptor.raw().to_le_bytes())
         }
     }
 

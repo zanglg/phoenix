@@ -54,6 +54,11 @@ does not count as the final address space. See `docs/EL0_PROBE.md`.
 The plan deliberately models intended mappings without allocating page-table frames or mutating
 live tables. This separates range and permission validation from system-register and TLB effects.
 
+`kernel/src/arch/aarch64/user_page_table.rs` builds the lower-half user hierarchy on top of these
+descriptors. It reuses intermediate tables, atomically allocates their frames, and materializes all
+links and leaves through a private-table backend. See `docs/AARCH64_USER_PAGE_TABLES.md` for the
+ownership boundary; final TTBR1 work remains separate.
+
 ## Permission policy
 
 The supported constructors encode these baseline rules:
@@ -76,7 +81,8 @@ non-executable convenience constructor.
 - planned virtual ranges do not overlap and remain sorted;
 - descriptor physical addresses fit their configured field;
 - an invalid descriptor is zero;
-- page-table memory ownership is not represented by the offline plan.
+- the generic offline mapping plan does not own memory; only the prepared user address-space type
+  combines materialized table frames with populated leaf-frame ownership.
 
 ## Validation
 
@@ -91,8 +97,7 @@ Runtime installation remains tracked as `RUN-MMU-001` and `RUN-MMU-002` in
 ## TODO
 
 - derive supported physical-address size from `ID_AA64MMFR0_EL1.PARange`;
-- allocate and own table frames through the physical-frame allocator;
-- materialize a validated plan into L1/L2/L3 tables without heap allocation;
+- implement the target private-table backend and ownership-consuming activation;
 - map kernel text, rodata, data, stack, heap, DTB, and MMIO with precise permissions;
 - define table-update locking, break-before-make, barriers, and TLB invalidation;
 - define ASID allocation and TTBR0 lifetime for processes;
