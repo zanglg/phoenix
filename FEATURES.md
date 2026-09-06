@@ -50,7 +50,7 @@ _No unclassified entries._
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
 | ARCH-001 | AArch64 execution and exception-level normalization | Planned | 0.1.0 | Primary architecture |
-| ARCH-002 | Exception vectors and register context | Planned | 0.1.0 | Architecture-specific |
+| ARCH-002 | Exception vectors and register context | In Progress | 0.1.0 | Vector/frame ABI and ESR decoding are Host Tested; assembly entry and runtime handling remain |
 | ARCH-003 | CPU feature discovery | Deferred | Unscheduled | Avoid assuming emulator-only features |
 | ARCH-004 | FP/SIMD ownership and context policy | Deferred | Unscheduled | Kernel starts without FP/SIMD use |
 | PORT-001 | RISC-V 64 port | Deferred | Unscheduled | Initial platform: QEMU `virt` |

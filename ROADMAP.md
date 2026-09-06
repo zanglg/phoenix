@@ -54,7 +54,7 @@ this order:
 - [x] strict read-only DTB parsing and boot-information extraction;
 - [x] physical-memory region normalization, reservation, and frame allocation;
 - [x] AArch64 translation indices, descriptor construction, and offline mapping plans;
-- [ ] exception-frame layout, vector-table layout, and syndrome decoding.
+- [x] exception-frame layout, vector-table layout, and syndrome decoding.
 
 Each mechanism must be Host Tested where behavior is pure, Cross Compiled for AArch64, and kept
 independent of unverified MMIO or system-register effects. This section does not install final

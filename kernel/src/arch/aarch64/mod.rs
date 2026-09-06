@@ -3,6 +3,7 @@
 #[cfg(target_arch = "aarch64")]
 use core::arch::asm;
 
+pub mod exception;
 pub mod paging;
 
 /// Stop execution while allowing an event to wake the CPU transiently.

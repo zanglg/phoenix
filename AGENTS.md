@@ -27,6 +27,7 @@ not create speculative implementations for them.
 - `kernel/src/arch/aarch64/boot.S`: first AArch64 bootstrap implementation.
 - `docs/BOOT.md`: current boot contract and runtime-validation boundary.
 - `docs/AARCH64_PAGING.md`: temporary and final page-table model, permissions, and remaining work.
+- `docs/AARCH64_EXCEPTIONS.md`: vector, frame, syndrome, and remaining runtime-handler contract.
 - `docs/QEMU.md`: pinned virtual board, runtime commands, timeout, sentinels, and evidence policy.
 - `docs/RUNTIME_VALIDATION.md`: hardware-dependent checks deferred until an emulator is available.
 - `FEATURES.md`: comprehensive capability catalog.

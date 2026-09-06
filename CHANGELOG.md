@@ -22,4 +22,5 @@ under `Unreleased` and the Cargo version remains 0.0.0 until the 0.1.0 release g
 - Fixed-capacity physical memory normalization, conservative reservation, and first-fit frame allocation.
 - Host-tested AArch64 translation indices, stage-1 descriptors, mapping attributes, and fixed-capacity offline mapping plans.
 - Pinned QEMU `virt` command generation and a bounded boot integration harness with sentinel, timeout, output-limit, and log handling.
+- Host-tested AArch64 vector-slot model, stable exception-frame ABI, ESR decoding, SVC immediate extraction, and data-abort classification.
 - Project, Agent, Roadmap, and kernel capability documentation.
