@@ -8,6 +8,7 @@ version = "0.0.0"
 edition = "2024"
 rust-version = "1.95"
 license = "MIT OR Apache-2.0"
+repository = "https://github.com/zanglg/phoenix"
 
 [workspace.lints.rust]
 unsafe_op_in_unsafe_fn = "deny"
@@ -25,4 +26,3 @@ panic = "abort"
 codegen-units = 1
 lto = "thin"
 panic = "abort"
-

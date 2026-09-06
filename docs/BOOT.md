@@ -10,6 +10,8 @@ source and ELF layout require; it is not evidence that the image has run on an e
 - Raw image physical load address: `0x40080000`.
 - Linked virtual entry: `0xffffff8040080000` at `_start`.
 - The entry CPU must already be in AArch64 state at EL1 or non-secure EL2. EL3 is unsupported.
+- Stage-1 translation must be disabled at entry. Instruction and data caches must be disabled, or
+  firmware must have completed the cache maintenance needed to make the loaded image coherent.
 - Asynchronous exceptions are masked because exception vectors do not exist yet.
 - `x0` is preserved and passed to `kernel_main`; it is expected to contain the physical DTB
   address, but Phoenix does not parse it yet.
@@ -58,6 +60,6 @@ size/alignment, raw image, and linker map. `cargo xtask ci` includes both comman
 - the verified QEMU command line;
 - timeout and process-exit mechanism for automated smoke tests;
 - observed EL1 and EL2 entry behavior;
-- whether direct boot supplies every assumed register and cache state.
+- confirmation that direct boot supplies every assumed register and cache state.
 
 Resolve these from real emulator evidence before adding `run`, `debug`, or a boot-test command.
