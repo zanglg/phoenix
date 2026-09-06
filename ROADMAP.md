@@ -4,14 +4,15 @@ Phoenix is developed as one ordered stream until the first formal release. There
 milestones and no intermediate release tags. The Cargo version remains `0.0.0` throughout this
 period.
 
-Only the first incomplete section is active. Later sections define dependency order, not parallel
-work or permission to implement everything at once. The broader, unscheduled capability surface
-remains in `FEATURES.md`.
+Work follows the order below. A runtime check may remain pending when its environment is
+unavailable, while the next explicitly host-verifiable work proceeds without assuming that check
+passed. The broader, unscheduled capability surface remains in `FEATURES.md`.
 
 ## Current position
 
-The engineering foundation is complete. **Bootstrap and early console** is in progress: its
-build and static-inspection work is complete, while emulator validation remains outstanding.
+The engineering foundation is complete. **Bootstrap and early console** is Runtime Pending: its
+build and static-inspection work is complete, while emulator validation remains outstanding. The
+active no-emulator work is **Host-verifiable architecture foundations**.
 
 ## Completed foundation
 
@@ -44,7 +45,25 @@ passes only after observing the success sentinel before its timeout.
 The current boot contract is in `docs/BOOT.md`. QEMU machine version and runtime test-exit
 protocol remain deliberately open until emulator validation is available.
 
-## 2. Exceptions and diagnostics
+## 2. Host-verifiable architecture foundations
+
+Build the pure and statically inspectable foundations needed by later runtime integration, in
+this order:
+
+1. checked physical/virtual addresses, pages, frames, and ranges;
+2. strict read-only DTB parsing and boot-information extraction;
+3. physical-memory region normalization, reservation, and frame allocation;
+4. AArch64 translation indices and page-table descriptor construction;
+5. exception-frame layout, vector-table layout, and syndrome decoding.
+
+Each mechanism must be Host Tested where behavior is pure, Cross Compiled for AArch64, and kept
+independent of unverified MMIO or system-register effects. This section does not install final
+translation tables, write `VBAR_EL1`, enable interrupts, or claim target execution.
+
+Observable result: malformed inputs and boundary conditions are covered by host tests, while the
+AArch64 artifact retains all required static layout checks.
+
+## 3. Exceptions and diagnostics
 
 Install exception vectors, preserve a complete register context, classify faults, and produce a
 useful panic report with symbols or enough addresses for offline symbolization.
@@ -52,7 +71,7 @@ useful panic report with symbols or enough addresses for offline symbolization.
 Observable result: deliberate synchronous exceptions are caught and reported deterministically
 instead of silently hanging QEMU.
 
-## 3. Memory management
+## 4. Memory management
 
 Discover and reserve physical memory, add a page-frame allocator, establish the kernel virtual
 address space, install final page tables, and provide a guarded kernel heap and stacks.
@@ -60,7 +79,7 @@ address space, install final page tables, and provide a guarded kernel heap and 
 Observable result: allocator and mapping self-tests exercise success and failure paths without
 corrupting the bootstrap, DTB, image, or device mappings.
 
-## 4. Interrupts and time
+## 5. Interrupts and time
 
 Initialize the GIC and generic timer, define interrupt-context rules, dispatch IRQs, and provide a
 monotonic clock plus timer queue.
@@ -68,7 +87,7 @@ monotonic clock plus timer queue.
 Observable result: timer interrupts advance a monotonic time source and scheduled callbacks fire
 under an automated QEMU test.
 
-## 5. Kernel execution
+## 6. Kernel execution
 
 Introduce synchronization primitives, kernel threads, architecture context switching, idle,
 scheduling, and preemption rules. Interfaces must already account for future SMP ordering even
@@ -77,7 +96,7 @@ though the first release remains single-core.
 Observable result: multiple kernel threads make independently verified progress under timer-driven
 scheduling.
 
-## 6. Processes and native ABI
+## 7. Processes and native ABI
 
 Add user address spaces, safe user-memory access, process and thread lifecycle, transition to
 userspace, and a small documented native Phoenix syscall ABI.
@@ -85,7 +104,7 @@ userspace, and a small documented native Phoenix syscall ABI.
 Observable result: an EL0 program invokes syscalls, exits, and cannot directly access kernel
 memory.
 
-## 7. Executables and minimal system
+## 8. Executables and minimal system
 
 Load ELF programs from initramfs, define the initial user stack and auxiliary data, add a minimal
 VFS and file-descriptor model, and start an `init` program with console input and output.
@@ -93,7 +112,7 @@ VFS and file-descriptor model, and start an `init` program with console input an
 Observable result: Phoenix boots from a clean checkout, starts `init`, runs at least one child
 program, performs console and in-memory file I/O, and shuts down or reports test completion.
 
-## 8. Release preparation
+## 9. Release preparation
 
 Remove undocumented failure paths, verify resource-exhaustion behavior, audit unsafe invariants,
 stabilize the documented 0.1 interface boundary, and produce reproducible artifacts and an

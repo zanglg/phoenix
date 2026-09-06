@@ -91,6 +91,8 @@ Rust source; assembly such as `boot.S` requires separate editor support.
 - [`CHANGELOG.md`](CHANGELOG.md) records completed, visible changes.
 - [`AGENTS.md`](AGENTS.md) defines the repository rules for coding agents.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md) defines the `dev` to `main` contribution flow.
+- [`docs/RUNTIME_VALIDATION.md`](docs/RUNTIME_VALIDATION.md) holds checks that require QEMU or
+  later target hardware.
 
 Recording a feature does not authorize its implementation. It must first be promoted into the
 ordered Roadmap, and only the first incomplete section is active.

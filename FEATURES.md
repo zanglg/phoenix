@@ -32,6 +32,7 @@ _No unclassified entries._
 | BUILD-003 | Host-side canonical validation | Implemented | 0.1.0 | Provided by xtask |
 | BUILD-004 | Kernel artifact and image packaging | Implemented | 0.1.0 | ELF, raw image, linker map, and static inspection |
 | BUILD-005 | Reproducible release artifacts and provenance | Deferred | Unscheduled | Revisit before public releases |
+| BUILD-006 | Explicit host/static/runtime validation states | Implemented | 0.1.0 | Runtime debt is recorded separately, never implied by compilation |
 
 ## Boot and firmware
 

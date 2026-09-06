@@ -4,8 +4,9 @@
 
 Phoenix is an experimental Unix-like Rust kernel. The current development target is AArch64 on
 QEMU `virt`. The Cargo version remains 0.0.0 throughout the linear pre-release construction path.
-Only the first incomplete Roadmap section is active; do not claim capabilities from later
-sections.
+Follow the Roadmap in dependency order. A runtime-pending item may remain open while work moves
+to the next explicitly host-verifiable item, but only when that work does not depend on an
+unobserved hardware result. Never convert static evidence into a runtime support claim.
 
 RISC-V 64 and x86_64 are deferred ports. The source tree must not prevent them, but agents must
 not create speculative implementations for them.
@@ -25,6 +26,7 @@ not create speculative implementations for them.
 - `.cargo/lsp.toml`: rust-analyzer's default kernel target.
 - `kernel/src/arch/aarch64/boot.S`: first AArch64 bootstrap implementation.
 - `docs/BOOT.md`: current boot contract and runtime-validation boundary.
+- `docs/RUNTIME_VALIDATION.md`: hardware-dependent checks deferred until an emulator is available.
 - `FEATURES.md`: comprehensive capability catalog.
 - `ROADMAP.md`: ordered path to the first formal release.
 - `CHANGELOG.md`: completed changes.
@@ -64,6 +66,16 @@ cargo xtask ci
 Run `cargo xtask ci` before reporting completion. Never state that an unexecuted check passed.
 QEMU is optional in 0.0.0, and there is no runtime boot test yet. Static artifact inspection is
 required. Do not install or invoke QEMU in an environment where it is unavailable.
+
+Use these validation states consistently:
+
+- **Host Tested**: behavior executed in host-side tests.
+- **Cross Compiled**: compiled for the configured bare-metal target.
+- **ELF Inspected**: artifact structure checked without execution.
+- **Runtime Pending**: implementation exists but has not run on the target platform.
+- **Runtime Verified**: the documented target command and observed evidence passed.
+
+Record every Runtime Pending claim in `docs/RUNTIME_VALIDATION.md`.
 
 ## Feature and documentation policy
 

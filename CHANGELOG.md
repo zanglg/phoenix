@@ -16,4 +16,5 @@ under `Unreleased` and the Cargo version remains 0.0.0 until the 0.1.0 release g
 - ELF, raw kernel image, and linker-map generation with static layout and symbol inspection.
 - Config-file-driven rust-analyzer target selection.
 - Standalone host-side xtask commands for environment checks, tests, builds, and validation.
+- Explicit Host Tested, Cross Compiled, ELF Inspected, Runtime Pending, and Runtime Verified states.
 - Project, Agent, Roadmap, and kernel capability documentation.
