@@ -42,9 +42,10 @@ dispatcher returns, assembly writes back mutable SP/PC/status state, restores al
 uses `eret`. Current-EL `SP_EL0` slots switch to `SP_EL1` before touching memory, so they do not
 trust the interrupted stack.
 
-The current Rust dispatcher is deliberately fatal. It emits `PHOENIX_EXCEPTION`, the decoded
-vector, PC, saved status, syndrome, and fault address, then halts. Recovery and syscall return are
-not yet enabled even though the assembly epilogue is present.
+The default Rust dispatcher is deliberately fatal. It emits `PHOENIX_EXCEPTION`, the decoded
+vector, PC, saved status, syndrome, and fault address, then halts. The opt-in EL0 probe recognizes
+its narrow `SVC #0` contract and exercises the assembly return epilogue; general recovery and
+production syscall dispatch are not enabled.
 
 ## Syndrome decoding
 

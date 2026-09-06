@@ -4,7 +4,7 @@ use core::ptr::{read_volatile, write_volatile};
 
 use crate::console::ByteSink;
 
-const PL011_BASE: usize = 0x0900_0000;
+const PL011_BASE: usize = 0xffff_ff80_0900_0000;
 const UART_DR: usize = 0x00;
 const UART_FR: usize = 0x18;
 const UART_FR_BUSY: u32 = 1 << 3;

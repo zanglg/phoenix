@@ -30,6 +30,15 @@ SECTIONS
     } :text
 
     . = ALIGN(4K);
+    .user_probe : AT(ADDR(.user_probe) - KERNEL_VIRT_OFFSET)
+    {
+        __user_probe_start = .;
+        KEEP(*(.user_probe.text))
+        . = ALIGN(4K);
+        __user_probe_end = .;
+    } :text
+
+    . = ALIGN(4K);
     .rodata : AT(ADDR(.rodata) - KERNEL_VIRT_OFFSET)
     {
         *(.rodata .rodata.*)
@@ -59,6 +68,14 @@ SECTIONS
         . += BOOT_STACK_SIZE;
         . = ALIGN(16);
         __boot_stack_top = .;
+    } :data
+
+    . = ALIGN(4K);
+    .user_probe_stack (NOLOAD) : AT(ADDR(.user_probe_stack) - KERNEL_VIRT_OFFSET)
+    {
+        __user_probe_stack_bottom = .;
+        KEEP(*(.user_probe.stack))
+        __user_probe_stack_top = .;
     } :data
 
     . = ALIGN(4K);

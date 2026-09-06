@@ -7,6 +7,9 @@ pub mod exception;
 pub mod paging;
 pub mod syscall;
 
+#[cfg(all(target_arch = "aarch64", feature = "el0-probe"))]
+pub mod el0;
+
 #[cfg(target_arch = "aarch64")]
 unsafe extern "C" {
     static __exception_vectors: u8;

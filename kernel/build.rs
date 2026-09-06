@@ -15,6 +15,7 @@ fn main() {
     println!("cargo:rerun-if-changed=linker/aarch64-qemu-virt.ld");
     println!("cargo:rerun-if-changed=src/arch/aarch64/boot.S");
     println!("cargo:rerun-if-changed=src/arch/aarch64/vectors.S");
+    println!("cargo:rerun-if-changed=src/arch/aarch64/user_probe.S");
     println!(
         "cargo:rerun-if-changed={}",
         workspace_root.join(".git/HEAD").display()

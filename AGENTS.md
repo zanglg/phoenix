@@ -31,6 +31,7 @@ not create speculative implementations for them.
 - `docs/USER_ADDRESS_SPACE.md`: EL0 virtual region, permissions, mapping plan, and guarded stack.
 - `docs/ELF_LOADER.md`: strict initial executable subset and transactional loading requirements.
 - `docs/NATIVE_ABI.md`: unstable native syscall numbers, AArch64 registers, and return encoding.
+- `docs/EL0_PROBE.md`: opt-in static first-user-mode bridge and exact validation boundary.
 - `docs/QEMU.md`: pinned virtual board, runtime commands, timeout, sentinels, and evidence policy.
 - `docs/RUNTIME_VALIDATION.md`: hardware-dependent checks deferred until an emulator is available.
 - `FEATURES.md`: comprehensive capability catalog.
@@ -69,6 +70,7 @@ cargo xtask inspect
 cargo xtask qemu-command
 cargo xtask run
 cargo xtask test-boot
+cargo xtask test-el0
 cargo xtask ci
 ```
 

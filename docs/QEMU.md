@@ -51,7 +51,13 @@ Build, inspect, then execute the bounded integration test:
 cargo xtask test-boot
 ```
 
-`run` and `test-boot` first verify that `qemu-system-aarch64`, the pinned machine, and the CPU
+Build the opt-in first-user-mode image and require its final EL0 marker:
+
+```bash
+cargo xtask test-el0
+```
+
+`run`, `test-boot`, and `test-el0` first verify that `qemu-system-aarch64`, the pinned machine, and the CPU
 model exist. They refuse to substitute another machine silently. The normal emulator-free
 `cargo xtask ci` command never launches QEMU.
 
@@ -63,16 +69,20 @@ terminal sentinel determines the result:
 - `PHOENIX_BOOT_OK`: pass;
 - `PHOENIX_PANIC`: fail immediately;
 - `PHOENIX_EXCEPTION`: fail immediately and retain the register report;
+- `PHOENIX_EL0_OK`: pass for `test-el0` only;
+- `PHOENIX_EL0_FAIL`: fail `test-el0` immediately;
 - QEMU exit before either sentinel: fail;
 - timeout: fail and terminate QEMU;
 - more than 1 MiB without a sentinel: fail and terminate QEMU;
 - output read error: fail.
 
 Because the kernel currently halts after output, the harness terminates QEMU after observing a
-terminal sentinel. It writes the captured bytes to
-`target/phoenix/aarch64-unknown-none-softfloat/debug/qemu-boot.log` and emits one stable summary
-such as `QEMU_TEST_RESULT=pass`, `panic`, `timeout`, or `early-exit`. A missing emulator is an error
-for `run` and `test-boot`, never a skipped or passing test.
+terminal sentinel. It writes boot output to
+`target/phoenix/aarch64-unknown-none-softfloat/debug/qemu-boot.log` and EL0 output to the adjacent
+`qemu-el0.log`. It emits one stable summary such as `QEMU_TEST_RESULT=pass`, `panic`, `timeout`, or
+`early-exit`. A missing emulator is an error for runtime commands, never a skipped or passing test.
+`test-el0` ignores the intermediate `PHOENIX_BOOT_OK` marker, so it cannot pass before the EL0
+syscall path completes.
 
 ## How to report the first run
 

@@ -35,6 +35,7 @@ fn main() -> ExitCode {
         "qemu-command" => print_qemu_command(),
         "run" => run_kernel(),
         "test-boot" => test_boot(),
+        "test-el0" => test_el0(),
         "ci" => ci(),
         "help" | "--help" | "-h" => {
             print_help();
@@ -70,6 +71,7 @@ fn print_help() {
     println!("  qemu-command  Print the pinned QEMU command without running it");
     println!("  run      Build and run Phoenix interactively on QEMU");
     println!("  test-boot  Run the bounded QEMU boot integration test");
+    println!("  test-el0  Run the bounded QEMU EL0 conformance probe");
     println!("  ci       Run every validation available without an emulator");
 }
 
@@ -270,6 +272,7 @@ fn check() -> bool {
             ".cargo/lsp.toml",
             "check",
             "--workspace",
+            "--all-features",
             "--target",
             &target,
         ],
@@ -300,6 +303,7 @@ fn lint() -> bool {
             "--lib",
             "--bin",
             "phoenix-kernel",
+            "--all-features",
             "--target",
             &target,
             "--",
@@ -337,7 +341,7 @@ fn test() -> bool {
     run(
         "test kernel library on host",
         "cargo",
-        &["test", "--workspace", "--lib"],
+        &["test", "--workspace", "--lib", "--all-features"],
     ) && run(
         "test host tooling",
         "cargo",
@@ -346,23 +350,55 @@ fn test() -> bool {
 }
 
 struct Artifacts {
+    cargo_target_dir: PathBuf,
     elf: PathBuf,
     image: PathBuf,
     map: PathBuf,
     qemu_log: PathBuf,
+    qemu_el0_log: PathBuf,
 }
 
-fn kernel_artifacts(target: &str) -> Artifacts {
+#[derive(Clone, Copy)]
+enum KernelVariant {
+    Default,
+    El0Probe,
+}
+
+impl KernelVariant {
+    const fn name(self) -> &'static str {
+        match self {
+            Self::Default => "default",
+            Self::El0Probe => "el0-probe",
+        }
+    }
+
+    const fn features(self) -> &'static [&'static str] {
+        match self {
+            Self::Default => &[],
+            Self::El0Probe => &["el0-probe"],
+        }
+    }
+
+    const fn expects_el0_probe(self) -> bool {
+        matches!(self, Self::El0Probe)
+    }
+}
+
+fn kernel_artifacts(target: &str, variant: KernelVariant) -> Artifacts {
     let root = workspace_root();
     let output = root.join("target/phoenix").join(target).join("debug");
+    let cargo_target_dir = root.join("target/phoenix/build").join(variant.name());
+    let artifact_stem = match variant {
+        KernelVariant::Default => "phoenix-kernel",
+        KernelVariant::El0Probe => "phoenix-kernel-el0",
+    };
     Artifacts {
-        elf: root
-            .join("target")
-            .join(target)
-            .join("debug/phoenix-kernel"),
-        image: output.join("phoenix-kernel.bin"),
-        map: output.join("phoenix-kernel.map"),
+        elf: cargo_target_dir.join(target).join("debug/phoenix-kernel"),
+        image: output.join(format!("{artifact_stem}.bin")),
+        map: output.join(format!("{artifact_stem}.map")),
         qemu_log: output.join("qemu-boot.log"),
+        qemu_el0_log: output.join("qemu-el0.log"),
+        cargo_target_dir,
     }
 }
 
@@ -377,10 +413,14 @@ fn require_aarch64_target() -> Option<String> {
 }
 
 fn build_kernel() -> bool {
+    build_kernel_variant(KernelVariant::Default)
+}
+
+fn build_kernel_variant(variant: KernelVariant) -> bool {
     let Some(target) = require_aarch64_target() else {
         return false;
     };
-    let artifacts = kernel_artifacts(&target);
+    let artifacts = kernel_artifacts(&target, variant);
     let Some(output_dir) = artifacts.image.parent() else {
         eprintln!("error: invalid kernel artifact path");
         return false;
@@ -402,10 +442,17 @@ fn build_kernel() -> bool {
         "phoenix-kernel",
         "--target",
         &target,
-        "--",
-        &link_arg,
     ]);
-    if !run_command("build AArch64 kernel ELF", &mut cargo) {
+    cargo.arg("--target-dir").arg(&artifacts.cargo_target_dir);
+    let features = variant.features();
+    if !features.is_empty() {
+        cargo.arg("--features").arg(features.join(","));
+    }
+    cargo.args(["--", &link_arg]);
+    if !run_command(
+        &format!("build AArch64 kernel ELF ({})", variant.name()),
+        &mut cargo,
+    ) {
         return false;
     }
 
@@ -442,7 +489,7 @@ fn parse_nm_symbols(output: &str) -> BTreeMap<String, u64> {
         .collect()
 }
 
-fn validate_symbol_layout(symbols: &BTreeMap<String, u64>) -> Vec<String> {
+fn validate_symbol_layout(symbols: &BTreeMap<String, u64>, expect_el0_probe: bool) -> Vec<String> {
     let required = [
         "_start",
         "kernel_main",
@@ -506,14 +553,54 @@ fn validate_symbol_layout(symbols: &BTreeMap<String, u64>) -> Vec<String> {
     if vectors_end.checked_sub(vectors) != Some(EXCEPTION_VECTOR_TABLE_SIZE) {
         errors.push("exception vector table is not exactly 2 KiB".to_owned());
     }
+    if expect_el0_probe {
+        let required_probe = [
+            "__user_probe_entry",
+            "__user_probe_start",
+            "__user_probe_end",
+            "__user_probe_stack_bottom",
+            "__user_probe_stack_top",
+        ];
+        for symbol in required_probe {
+            if !symbols.contains_key(symbol) {
+                errors.push(format!("required EL0 probe symbol '{symbol}' is missing"));
+            }
+        }
+        if required_probe
+            .iter()
+            .all(|symbol| symbols.contains_key(*symbol))
+        {
+            let probe_start = symbols["__user_probe_start"];
+            let probe_end = symbols["__user_probe_end"];
+            let probe_entry = symbols["__user_probe_entry"];
+            let user_stack_bottom = symbols["__user_probe_stack_bottom"];
+            let user_stack_top = symbols["__user_probe_stack_top"];
+            if probe_start & 0xfff != 0
+                || probe_entry != probe_start
+                || probe_end.checked_sub(probe_start) != Some(4096)
+            {
+                errors
+                    .push("EL0 probe text is not one aligned page with entry at start".to_owned());
+            }
+            if user_stack_bottom & 0xfff != 0
+                || user_stack_top.checked_sub(user_stack_bottom) != Some(4096)
+            {
+                errors.push("EL0 probe stack is not one aligned page".to_owned());
+            }
+        }
+    }
     errors
 }
 
 fn inspect_kernel() -> bool {
+    inspect_kernel_variant(KernelVariant::Default)
+}
+
+fn inspect_kernel_variant(variant: KernelVariant) -> bool {
     let Some(target) = require_aarch64_target() else {
         return false;
     };
-    let artifacts = kernel_artifacts(&target);
+    let artifacts = kernel_artifacts(&target, variant);
     for path in [&artifacts.elf, &artifacts.image, &artifacts.map] {
         if !path.is_file() {
             eprintln!(
@@ -546,7 +633,7 @@ fn inspect_kernel() -> bool {
         return false;
     };
     let symbols = parse_nm_symbols(&nm_output);
-    let mut errors = validate_symbol_layout(&symbols);
+    let mut errors = validate_symbol_layout(&symbols, variant.expects_el0_probe());
 
     let Some(header) = capture_command(
         Command::new(readobj)
@@ -592,6 +679,9 @@ fn inspect_kernel() -> bool {
     if errors.is_empty() {
         println!("ok: AArch64 ELF machine, entry, load addresses, and symbols");
         println!("ok: bootstrap page table, exception vectors, BSS, stack, image, and map");
+        if variant.expects_el0_probe() {
+            println!("ok: EL0 probe text, entry, and stack static layout");
+        }
         true
     } else {
         for error in errors {
@@ -605,7 +695,7 @@ fn print_qemu_command() -> bool {
     let Some(target) = require_aarch64_target() else {
         return false;
     };
-    qemu::print_command(&kernel_artifacts(&target).image);
+    qemu::print_command(&kernel_artifacts(&target, KernelVariant::Default).image);
     true
 }
 
@@ -615,21 +705,42 @@ fn run_kernel() -> bool {
     };
     build_kernel()
         && inspect_kernel()
-        && qemu::run_interactive(&kernel_artifacts(&target).image, &workspace_root())
+        && qemu::run_interactive(
+            &kernel_artifacts(&target, KernelVariant::Default).image,
+            &workspace_root(),
+        )
 }
 
 fn test_boot() -> bool {
     let Some(target) = require_aarch64_target() else {
         return false;
     };
-    let artifacts = kernel_artifacts(&target);
+    let artifacts = kernel_artifacts(&target, KernelVariant::Default);
     build_kernel()
         && inspect_kernel()
         && qemu::test_boot(&artifacts.image, &artifacts.qemu_log, &workspace_root())
 }
 
+fn test_el0() -> bool {
+    let Some(target) = require_aarch64_target() else {
+        return false;
+    };
+    let artifacts = kernel_artifacts(&target, KernelVariant::El0Probe);
+    build_kernel_variant(KernelVariant::El0Probe)
+        && inspect_kernel_variant(KernelVariant::El0Probe)
+        && qemu::test_el0(&artifacts.image, &artifacts.qemu_el0_log, &workspace_root())
+}
+
 fn ci() -> bool {
-    doctor() && format() && check() && lint() && test() && build_kernel() && inspect_kernel()
+    doctor()
+        && format()
+        && check()
+        && lint()
+        && test()
+        && build_kernel_variant(KernelVariant::El0Probe)
+        && inspect_kernel_variant(KernelVariant::El0Probe)
+        && build_kernel()
+        && inspect_kernel()
 }
 
 #[cfg(test)]
@@ -677,7 +788,31 @@ mod tests {
         );
 
         assert_eq!(symbols["_start"], KERNEL_VIRT_BASE);
-        assert!(validate_symbol_layout(&symbols).is_empty());
+        assert!(validate_symbol_layout(&symbols, false).is_empty());
+    }
+
+    #[test]
+    fn validates_expected_el0_probe_symbol_layout() {
+        let symbols = parse_nm_symbols(
+            "ffffff8040080000 T __kernel_start\n\
+             ffffff8040080000 T _start\n\
+             ffffff8040080650 T kernel_main\n\
+             ffffff8040084000 D __boot_l1_page_table\n\
+             ffffff8040084800 T __exception_vectors\n\
+             ffffff8040085000 T __exception_vectors_end\n\
+             ffffff8040085000 D __bss_start\n\
+             ffffff8040085000 B __bss_end\n\
+             ffffff8040085000 B __boot_stack_bottom\n\
+             ffffff8040095000 B __boot_stack_top\n\
+             ffffff8040096000 T __user_probe_entry\n\
+             ffffff8040096000 T __user_probe_start\n\
+             ffffff8040097000 T __user_probe_end\n\
+             ffffff8040098000 B __user_probe_stack_bottom\n\
+             ffffff8040099000 B __user_probe_stack_top\n\
+             ffffff8040099000 B __kernel_end",
+        );
+
+        assert!(validate_symbol_layout(&symbols, true).is_empty());
     }
 
     #[test]
@@ -693,7 +828,7 @@ mod tests {
              ffffff8040095000 B __boot_stack_top",
         );
 
-        let errors = validate_symbol_layout(&symbols);
+        let errors = validate_symbol_layout(&symbols, false);
         assert!(errors.iter().any(|error| error.contains("__kernel_end")));
     }
 }

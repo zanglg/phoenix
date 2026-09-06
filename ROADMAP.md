@@ -118,8 +118,9 @@ Add user address spaces, safe user-memory access, process and thread lifecycle, 
 userspace, and a small documented native Phoenix syscall ABI.
 
 Host-verifiable prerequisites now include lower-39-bit user mapping and guarded-stack plans plus
-the revision-0 AArch64 register and return-value convention. Page-table ownership, safe user copy,
-process lifecycle, dispatch, and target entry remain.
+the revision-0 AArch64 register and return-value convention. An opt-in statically backed probe now
+links an EL0 entry, replaces TTBR0, verifies one returning unknown syscall, and terminates through
+`exit(42)`. Runtime evidence, allocator-owned tables, safe user copy, and process lifecycle remain.
 
 Observable result: an EL0 program invokes syscalls, exits, and cannot directly access kernel
 memory.

@@ -89,7 +89,7 @@ _No unclassified entries._
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
 | PROC-001 | Process and thread lifecycle | Planned | 0.1.0 | Includes identifiers and teardown |
-| ABI-001 | Native Phoenix syscall ABI | In Progress | 0.1.0 | Revision-0 numbers, values, and AArch64 registers are Host Tested; dispatch is not implemented |
+| ABI-001 | Native Phoenix syscall ABI | In Progress | 0.1.0 | Revision-0 values and probe-only unknown/exit dispatch are built; production dispatch is Runtime Pending |
 | ABI-002 | ELF loader, user stack, TLS, and auxiliary vector | In Progress | 0.1.0 | Strict ELF validation and guarded-stack layout are Host Tested; population, TLS, and auxv remain |
 | PROC-002 | Signals and exception delivery | Deferred | Unscheduled | Requires process lifecycle |
 | IPC-001 | Pipes, message passing, and shared memory IPC | Deferred | Unscheduled | Split when designs become concrete |

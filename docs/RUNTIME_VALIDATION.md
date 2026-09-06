@@ -31,7 +31,7 @@ valuable evidence but cannot close an entry in this ledger.
 | RUN-EXC-001 | Install and enter the EL1 exception vector table | Runtime Pending | Installed `VBAR_EL1` points at the linked 2 KiB table and a deliberate fault emits `PHOENIX_EXCEPTION` from the correct slot |
 | RUN-EXC-002 | Preserve and restore the exception frame | Runtime Pending | All `x0..x30`, SP, PC, status, syndrome, and fault-address values match controlled probes |
 | RUN-ELF-001 | Populate and map a validated AArch64 ELF image | Runtime Pending | File bytes, zero-fill, page permissions, entry address, and rollback behavior match the image contract |
-| RUN-EL0-001 | Enter and return from the first EL0 program | Runtime Pending | EL0 uses the guarded stack, cannot access kernel mappings, and returns only through a handled exception |
+| RUN-EL0-001 | Enter and return from the first EL0 program | Runtime Pending | `cargo xtask test-el0` reaches `PHOENIX_EL0_OK` after TTBR0 switch, EL0 `eret`, returning unknown syscall, and `exit(42)` |
 | RUN-ABI-001 | Dispatch native `SVC #0` calls | Runtime Pending | Register arguments, return values, unknown calls, `write`, and `exit` match ABI revision 0 |
 
 ## Validation procedure template

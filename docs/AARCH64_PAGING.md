@@ -35,6 +35,10 @@ The low alias must remain until execution, the stack, the DTB pointer, and every
 reference have been migrated to their final virtual form. Removing it requires a TLB maintenance
 sequence and runtime evidence; it is not implied by the current implementation.
 
+The opt-in EL0 conformance probe replaces TTBR0 with static three-level user tables after moving
+console access to the TTBR1 device alias. It does not replace the coarse TTBR1 kernel mapping and
+does not count as the final address space. See `docs/EL0_PROBE.md`.
+
 ## Host Tested model
 
 `kernel/src/arch/aarch64/paging.rs` provides:

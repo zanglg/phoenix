@@ -27,4 +27,6 @@ under `Unreleased` and the Cargo version remains 0.0.0 until the 0.1.0 release g
 - Host-tested lower-39-bit user ranges, W^X mapping plans, and guarded initial stack placement.
 - Strict allocation-free ELF64/AArch64 executable validation with load ranges, zero-fill, permissions, overlap, and entry-point checks.
 - Native ABI revision-0 syscall values plus AArch64 `x8`/`x0..x5` request and signed return-register adaptation.
+- Opt-in, statically validated first-EL0 probe with private TTBR0 tables, RX code, guarded zeroed stack, `eret`, returning unknown syscall, and terminal `exit(42)` path.
+- Separate bounded `test-el0` QEMU protocol that cannot pass on the earlier boot marker.
 - Project, Agent, Roadmap, and kernel capability documentation.

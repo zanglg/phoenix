@@ -15,6 +15,7 @@ narrow support claim:
 - rust-analyzer can use the configured kernel target from an x86_64 development host;
 - host-side unit tests and validation are available through `cargo xtask`;
 - a bounded QEMU runner and boot-test harness are implemented and host tested;
+- an opt-in first-EL0 probe is cross-linked and statically inspected, but not runtime verified;
 - runtime boot and serial output have **not** been validated because the current development
   environment has no QEMU.
 
@@ -58,13 +59,16 @@ cargo xtask inspect
 cargo xtask qemu-command
 cargo xtask run
 cargo xtask test-boot
+cargo xtask test-el0
 cargo xtask ci
 ```
 
 `build` produces an ELF, raw image, and linker map under `target/`; `inspect` validates those
 artifacts without executing them. `qemu-command` prints the pinned command without starting an
 emulator. `run` is interactive and `test-boot` is bounded; neither is part of emulator-free `ci`.
-See [`docs/QEMU.md`](docs/QEMU.md) for their exact validation boundary.
+`test-el0` builds the opt-in user-mode conformance image and requires a separate final marker.
+See [`docs/QEMU.md`](docs/QEMU.md) and [`docs/EL0_PROBE.md`](docs/EL0_PROBE.md) for their exact
+validation boundaries.
 
 ## LSP target
 

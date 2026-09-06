@@ -7,6 +7,10 @@ license.workspace = true
 publish = false
 build = "build.rs"
 
+[features]
+default = []
+el0-probe = []
+
 [lib]
 crate-type = ["rlib"]
 

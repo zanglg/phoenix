@@ -34,8 +34,9 @@ only for early boot. Rust installs the linked EL1 exception vector table before 
 console line, but keeps asynchronous exceptions masked.
 
 The linker reserves a zeroed BSS followed by a 64 KiB, 16-byte-aligned boot stack. Rust receives
-the higher-half stack address. QEMU `virt` PL011 registers are accessed through the low device
-mapping at physical/virtual address `0x09000000`.
+the higher-half stack address. QEMU `virt` PL011 is physically at `0x09000000`, but Rust accesses
+its temporary higher-half device alias at `0xffffff8009000000`; diagnostics therefore survive an
+opt-in replacement of TTBR0.
 
 ## Observable output
 

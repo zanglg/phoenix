@@ -22,10 +22,10 @@ vector with exception class `SupervisorCallAArch64` and immediate zero.
 
 | Number | Name | Intended arguments | Status |
 | ---: | --- | --- | --- |
-| 0 | `exit` | `x0=status` | Assigned, not implemented |
+| 0 | `exit` | `x0=status` | Implemented only by the opt-in EL0 probe |
 | 1 | `write` | `x0=fd`, `x1=user buffer`, `x2=length` | Assigned, not implemented |
 
-Unknown numbers are preserved and will return `NotImplemented`; they are not parser errors. These
+Unknown numbers are preserved and the opt-in probe returns `NotImplemented`; they are not parser errors. These
 assignments may change while the revision and project version remain zero.
 
 ## Return convention
@@ -55,7 +55,7 @@ window. The types and adapter are Cross Compiled for AArch64.
 
 ## TODO
 
-- recognize the SVC syndrome in the exception dispatcher and return through `eret`;
+- generalize the probe-only SVC recognition into a production dispatcher;
 - implement `exit` process teardown after process ownership exists;
 - implement bounded console `write` using fault-safe user copies;
 - define short writes, interruption, and maximum transfer sizes;
