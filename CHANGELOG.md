@@ -24,4 +24,7 @@ under `Unreleased` and the Cargo version remains 0.0.0 until the 0.1.0 release g
 - Pinned QEMU `virt` command generation and a bounded boot integration harness with sentinel, timeout, output-limit, and log handling.
 - Host-tested AArch64 vector-slot model, stable exception-frame ABI, ESR decoding, SVC immediate extraction, and data-abort classification.
 - Linked 2 KiB AArch64 EL1 vector table, complete register save/restore assembly, `VBAR_EL1` installation, and fatal exception diagnostics.
+- Host-tested lower-39-bit user ranges, W^X mapping plans, and guarded initial stack placement.
+- Strict allocation-free ELF64/AArch64 executable validation with load ranges, zero-fill, permissions, overlap, and entry-point checks.
+- Native ABI revision-0 syscall values plus AArch64 `x8`/`x0..x5` request and signed return-register adaptation.
 - Project, Agent, Roadmap, and kernel capability documentation.

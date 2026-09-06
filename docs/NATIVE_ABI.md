@@ -1,0 +1,71 @@
+# Native Phoenix ABI Revision 0
+
+This document records the first unstable userspace call convention. Revision 0 is a development
+contract tied to the 0.0.0 source tree; it is not a compatibility promise.
+
+## AArch64 system-call convention
+
+EL0 issues `SVC #0`. On entry to EL1:
+
+| Purpose | Register |
+| --- | --- |
+| System-call number | `x8` |
+| Arguments 0 through 5 | `x0` through `x5` |
+| Return value | `x0` |
+
+The exception frame preserves all registers. The AArch64 adapter extracts the request without
+changing `ELR_EL1`; for an AArch64 `SVC`, the architectural return address already identifies the
+following instruction. The eventual dispatcher must accept only the lower-AArch64 synchronous
+vector with exception class `SupervisorCallAArch64` and immediate zero.
+
+## Initial number assignments
+
+| Number | Name | Intended arguments | Status |
+| ---: | --- | --- | --- |
+| 0 | `exit` | `x0=status` | Assigned, not implemented |
+| 1 | `write` | `x0=fd`, `x1=user buffer`, `x2=length` | Assigned, not implemented |
+
+Unknown numbers are preserved and will return `NotImplemented`; they are not parser errors. These
+assignments may change while the revision and project version remain zero.
+
+## Return convention
+
+Success is a non-negative value from zero through `i64::MAX`. Errors are encoded in `x0` as the
+two's-complement negative of a positive error number from 1 through 4095. The initially named
+errors are `BadFileDescriptor` (9), `NoMemory` (12), `BadAddress` (14), `InvalidArgument` (22), and
+`NotImplemented` (38). Decoding retains unnamed error numbers.
+
+Values above `i64::MAX` cannot be encoded as success because they collide with the signed error
+space. This rule is checked when constructing a return value.
+
+## Invariants
+
+- the generic ABI preserves all six arguments and unknown call numbers;
+- architecture register extraction exists only in the AArch64 layer;
+- a syscall does not advance the saved PC a second time;
+- pointer-shaped arguments remain untrusted integers until user-copy validation;
+- a handler writes only the documented return register unless the syscall contract says otherwise;
+- ABI revision zero never implies Linux syscall-number or semantic compatibility.
+
+## Validation
+
+Host tests cover known and unknown numbers, all argument positions, register adaptation, PC
+preservation, maximum success values, named negative errors, and the boundary outside the error
+window. The types and adapter are Cross Compiled for AArch64.
+
+## TODO
+
+- recognize the SVC syndrome in the exception dispatcher and return through `eret`;
+- implement `exit` process teardown after process ownership exists;
+- implement bounded console `write` using fault-safe user copies;
+- define short writes, interruption, and maximum transfer sizes;
+- decide file-descriptor values and stderr/stdout initialization;
+- add ABI metadata to the initial auxiliary vector;
+- separate ABI revisioning from the project version when revision 1 is proposed;
+- add an EL0 conformance program and QEMU transcript.
+
+## Skipped work
+
+Linux ABI compatibility, POSIX completeness, ioctl, signals, restartable calls, futexes, polling,
+sockets, filesystems, capabilities, tracing, seccomp, 32-bit compatibility, and vDSO calls are not
+part of revision 0. No syscall behavior is currently claimed as Runtime Verified.

@@ -64,7 +64,7 @@ _No unclassified entries._
 | MM-002 | Virtual memory and kernel address space | In Progress | 0.1.0 | Descriptors and offline plan are Host Tested; ownership, installation, and runtime validation remain |
 | MM-003 | Kernel heap and fallible allocation policy | Planned | 0.1.0 | Define allocation-failure behavior |
 | MM-004 | Kernel stacks and guard pages | Planned | 0.1.0 | Include exception-context requirements |
-| MM-005 | User address spaces and safe user copies | Planned | 0.1.0 | Include fault recovery |
+| MM-005 | User address spaces and safe user copies | In Progress | 0.1.0 | Lower-39-bit range, W^X mapping, and guarded-stack plans are Host Tested; tables and user copies remain |
 | MM-006 | Shared memory and copy-on-write | Deferred | Unscheduled | Requires process VM |
 | MM-007 | Huge pages and block mappings | Captured | Unscheduled | Revisit after basic paging |
 | MM-008 | DMA, cache coherence, and IOMMU policy | Deferred | Unscheduled | Required for robust device support |
@@ -89,8 +89,8 @@ _No unclassified entries._
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
 | PROC-001 | Process and thread lifecycle | Planned | 0.1.0 | Includes identifiers and teardown |
-| ABI-001 | Native Phoenix syscall ABI | Planned | 0.1.0 | No Linux ABI promise |
-| ABI-002 | ELF loader, user stack, TLS, and auxiliary vector | Planned | 0.1.0 | Define as one userspace contract |
+| ABI-001 | Native Phoenix syscall ABI | In Progress | 0.1.0 | Revision-0 numbers, values, and AArch64 registers are Host Tested; dispatch is not implemented |
+| ABI-002 | ELF loader, user stack, TLS, and auxiliary vector | In Progress | 0.1.0 | Strict ELF validation and guarded-stack layout are Host Tested; population, TLS, and auxv remain |
 | PROC-002 | Signals and exception delivery | Deferred | Unscheduled | Requires process lifecycle |
 | IPC-001 | Pipes, message passing, and shared memory IPC | Deferred | Unscheduled | Split when designs become concrete |
 | IPC-002 | Wait, poll, and event readiness | Captured | Unscheduled | Coordinate with file descriptors |

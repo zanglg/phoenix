@@ -28,6 +28,9 @@ not create speculative implementations for them.
 - `docs/BOOT.md`: current boot contract and runtime-validation boundary.
 - `docs/AARCH64_PAGING.md`: temporary and final page-table model, permissions, and remaining work.
 - `docs/AARCH64_EXCEPTIONS.md`: vector, frame, syndrome, and remaining runtime-handler contract.
+- `docs/USER_ADDRESS_SPACE.md`: EL0 virtual region, permissions, mapping plan, and guarded stack.
+- `docs/ELF_LOADER.md`: strict initial executable subset and transactional loading requirements.
+- `docs/NATIVE_ABI.md`: unstable native syscall numbers, AArch64 registers, and return encoding.
 - `docs/QEMU.md`: pinned virtual board, runtime commands, timeout, sentinels, and evidence policy.
 - `docs/RUNTIME_VALIDATION.md`: hardware-dependent checks deferred until an emulator is available.
 - `FEATURES.md`: comprehensive capability catalog.

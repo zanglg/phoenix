@@ -117,6 +117,10 @@ scheduling.
 Add user address spaces, safe user-memory access, process and thread lifecycle, transition to
 userspace, and a small documented native Phoenix syscall ABI.
 
+Host-verifiable prerequisites now include lower-39-bit user mapping and guarded-stack plans plus
+the revision-0 AArch64 register and return-value convention. Page-table ownership, safe user copy,
+process lifecycle, dispatch, and target entry remain.
+
 Observable result: an EL0 program invokes syscalls, exits, and cannot directly access kernel
 memory.
 
@@ -124,6 +128,9 @@ memory.
 
 Load ELF programs from initramfs, define the initial user stack and auxiliary data, add a minimal
 VFS and file-descriptor model, and start an `init` program with console input and output.
+
+The strict ELF64/AArch64 validation layer is Host Tested. Frame population, mapping rollback, the
+initial stack, initramfs ownership, and executable entry remain.
 
 Observable result: Phoenix boots from a clean checkout, starts `init`, runs at least one child
 program, performs console and in-memory file I/O, and shuts down or reports test completion.

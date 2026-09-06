@@ -6,10 +6,13 @@
 //! The library contains target-independent mechanisms where practical and
 //! platform-specific modules behind explicit architecture paths.
 
+pub mod abi;
 pub mod build_info;
 pub mod console;
 pub mod dtb;
+pub mod elf;
 pub mod memory;
+pub mod user;
 
 pub mod arch;
 

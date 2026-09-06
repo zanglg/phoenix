@@ -5,6 +5,7 @@ use core::arch::asm;
 
 pub mod exception;
 pub mod paging;
+pub mod syscall;
 
 #[cfg(target_arch = "aarch64")]
 unsafe extern "C" {
