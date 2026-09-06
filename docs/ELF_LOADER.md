@@ -67,8 +67,9 @@ segments, page overlap, non-executable entry, null-page placement, and unaligned
 compilation checks that the parser remains `no_std` compatible.
 
 The exact separately linked `phoenix-init` artifact is also stripped, passed through this parser,
-inspected for one bounded RX load page, fixed entry, and linker symbols, then embedded byte-for-byte
-in the loaded-init kernel during every emulator-free CI run.
+inspected for one bounded RX load page, fixed entry, and linker symbols, stored under canonical
+path `init` in a validated initramfs, and selected from that archive by the loaded-init kernel during
+every emulator-free CI run.
 
 ## TODO
 

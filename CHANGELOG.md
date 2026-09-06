@@ -48,4 +48,6 @@ under `Unreleased` and the Cargo version remains 0.0.0 until the 0.1.0 release g
 - Opt-in loaded-init kernel variant and bounded QEMU protocol connecting the real DTB allocator,
   embedded ELF population, native stack, dynamic user tables, ownership-gated EL0 entry, and
   terminal `exit(42)`, with exact embedded-artifact inspection.
+- Strict allocation-free `newc` initramfs validation, canonical lookup, deterministic host
+  packaging of the first init ELF, and exact archive embedding in the loaded-init kernel.
 - Project, Agent, Roadmap, and kernel capability documentation.

@@ -107,12 +107,12 @@ passing test. `test-memory`, `test-el0`, and `test-init` ignore the intermediate
 
 ## How to report the first run
 
-Run `cargo xtask doctor`, record `qemu-system-aarch64 --version`, then run
-`cargo xtask test-boot`. Preserve:
+Run `cargo xtask doctor`, record `qemu-system-aarch64 --version`, then run each focused command in
+dependency order, ending with `cargo xtask test-init`. Preserve:
 
 1. the Phoenix commit hash;
 2. the complete `QEMU_TEST_*` lines;
-3. `qemu-boot.log`;
+3. the corresponding `qemu-boot.log`, `qemu-memory.log`, `qemu-el0.log`, or `qemu-init.log`;
 4. whether the host is x86_64 or AArch64;
 5. any local command changes.
 

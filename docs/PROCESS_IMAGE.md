@@ -2,8 +2,9 @@
 
 This document describes the architecture-neutral bridge from a validated executable to owned
 physical pages. The implementation is Host Tested and Cross Compiled. A focused kernel variant
-connects the Runtime Pending AArch64 bootstrap backend to a real embedded ELF, native stack,
-dynamic tables, and ownership-gated activation. It has not executed on the target.
+connects the Runtime Pending AArch64 bootstrap backend to a real ELF selected from the embedded
+initramfs, native stack, dynamic tables, and ownership-gated activation. It has not executed on the
+target.
 
 ## Current implementation
 
@@ -87,7 +88,8 @@ deterministic frame pairing, exact release, out-of-memory rollback, a failed rel
 wrong allocator snapshot, complete zeroing, partial final pages, injected write failure, clean
 retry, release of source storage, and combination with matching AArch64 table ownership. Target
 checks compile the same ownership model for bare-metal AArch64. Static inspection requires the
-exact loader-accepted init ELF inside the resulting kernel artifact.
+exact validated initramfs containing the loader-accepted init ELF inside the resulting kernel
+artifact.
 
 ## TODO
 

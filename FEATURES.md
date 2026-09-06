@@ -103,7 +103,7 @@ _No unclassified entries._
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
 | VFS-001 | VFS, path lookup, and file descriptor model | Planned | 0.1.0 | Permission hooks designed together |
-| FS-001 | Initramfs and in-memory filesystem | Planned | 0.1.0 | Initial userspace root |
+| FS-001 | Initramfs and in-memory filesystem | In Progress | 0.1.0 | Strict read-only newc parsing and deterministic embedded init lookup are Host Tested; extraction, VFS ownership, and runtime evidence remain |
 | BLOCK-001 | Block layer, buffering, and cache | Deferred | Unscheduled | Define flush and error semantics |
 | FS-002 | Persistent filesystem | Captured | Unscheduled | Format not selected |
 | STORAGE-001 | Partition discovery | Captured | Unscheduled | GPT is a likely first format |

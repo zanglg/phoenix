@@ -38,7 +38,8 @@ not create speculative implementations for them.
 - `docs/PROCESS_IMAGE.md`: executable/stack page planning and transactional frame ownership.
 - `docs/INITIAL_USER_STACK.md`: native argc/argv/envp/auxv layout and process-image integration.
 - `docs/FIRST_USER_PROGRAM.md`: standalone init ELF contract and static validation boundary.
-- `docs/LOADED_INIT_PROBE.md`: end-to-end embedded ELF loading, ownership, entry, and runtime boundary.
+- `docs/INITRAMFS.md`: strict initial archive subset, lookup rules, validation, and deferrals.
+- `docs/LOADED_INIT_PROBE.md`: end-to-end archive-to-ELF loading, ownership, entry, and runtime boundary.
 - `docs/NATIVE_ABI.md`: unstable native syscall numbers, AArch64 registers, and return encoding.
 - `docs/EL0_PROBE.md`: opt-in static first-user-mode bridge and exact validation boundary.
 - `docs/QEMU.md`: pinned virtual board, runtime commands, timeout, sentinels, and evidence policy.

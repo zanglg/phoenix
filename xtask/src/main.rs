@@ -73,8 +73,8 @@ fn print_help() {
     println!("  test     Run host-side unit tests");
     println!("  build    Build the configured kernel ELF and raw image");
     println!("  inspect  Validate the built AArch64 ELF and raw image");
-    println!("  build-init  Build the first standalone AArch64 userspace ELF");
-    println!("  inspect-init  Validate the first standalone userspace ELF");
+    println!("  build-init  Build the first userspace ELF and deterministic initramfs");
+    println!("  inspect-init  Validate the userspace ELF and initramfs");
     println!("  qemu-command  Print the pinned QEMU command without running it");
     println!("  run      Build and run Phoenix interactively on QEMU");
     println!("  test-boot  Run the bounded QEMU boot integration test");
@@ -273,7 +273,7 @@ fn check() -> bool {
         eprintln!("error: no kernel target is configured in .cargo/lsp.toml");
         return false;
     };
-    let Some(init_elf) = prepare_init_elf(&target) else {
+    let Some(initramfs) = prepare_initramfs(&target) else {
         return false;
     };
     let mut target_check = Command::new("cargo");
@@ -286,7 +286,7 @@ fn check() -> bool {
         "--target",
         &target,
     ]);
-    target_check.env("PHOENIX_INIT_ELF", init_elf);
+    target_check.env("PHOENIX_INITRAMFS", initramfs);
     run_command(
         "check kernel and init for configured LSP target",
         &mut target_check,
@@ -306,7 +306,7 @@ fn lint() -> bool {
         eprintln!("error: no kernel target is configured in .cargo/lsp.toml");
         return false;
     };
-    let Some(init_elf) = prepare_init_elf(&target) else {
+    let Some(initramfs) = prepare_initramfs(&target) else {
         return false;
     };
     let mut kernel_lint = Command::new("cargo");
@@ -326,7 +326,7 @@ fn lint() -> bool {
         "-D",
         "warnings",
     ]);
-    kernel_lint.env("PHOENIX_INIT_ELF", init_elf);
+    kernel_lint.env("PHOENIX_INITRAMFS", initramfs);
     run_command("lint kernel for configured LSP target", &mut kernel_lint)
         && run(
             "lint init for configured LSP target",
@@ -399,6 +399,7 @@ struct InitArtifacts {
     cargo_target_dir: PathBuf,
     elf: PathBuf,
     embedded_elf: PathBuf,
+    initramfs: PathBuf,
     map: PathBuf,
 }
 
@@ -476,9 +477,57 @@ fn init_artifacts(target: &str) -> InitArtifacts {
     InitArtifacts {
         elf: cargo_target_dir.join(target).join("debug/phoenix-init"),
         embedded_elf: output.join("phoenix-init.elf"),
+        initramfs: output.join("phoenix-initramfs.cpio"),
         map: output.join("phoenix-init.map"),
         cargo_target_dir,
     }
+}
+
+fn append_newc_field(output: &mut Vec<u8>, value: u32) {
+    output.extend_from_slice(format!("{value:08x}").as_bytes());
+}
+
+fn append_newc_record(
+    output: &mut Vec<u8>,
+    inode: u32,
+    path: &str,
+    mode: u32,
+    data: &[u8],
+) -> Result<(), String> {
+    let file_size = u32::try_from(data.len())
+        .map_err(|_| "init ELF is too large for a newc file-size field".to_owned())?;
+    let name_size = path
+        .len()
+        .checked_add(1)
+        .and_then(|size| u32::try_from(size).ok())
+        .ok_or_else(|| "initramfs path is too large for a newc name-size field".to_owned())?;
+    if path.as_bytes().contains(&0) {
+        return Err("initramfs path contains an interior NUL".to_owned());
+    }
+
+    output.extend_from_slice(b"070701");
+    for value in [inode, mode, 0, 0, 1, 0, file_size, 0, 0, 0, 0, name_size, 0] {
+        append_newc_field(output, value);
+    }
+    output.extend_from_slice(path.as_bytes());
+    output.push(0);
+    while !output.len().is_multiple_of(4) {
+        output.push(0);
+    }
+    output.extend_from_slice(data);
+    while !output.len().is_multiple_of(4) {
+        output.push(0);
+    }
+    Ok(())
+}
+
+fn make_initramfs(init_elf: &[u8]) -> Result<Vec<u8>, String> {
+    const REGULAR_EXECUTABLE: u32 = 0o100_755;
+
+    let mut output = Vec::new();
+    append_newc_record(&mut output, 1, "init", REGULAR_EXECUTABLE, init_elf)?;
+    append_newc_record(&mut output, 0, "TRAILER!!!", 0, &[])?;
+    Ok(output)
 }
 
 fn require_aarch64_target() -> Option<String> {
@@ -539,20 +588,46 @@ fn build_init() -> bool {
         return false;
     }
 
+    let init_elf = match fs::read(&artifacts.embedded_elf) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!(
+                "error: could not read embeddable init ELF {}: {error}",
+                artifacts.embedded_elf.display()
+            );
+            return false;
+        }
+    };
+    let initramfs = match make_initramfs(&init_elf) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!("error: could not construct initramfs: {error}");
+            return false;
+        }
+    };
+    if let Err(error) = fs::write(&artifacts.initramfs, initramfs) {
+        eprintln!(
+            "error: could not write initramfs {}: {error}",
+            artifacts.initramfs.display()
+        );
+        return false;
+    }
+
     println!("artifact: init ELF: {}", artifacts.elf.display());
     println!(
         "artifact: embeddable init ELF: {}",
         artifacts.embedded_elf.display()
     );
+    println!("artifact: initramfs: {}", artifacts.initramfs.display());
     println!("artifact: init linker map: {}", artifacts.map.display());
     true
 }
 
-fn prepare_init_elf(target: &str) -> Option<PathBuf> {
+fn prepare_initramfs(target: &str) -> Option<PathBuf> {
     if target != AARCH64_TARGET || !build_init() || !inspect_init() {
         return None;
     }
-    Some(init_artifacts(target).embedded_elf)
+    Some(init_artifacts(target).initramfs)
 }
 
 fn inspect_init() -> bool {
@@ -560,7 +635,12 @@ fn inspect_init() -> bool {
         return false;
     };
     let artifacts = init_artifacts(&target);
-    for path in [&artifacts.elf, &artifacts.embedded_elf, &artifacts.map] {
+    for path in [
+        &artifacts.elf,
+        &artifacts.embedded_elf,
+        &artifacts.initramfs,
+        &artifacts.map,
+    ] {
         if !path.is_file() {
             eprintln!(
                 "error: missing init artifact {}; run cargo xtask build-init",
@@ -588,6 +668,42 @@ fn inspect_init() -> bool {
         }
     };
     let mut errors = Vec::new();
+    match fs::read(&artifacts.initramfs) {
+        Ok(archive_bytes) => {
+            match phoenix_kernel::initramfs::Initramfs::from_bytes(&archive_bytes) {
+                Ok(archive) => {
+                    if archive.len() != 1 {
+                        errors.push(format!(
+                            "initramfs has {} entries, expected exactly one",
+                            archive.len()
+                        ));
+                    }
+                    match archive.find("init") {
+                    Some(entry)
+                        if entry.kind()
+                            == phoenix_kernel::initramfs::InitramfsEntryKind::RegularFile
+                            && entry.permissions() == 0o755
+                            && entry.data() == bytes =>
+                    {
+                        println!("ok: deterministic initramfs contains the exact init ELF");
+                    }
+                    Some(_) => errors.push(
+                        "initramfs init is not an executable regular file with the exact ELF bytes"
+                            .to_owned(),
+                    ),
+                    None => errors.push("initramfs does not contain canonical path 'init'".to_owned()),
+                }
+                }
+                Err(error) => errors.push(format!(
+                    "Phoenix initramfs parser rejects generated archive: {error:?}"
+                )),
+            }
+        }
+        Err(error) => errors.push(format!(
+            "could not read initramfs {}: {error}",
+            artifacts.initramfs.display()
+        )),
+    }
     if image.entry().as_usize() != INIT_ENTRY {
         errors.push(format!(
             "init entry is {:#x}, expected {INIT_ENTRY:#x}",
@@ -678,8 +794,8 @@ fn build_kernel_variant(variant: KernelVariant) -> bool {
         return false;
     };
     let artifacts = kernel_artifacts(&target, variant);
-    let init_elf = if matches!(variant, KernelVariant::LoadedInitProbe) {
-        let Some(path) = prepare_init_elf(&target) else {
+    let initramfs = if matches!(variant, KernelVariant::LoadedInitProbe) {
+        let Some(path) = prepare_initramfs(&target) else {
             return false;
         };
         Some(path)
@@ -713,8 +829,8 @@ fn build_kernel_variant(variant: KernelVariant) -> bool {
     if !features.is_empty() {
         cargo.arg("--features").arg(features.join(","));
     }
-    if let Some(init_elf) = init_elf {
-        cargo.env("PHOENIX_INIT_ELF", init_elf);
+    if let Some(initramfs) = initramfs {
+        cargo.env("PHOENIX_INITRAMFS", initramfs);
     }
     cargo.args(["--", &link_arg]);
     if !run_command(
@@ -969,20 +1085,20 @@ fn inspect_kernel_variant(variant: KernelVariant) -> bool {
 
     if variant.expects_loaded_init() {
         let init = init_artifacts(&target);
-        match (kernel_bytes.as_deref(), fs::read(&init.embedded_elf)) {
-            (Some(kernel), Ok(embedded))
-                if !embedded.is_empty()
+        match (kernel_bytes.as_deref(), fs::read(&init.initramfs)) {
+            (Some(kernel), Ok(archive))
+                if !archive.is_empty()
                     && kernel
-                        .windows(embedded.len())
-                        .any(|window| window == embedded.as_slice()) =>
+                        .windows(archive.len())
+                        .any(|window| window == archive.as_slice()) =>
             {
-                println!("ok: exact inspected init ELF is embedded in the kernel");
+                println!("ok: exact inspected initramfs is embedded in the kernel");
             }
             (Some(_), Ok(_)) => errors
-                .push("kernel does not contain the exact inspected standalone init ELF".to_owned()),
+                .push("kernel does not contain the exact inspected initramfs archive".to_owned()),
             (_, Err(error)) => errors.push(format!(
-                "could not read embedded init ELF {}: {error}",
-                init.embedded_elf.display()
+                "could not read initramfs {}: {error}",
+                init.initramfs.display()
             )),
             (None, Ok(_)) => {}
         }
@@ -995,7 +1111,7 @@ fn inspect_kernel_variant(variant: KernelVariant) -> bool {
             println!("ok: EL0 probe text, entry, and stack static layout");
         }
         if variant.expects_loaded_init() {
-            println!("ok: loaded-init image content and terminal protocol");
+            println!("ok: loaded-init archive content and terminal protocol");
         }
         true
     } else {
@@ -1094,7 +1210,23 @@ fn ci() -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{KERNEL_VIRT_BASE, parse_lsp_target, parse_nm_symbols, validate_symbol_layout};
+    use super::{
+        KERNEL_VIRT_BASE, make_initramfs, parse_lsp_target, parse_nm_symbols,
+        validate_symbol_layout,
+    };
+
+    #[test]
+    fn deterministic_initramfs_round_trips_through_kernel_parser() {
+        let first = make_initramfs(b"ELF fixture").unwrap();
+        let second = make_initramfs(b"ELF fixture").unwrap();
+        assert_eq!(first, second);
+
+        let archive = phoenix_kernel::initramfs::Initramfs::from_bytes(&first).unwrap();
+        assert_eq!(archive.len(), 1);
+        let init = archive.find("init").unwrap();
+        assert_eq!(init.data(), b"ELF fixture");
+        assert_eq!(init.permissions(), 0o755);
+    }
 
     #[test]
     fn parses_target_from_build_section() {

@@ -16,7 +16,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/arch/aarch64/boot.S");
     println!("cargo:rerun-if-changed=src/arch/aarch64/vectors.S");
     println!("cargo:rerun-if-changed=src/arch/aarch64/user_probe.S");
-    println!("cargo:rerun-if-env-changed=PHOENIX_INIT_ELF");
+    println!("cargo:rerun-if-env-changed=PHOENIX_INITRAMFS");
     println!(
         "cargo:rerun-if-changed={}",
         workspace_root.join(".git/HEAD").display()
@@ -30,12 +30,12 @@ fn main() {
     let target = env::var("TARGET").expect("Cargo must provide TARGET");
 
     if target == AARCH64_TARGET && env::var_os("CARGO_FEATURE_LOADED_INIT_PROBE").is_some() {
-        let init_elf = env::var_os("PHOENIX_INIT_ELF")
-            .expect("loaded-init-probe requires PHOENIX_INIT_ELF; use cargo xtask");
-        println!("cargo:rerun-if-changed={}", Path::new(&init_elf).display());
+        let initramfs = env::var_os("PHOENIX_INITRAMFS")
+            .expect("loaded-init-probe requires PHOENIX_INITRAMFS; use cargo xtask");
+        println!("cargo:rerun-if-changed={}", Path::new(&initramfs).display());
         println!(
-            "cargo:rustc-env=PHOENIX_INIT_ELF={}",
-            Path::new(&init_elf).display()
+            "cargo:rustc-env=PHOENIX_INITRAMFS={}",
+            Path::new(&initramfs).display()
         );
     }
 

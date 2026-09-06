@@ -35,6 +35,8 @@ use phoenix_kernel::arch::aarch64::user_page_table::{PreparedUserAddressSpace, U
 #[cfg(feature = "loaded-init-probe")]
 use phoenix_kernel::elf::ElfImage;
 #[cfg(feature = "loaded-init-probe")]
+use phoenix_kernel::initramfs::Initramfs;
+#[cfg(feature = "loaded-init-probe")]
 use phoenix_kernel::process_image::ProcessImagePlan;
 #[cfg(feature = "loaded-init-probe")]
 use phoenix_kernel::user::{DEFAULT_USER_STACK_TOP, UserAddr, UserStackLayout};
@@ -65,7 +67,7 @@ const INIT_SUCCESS_SENTINEL: &str = "PHOENIX_INIT_OK";
 const INIT_FAILURE_SENTINEL: &str = "PHOENIX_INIT_FAIL";
 
 #[cfg(feature = "loaded-init-probe")]
-static INIT_ELF: &[u8] = include_bytes!(env!("PHOENIX_INIT_ELF"));
+static INITRAMFS: &[u8] = include_bytes!(env!("PHOENIX_INITRAMFS"));
 
 /// Rust entry point reached by the AArch64 bootstrap.
 #[unsafe(no_mangle)]
@@ -182,7 +184,12 @@ fn run_loaded_init_probe(boot_argument: usize, console: &mut Console<EarlyPl011>
     const TABLE_LEAVES: usize = IMAGE_PAGES;
     const INITIAL_STACK_BYTES: usize = 512;
 
-    let image = ElfImage::parse(INIT_ELF)
+    let initramfs = Initramfs::from_bytes(INITRAMFS)
+        .unwrap_or_else(|error| panic!("embedded initramfs is invalid: {error:?}"));
+    let init_elf = initramfs
+        .executable_file("init")
+        .unwrap_or_else(|error| panic!("initramfs does not provide executable 'init': {error:?}"));
+    let image = ElfImage::parse(init_elf)
         .unwrap_or_else(|error| panic!("embedded init ELF is invalid: {error:?}"));
     let stack_top = UserAddr::new(DEFAULT_USER_STACK_TOP)
         .unwrap_or_else(|error| panic!("default user stack top is invalid: {error:?}"));

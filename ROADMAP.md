@@ -145,13 +145,15 @@ The strict ELF64/AArch64 validation layer and the combined program/guarded-stack
 Tested. Frame ownership is assigned and released transactionally, complete page zero/copy is
 enforced through an explicit populated type state, and the native argc/argv/envp/minimal-auxv stack
 is included with 16-byte alignment. The QEMU bootstrap backend can perform target writes while its
-coarse high alias remains active. Activation, initramfs ownership, and executable entry remain.
+coarse high alias remains active. A strict initramfs lookup and the complete dynamic executable
+entry path are Cross Compiled; VFS ownership, process lifecycle, and runtime evidence remain.
 
 The first standalone AArch64 `init` ELF is reproducibly linked, stripped for embedding, accepted
-by the real loader, and inspected as one RX page. A focused kernel variant now connects the real
-boot DTB and allocator through ELF/stack population, dynamically allocated user tables, the
-combined ownership gate, `eret`, stack self-validation, and native `exit(42)`. This entire path is
-Cross Compiled and ELF Inspected but remains Runtime Pending.
+by the real loader, and inspected as one RX page. A deterministic, strictly validated `newc`
+initramfs carries the exact executable under canonical path `init`. A focused kernel variant finds
+it there and connects the real boot DTB and allocator through ELF/stack population, dynamically
+allocated user tables, the combined ownership gate, `eret`, stack self-validation, and native
+`exit(42)`. This entire path is Cross Compiled and ELF Inspected but remains Runtime Pending.
 
 Observable result: Phoenix boots from a clean checkout, starts `init`, runs at least one child
 program, performs console and in-memory file I/O, and shuts down or reports test completion.
