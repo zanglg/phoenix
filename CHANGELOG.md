@@ -11,7 +11,7 @@ under `Unreleased` and the Cargo version remains 0.0.0 until the 0.1.0 release g
 - Initial Rust 2024 workspace with a single Phoenix version source.
 - Stable Rust toolchain policy, Rust 1.95 MSRV, and AArch64 bare-metal target.
 - `no_std` AArch64 kernel binary with the initial bootstrap, higher-half linker layout, BSS
-  initialization, 64 KiB boot stack, PL011 early console, panic path, and safe halt loop.
+  initialization, 512 KiB boot-construction stack, PL011 early console, panic path, and safe halt loop.
 - Build identity plus deterministic boot-success and panic sentinels.
 - ELF, raw kernel image, and linker-map generation with static layout and symbol inspection.
 - Config-file-driven rust-analyzer target selection.
@@ -57,4 +57,6 @@ under `Unreleased` and the Cargo version remains 0.0.0 until the 0.1.0 release g
 - Allocator-owned mixed-level AArch64 kernel tables, page-granular text/rodata/data permission
   overrides, a QEMU `virt` RAM direct map and PL011 device page, one-time TTBR1 publication with
   barriers/TLB invalidation, and a bounded Runtime Pending final-map probe.
+- Loaded-init integration of the retained final TTBR1 owner, explicit bootstrap-memory capability
+  revocation, ownership-checked post-switch user-frame copies, and ordered QEMU progress evidence.
 - Project, Agent, Roadmap, and kernel capability documentation.

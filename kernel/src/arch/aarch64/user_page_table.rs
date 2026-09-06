@@ -633,6 +633,11 @@ impl<const MAPPINGS: usize, const PAGES: usize, const TABLES: usize, const LEAVE
         self.image.pages().len()
     }
 
+    /// Return whether this address space uniquely owns a resident leaf frame.
+    pub fn owns_frame(&self, frame: PageFrame) -> bool {
+        self.image.pages().any(|page| page.frame() == frame)
+    }
+
     /// Copy a fully checked range from resident user frames into a kernel buffer.
     pub fn copy_from_user<M: UserMemoryReader>(
         &self,
@@ -658,8 +663,8 @@ impl<const MAPPINGS: usize, const PAGES: usize, const TABLES: usize, const LEAVE
     /// # Safety
     ///
     /// Call only on the single boot CPU while ASID zero is private. The
-    /// bootstrap physical-memory mapping used to construct the tables must
-    /// remain coherent, `VBAR_EL1` and an EL1 stack must be active, and no
+    /// physical mapping used to construct and access the tables must remain
+    /// coherent, `VBAR_EL1` and an EL1 stack must be active, and no
     /// caller may retain aliases to owned data or table frames. The address
     /// space must be stored for the rest of the boot before this call.
     #[cfg(target_arch = "aarch64")]

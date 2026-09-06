@@ -43,8 +43,10 @@ Only a complete pass yields `MaterializedUserPageTables`. A backend failure iden
 intermediate link, or final leaf work and returns the allocated ownership for a clean retry. An
 unpublished materialized hierarchy can be released transactionally.
 
-The QEMU `virt` bootstrap now supplies one checked target implementation of this backend while the
-temporary TTBR1 RAM block remains active. It is not the final direct map and is Runtime Pending.
+The QEMU `virt` bootstrap supplies one checked target implementation of this backend while the
+temporary TTBR1 RAM block remains active. The loaded-init path finishes all user-table writes,
+revokes that capability, and then installs a separately owned final direct map before EL0 entry.
+Both target phases remain Runtime Pending.
 
 ## Combined ownership before activation
 
@@ -65,11 +67,12 @@ stage-1 invalidation with `ISB`, `TLBI VMALLE1`, `DSB ISH`, and `ISB`, loads `SP
 masked EL0t state, then executes `eret`. The register primitive is crate-private so other modules
 cannot bypass the ownership gate.
 
-The loaded-init path places the owner and remaining allocator state in a one-time static runtime
-slot before activation. The `'static` activation borrow prevents unpublished release while active,
-and the same owner authorizes physical-frame-based user reads and writes during synchronous
-syscalls. The current terminal `exit` path halts rather than reclaiming it. Retirement and
-reclamation require a process owner and ASID-aware switch path.
+The loaded-init path places the owner, final kernel tables, and remaining allocator state in a
+one-time static runtime slot before activation. The `'static` activation borrow prevents
+unpublished release while active, and the same owner authorizes physical-frame-based user reads
+and writes through an ownership-checked final-direct-map adapter during synchronous syscalls. The
+current terminal `exit` path halts rather than reclaiming it. Retirement and reclamation require a
+process owner and ASID-aware switch path.
 
 ## Invariants
 
@@ -99,7 +102,7 @@ unverified.
 
 ## TODO
 
-- replace the bootstrap implementation with the final physical direct map;
+- replace the probe-local final-direct-map adapter with a process/VM-owned mapped-frame API;
 - assign and recycle nonzero ASIDs with generation handling;
 - add ASID-aware retirement and reclamation after process ownership exists;
 - define break-before-make for changes to published descriptors;
@@ -109,7 +112,7 @@ unverified.
 
 ## Skipped work
 
-This module does not build the final TTBR1 kernel hierarchy, expose a permanent physical direct
-map, modify live tables, handle multiple CPUs, shoot down remote TLBs, implement demand paging,
+This module does not itself build the final TTBR1 kernel hierarchy, expose a general physical
+mapping API, modify live tables, handle multiple CPUs, shoot down remote TLBs, implement demand paging,
 copy-on-write, shared memory, huge pages, ASLR, or reclaim leaf data. The static `el0-probe` keeps
 its deliberately separate linked tables until the production address-space owner is complete.

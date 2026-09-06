@@ -34,11 +34,17 @@ At boot, the focused kernel variant:
    stack pages;
 8. allocates, clears, and materializes the required lower-half L1/L2/L3 translation tables;
 9. combines populated leaf ownership and table ownership into one prepared address space;
-10. prints the planned entry, stack pointer, page count, table root, and `PHOENIX_INIT_ENTER`;
-11. publishes TTBR0, invalidates ASID-zero translations, loads EL0 registers, and executes `eret`;
-12. validates and copies the init message from owned physical frames for bounded stdout `write`;
-13. opens `etc/motd`, copies its bytes into a writable stack buffer, checks EOF, and closes it;
-14. writes those copied bytes and accepts native `exit(42)` as `PHOENIX_INIT_OK` only after output;
+10. allocates and materializes the final permission-separated TTBR1 hierarchy from the same
+    reservation-aware allocator;
+11. drops the bootstrap-memory capability, then permanently stores the user owner, kernel-table
+    owner, file table, and remaining allocator before either translation root is published;
+12. emits `PHOENIX_INIT_KERNEL_MAP_ENTER`, publishes TTBR1, and emits
+    `PHOENIX_INIT_KERNEL_MAP_OK` only after execution continues through the final map;
+13. prints the planned entry, stack pointer, page count, table root, and `PHOENIX_INIT_ENTER`;
+14. publishes TTBR0, invalidates ASID-zero translations, loads EL0 registers, and executes `eret`;
+15. validates and copies the init message from owned physical frames for bounded stdout `write`;
+16. opens `etc/motd`, copies its bytes into a writable stack buffer, checks EOF, and closes it;
+17. writes those copied bytes and accepts native `exit(42)` as `PHOENIX_INIT_OK` only after output;
     any other terminal state emits `PHOENIX_INIT_FAIL`.
 
 The user program independently checks its aligned stack pointer, argc, argv/envp pointers and
@@ -54,7 +60,11 @@ the success status.
 - the archive is completely validated before `init` is selected, and its ELF plus initial-stack
   bytes remain borrowed until every destination page has been cleared and populated;
 - no user-table root is published before all leaf bytes and all table descriptors are complete;
-- a one-time static runtime retains the address-space owner and remaining allocator state forever;
+- a one-time static runtime retains the address-space owner, final kernel tables, file table, and
+  remaining allocator state forever;
+- the bootstrap-memory capability has an explicit destructor and is revoked before TTBR1 changes;
+- final kernel tables cover every allocator frame, but active user-copy backends additionally
+  reject any frame not owned by the retained user address space before an unsafe direct-map copy;
 - the activation API requires a `'static` borrow of that complete owner;
 - executable pages are user RX and never writable; stack pages are user RW and never executable;
 - the guard page has no mapping;
@@ -71,9 +81,14 @@ the success status.
 ## Fixed capacities
 
 This probe deliberately uses compile-time bounds: 16 normalized memory ranges, two logical image
-mappings, five resident image pages, five table pages, five leaves, and 512 bytes for initial stack
-construction. Capacity exhaustion is a reported boot panic, never truncation. These are probe
-bounds, not stable process limits.
+mappings, five resident image pages, five user-table pages, five user leaves, eight kernel-table
+pages, 1024 kernel leaves, and 512 bytes for initial stack construction. Capacity exhaustion is a
+reported boot panic, never truncation. These are probe bounds, not stable process limits.
+
+The linked boot-construction stack is separately reserved at 512 KiB. Static disassembly of the
+current debug loaded-init artifact shows a `0x4cd20`-byte frame for the construction path, leaving
+more than 200 KiB for callers and interrupt-free bootstrap execution. This observation is not yet
+an automated upper-bound check and must be repeated after material changes to the plan types.
 
 ## Validation
 
@@ -82,25 +97,27 @@ stack, allocator, dynamic table topology/materialization, combined ownership, bo
 validation, bidirectional cross-page user copying, file-table transactions, syscall decoding, and
 QEMU terminal-output classification.
 Target compilation validates the complete concrete composition, `include_bytes` artifact handoff,
-target memory backend, activation assembly, and exception dispatcher. Static inspection proves
-that the built kernel contains the exact initramfs whose `init` entry was accepted by the loader.
+bootstrap and ownership-checked final direct-map backends, both activation sequences, and the
+exception dispatcher. Static inspection proves that the built kernel contains the exact initramfs
+whose `init` entry was accepted by the loader plus every required translation progress sentinel.
 
-Runtime validation is `RUN-INIT-001`. Success requires `cargo xtask test-init` to observe both exact
-userspace lines followed by `PHOENIX_INIT_OK`; the preceding boot and entry markers cannot satisfy
-it. A success marker without their exact ordered sequence is a protocol failure. Panic, exception,
-`PHOENIX_INIT_FAIL`, early QEMU exit, timeout, excessive output, and stream errors all fail.
+Runtime validation is `RUN-INIT-001`. Success requires `cargo xtask test-init` to observe, in order,
+the final-map enter marker, post-switch marker, EL0 enter marker, both exact userspace lines, and
+`PHOENIX_INIT_OK`. A success marker without that exact ordered sequence is a protocol failure.
+Panic, exception, `PHOENIX_INIT_FAIL`, early QEMU exit, timeout, excessive output, and stream
+errors all fail.
 
 ## TODO
 
 - run `cargo xtask test-init` on the pinned QEMU environment and retain the full evidence;
 - verify TTBR0, ELR, SP, SPSR, descriptor permissions, and the guard fault under GDB;
 - introduce explicit instruction-cache synchronization before enabling caches;
-- replace the temporary coarse TTBR1 RAM alias with a final permission-separated kernel map and
-  documented physical direct map;
+- runtime-validate the integrated final TTBR1 switch and its ownership-checked user copies;
 - move terminal exit into a process owner that can retire the ASID and reclaim every frame;
 - accept a checked initramfs supplied independently by firmware or a bootloader instead of
   compile-time embedding;
 - replace fixed probe capacities with accounted process limits where dynamic scale is needed;
+- automate a static early-stack footprint bound before reducing the 512 KiB construction stack;
 - replace bounded probe I/O with process-owned descriptors and general fault policy.
 
 ## Skipped work

@@ -11,7 +11,7 @@ narrow support claim:
 - the Rust workspace follows stable Rust and declares Rust 1.95 as its minimum version;
 - the `no_std` kernel links as an AArch64 ELF and can be converted to a raw image;
 - static inspection verifies its machine type, entry, load addresses, page-table alignment,
-  BSS bounds, and 64 KiB boot stack;
+  BSS bounds, and 512 KiB boot-construction stack;
 - rust-analyzer can use the configured kernel target from an x86_64 development host;
 - host-side unit tests and validation are available through `cargo xtask`;
 - a bounded QEMU runner and boot-test harness are implemented and host tested;
@@ -21,7 +21,8 @@ narrow support claim:
 - a separately linked one-page AArch64 `init` ELF is accepted by the Phoenix loader and inspected;
 - a deterministic, strictly parsed `newc` initramfs carries that exact executable at `init`;
 - an opt-in loaded-init image finds `init` in the archive and connects the real DTB allocator, ELF
-  population, native stack, dynamic user tables, ownership-gated `eret`, and terminal `exit(42)`;
+  population, native stack, final TTBR1, dynamic user tables, ownership-gated `eret`, and terminal
+  `exit(42)`;
 - checked cross-page user copies and bounded `open`/`read`/`write`/`close` probes let init read
   `etc/motd` from initramfs into its stack and emit verified output without raw pointer dereferences;
 - lower-half AArch64 user-table topology and descriptor materialization are host tested;

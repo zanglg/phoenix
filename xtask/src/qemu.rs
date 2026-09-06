@@ -27,6 +27,9 @@ pub const EL0_SUCCESS_SENTINEL: &str = "PHOENIX_EL0_OK";
 pub const EL0_FAILURE_SENTINEL: &str = "PHOENIX_EL0_FAIL";
 pub const INIT_SUCCESS_SENTINEL: &str = "PHOENIX_INIT_OK";
 pub const INIT_FAILURE_SENTINEL: &str = "PHOENIX_INIT_FAIL";
+pub const INIT_KERNEL_MAP_ENTER_SENTINEL: &str = "PHOENIX_INIT_KERNEL_MAP_ENTER";
+pub const INIT_KERNEL_MAP_SUCCESS_SENTINEL: &str = "PHOENIX_INIT_KERNEL_MAP_OK";
+pub const INIT_ENTER_SENTINEL: &str = "PHOENIX_INIT_ENTER";
 pub const INIT_USER_OUTPUT: &str =
     "Phoenix init: hello from EL0\nPhoenix initramfs: file I/O works\n";
 
@@ -123,11 +126,16 @@ impl ExpectedOutput {
         }
     }
 
-    const fn required_output(self) -> Option<&'static str> {
+    const fn required_output(self) -> &'static [&'static str] {
         match self {
-            Self::Init => Some(INIT_USER_OUTPUT),
-            Self::KernelMap => Some(KERNEL_MAP_ENTER_SENTINEL),
-            Self::Boot | Self::Memory | Self::El0 => None,
+            Self::KernelMap => &[KERNEL_MAP_ENTER_SENTINEL],
+            Self::Init => &[
+                INIT_KERNEL_MAP_ENTER_SENTINEL,
+                INIT_KERNEL_MAP_SUCCESS_SENTINEL,
+                INIT_ENTER_SENTINEL,
+                INIT_USER_OUTPUT,
+            ],
+            Self::Boot | Self::Memory | Self::El0 => &[],
         }
     }
 }
@@ -287,9 +295,7 @@ fn test_kernel(image: &Path, log: &Path, workspace_root: &Path, expected: Expect
             eprintln!(
                 "error: observed {} without required output {:?}",
                 expected.sentinel(),
-                expected
-                    .required_output()
-                    .expect("protocol failure requires prerequisite output")
+                expected.required_output()
             );
             false
         }
@@ -467,10 +473,8 @@ fn drain_output(receiver: &Receiver<StreamEvent>, output: &mut Vec<u8>) {
 
 fn classify_output(output: &[u8], expected: ExpectedOutput) -> Option<TerminalOutput> {
     let terminal_success = find_bytes(output, expected.sentinel().as_bytes());
-    let prerequisite_present = expected.required_output().is_none_or(|required| {
-        terminal_success
-            .is_some_and(|terminal| find_bytes(&output[..terminal], required.as_bytes()).is_some())
-    });
+    let prerequisite_present = terminal_success
+        .is_some_and(|terminal| contains_ordered(&output[..terminal], expected.required_output()));
     let success = terminal_success.filter(|_| prerequisite_present);
     let protocol_failure = terminal_success.filter(|_| !prerequisite_present);
     let failure = expected
@@ -489,6 +493,16 @@ fn classify_output(output: &[u8], expected: ExpectedOutput) -> Option<TerminalOu
     .flatten()
     .min_by_key(|(position, _)| *position)
     .map(|(_, terminal)| terminal)
+}
+
+fn contains_ordered(mut output: &[u8], required: &[&str]) -> bool {
+    for fragment in required {
+        let Some(position) = find_bytes(output, fragment.as_bytes()) else {
+            return false;
+        };
+        output = &output[position + fragment.len()..];
+    }
+    true
 }
 
 fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -516,7 +530,8 @@ mod tests {
 
     use super::{
         BOOT_SUCCESS_SENTINEL, CPU, EL0_FAILURE_SENTINEL, EL0_SUCCESS_SENTINEL, EXCEPTION_SENTINEL,
-        ExpectedOutput, INIT_FAILURE_SENTINEL, INIT_SUCCESS_SENTINEL, INIT_USER_OUTPUT,
+        ExpectedOutput, INIT_ENTER_SENTINEL, INIT_FAILURE_SENTINEL, INIT_KERNEL_MAP_ENTER_SENTINEL,
+        INIT_KERNEL_MAP_SUCCESS_SENTINEL, INIT_SUCCESS_SENTINEL, INIT_USER_OUTPUT,
         KERNEL_MAP_ENTER_SENTINEL, KERNEL_MAP_SUCCESS_SENTINEL, MACHINE, MEMORY_SUCCESS_SENTINEL,
         PANIC_SENTINEL, QemuCommand, TerminalOutput, classify_output, has_named_item, shell_quote,
     };
@@ -680,7 +695,27 @@ mod tests {
                 format!("{INIT_USER_OUTPUT}{INIT_SUCCESS_SENTINEL}").as_bytes(),
                 ExpectedOutput::Init
             ),
+            Some(TerminalOutput::ProtocolFailure)
+        );
+        assert_eq!(
+            classify_output(
+                format!(
+                    "{INIT_KERNEL_MAP_ENTER_SENTINEL}\n{INIT_KERNEL_MAP_SUCCESS_SENTINEL}\n{INIT_ENTER_SENTINEL}\n{INIT_USER_OUTPUT}{INIT_SUCCESS_SENTINEL}"
+                )
+                .as_bytes(),
+                ExpectedOutput::Init
+            ),
             Some(TerminalOutput::Success)
+        );
+        assert_eq!(
+            classify_output(
+                format!(
+                    "{INIT_KERNEL_MAP_SUCCESS_SENTINEL}\n{INIT_KERNEL_MAP_ENTER_SENTINEL}\n{INIT_ENTER_SENTINEL}\n{INIT_USER_OUTPUT}{INIT_SUCCESS_SENTINEL}"
+                )
+                .as_bytes(),
+                ExpectedOutput::Init
+            ),
+            Some(TerminalOutput::ProtocolFailure)
         );
         assert_eq!(
             classify_output(

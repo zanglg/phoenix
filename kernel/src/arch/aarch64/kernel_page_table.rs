@@ -137,6 +137,21 @@ impl<const TABLES: usize, const MAPPINGS: usize> KernelPageTablePlan<TABLES, MAP
         Ok(())
     }
 
+    /// Consume this unpublished plan and add one mapping without a rollback copy.
+    ///
+    /// This is intended for single-owner boot builders that discard the whole
+    /// plan on failure and need to keep early-stack usage bounded.
+    pub fn with_mapping(
+        mut self,
+        virtual_start: VirtAddr,
+        physical_start: PhysAddr,
+        level: TranslationLevel,
+        attributes: MappingAttributes,
+    ) -> Result<Self, KernelPageTableError> {
+        self.map_inner(virtual_start, physical_start, level, attributes)?;
+        Ok(self)
+    }
+
     /// Map one page-aligned byte range using the largest legal leaf at each address.
     ///
     /// The complete range is committed only when every mapping and intermediate
@@ -156,6 +171,18 @@ impl<const TABLES: usize, const MAPPINGS: usize> KernelPageTablePlan<TABLES, MAP
             return Err(KernelPageTableError::MisalignedLength { length });
         }
         let mut candidate = *self;
+        candidate.map_range_inner(virtual_start, physical_start, length, attributes)?;
+        *self = candidate;
+        Ok(())
+    }
+
+    fn map_range_inner(
+        &mut self,
+        virtual_start: VirtAddr,
+        physical_start: PhysAddr,
+        length: usize,
+        attributes: MappingAttributes,
+    ) -> Result<(), KernelPageTableError> {
         let mut virtual_address = virtual_start.as_usize();
         let mut physical_address = physical_start.as_usize();
         let mut remaining = length;
@@ -173,7 +200,7 @@ impl<const TABLES: usize, const MAPPINGS: usize> KernelPageTablePlan<TABLES, MAP
                     && physical_address.is_multiple_of(size)
             })
             .expect("page-aligned range always permits an L3 leaf");
-            candidate.map_inner(
+            self.map_inner(
                 VirtAddr::new(virtual_address),
                 PhysAddr::new(physical_address),
                 level,
@@ -188,7 +215,6 @@ impl<const TABLES: usize, const MAPPINGS: usize> KernelPageTablePlan<TABLES, MAP
                 .ok_or(KernelPageTableError::Paging(PagingError::AddressOverflow))?;
             remaining -= size;
         }
-        *self = candidate;
         Ok(())
     }
 
@@ -214,6 +240,40 @@ impl<const TABLES: usize, const MAPPINGS: usize> KernelPageTablePlan<TABLES, MAP
         }
 
         let mut candidate = *self;
+        candidate.map_direct_frames_inner(frames, virtual_offset, default_attributes, overrides)?;
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Consume an unpublished plan and append a direct map without a rollback copy.
+    ///
+    /// The caller receives no partially changed plan on failure, making this
+    /// form appropriate for the large fixed-capacity early-boot builder.
+    pub fn with_direct_frames(
+        mut self,
+        frames: FrameRange,
+        virtual_offset: usize,
+        default_attributes: MappingAttributes,
+        overrides: &[DirectMapOverride],
+    ) -> Result<Self, KernelPageTableError> {
+        if default_attributes.access().user_accessible() {
+            return Err(KernelPageTableError::UserAccessibleMapping);
+        }
+        validate_overrides(overrides)?;
+        self.map_direct_frames_inner(frames, virtual_offset, default_attributes, overrides)?;
+        Ok(self)
+    }
+
+    fn map_direct_frames_inner(
+        &mut self,
+        frames: FrameRange,
+        virtual_offset: usize,
+        default_attributes: MappingAttributes,
+        overrides: &[DirectMapOverride],
+    ) -> Result<(), KernelPageTableError> {
+        if frames.is_empty() {
+            return Ok(());
+        }
         let mut current = frames.start_frame_number();
         let end = frames.end_frame_number();
         while current < end {
@@ -244,7 +304,7 @@ impl<const TABLES: usize, const MAPPINGS: usize> KernelPageTablePlan<TABLES, MAP
             let length = frame_count
                 .checked_mul(PAGE_SIZE)
                 .ok_or(KernelPageTableError::Paging(PagingError::AddressOverflow))?;
-            candidate.map_range(
+            self.map_range_inner(
                 VirtAddr::new(virtual_start),
                 PhysAddr::new(physical_start),
                 length,
@@ -252,7 +312,6 @@ impl<const TABLES: usize, const MAPPINGS: usize> KernelPageTablePlan<TABLES, MAP
             )?;
             current = boundary;
         }
-        *self = candidate;
         Ok(())
     }
 
@@ -467,7 +526,7 @@ impl<const TABLES: usize, const MAPPINGS: usize> AllocatedKernelPageTables<TABLE
         self,
         memory: &mut M,
     ) -> Result<
-        MaterializedKernelPageTables<TABLES, MAPPINGS>,
+        MaterializedKernelPageTables<TABLES>,
         KernelTableMaterializationError<M::Error, TABLES, MAPPINGS>,
     > {
         for table_index in 0..self.plan.table_count {
@@ -538,7 +597,17 @@ impl<const TABLES: usize, const MAPPINGS: usize> AllocatedKernelPageTables<TABLE
             }
         }
 
-        Ok(MaterializedKernelPageTables { tables: self })
+        let mut tables = [None; TABLES];
+        for (index, slot) in tables[..self.plan.table_count].iter_mut().enumerate() {
+            *slot = Some(AllocatedKernelTranslationTable {
+                role: self.plan.tables[index].expect("active kernel table role slot"),
+                frame: self.frames[index].expect("allocated kernel table frame slot"),
+            });
+        }
+        Ok(MaterializedKernelPageTables {
+            tables,
+            table_count: self.plan.table_count,
+        })
     }
 
     /// Release every unpublished table frame transactionally.
@@ -568,14 +637,17 @@ impl<const TABLES: usize, const MAPPINGS: usize> AllocatedKernelPageTables<TABLE
 
 /// Completely materialized but unpublished final kernel hierarchy.
 #[derive(Debug, Eq, PartialEq)]
-pub struct MaterializedKernelPageTables<const TABLES: usize, const MAPPINGS: usize> {
-    tables: AllocatedKernelPageTables<TABLES, MAPPINGS>,
+pub struct MaterializedKernelPageTables<const TABLES: usize> {
+    tables: [Option<AllocatedKernelTranslationTable>; TABLES],
+    table_count: usize,
 }
 
-impl<const TABLES: usize, const MAPPINGS: usize> MaterializedKernelPageTables<TABLES, MAPPINGS> {
+impl<const TABLES: usize> MaterializedKernelPageTables<TABLES> {
     /// Return the physical L1 root intended for `TTBR1_EL1`.
     pub fn root_frame(&self) -> PageFrame {
-        self.tables.frame_for(KernelTranslationTableRole::RootL1)
+        self.tables[0]
+            .expect("materialized kernel root table slot")
+            .frame()
     }
 
     /// Return all owned table frames for inspection and accounting.
@@ -583,12 +655,9 @@ impl<const TABLES: usize, const MAPPINGS: usize> MaterializedKernelPageTables<TA
         &self,
     ) -> impl ExactSizeIterator<Item = AllocatedKernelTranslationTable> + DoubleEndedIterator + '_
     {
-        self.tables.tables()
-    }
-
-    /// Return the exact final mixed-level mappings.
-    pub fn mappings(&self) -> &[PlannedMapping] {
-        self.tables.plan.mappings()
+        self.tables[..self.table_count]
+            .iter()
+            .map(|table| table.expect("active materialized kernel table slot"))
     }
 
     /// Replace `TTBR1_EL1` with this permanently retained hierarchy.
@@ -630,10 +699,14 @@ impl<const TABLES: usize, const MAPPINGS: usize> MaterializedKernelPageTables<TA
         self,
         allocator: &mut FrameAllocator<MEMORY_RANGES>,
     ) -> Result<(), (Self, AllocationError)> {
-        match self.tables.release(allocator) {
-            Ok(()) => Ok(()),
-            Err((tables, error)) => Err((Self { tables }, error)),
+        let mut candidate = *allocator;
+        for table in self.tables[..self.table_count].iter().rev().flatten() {
+            if let Err(error) = candidate.deallocate(table.frame()) {
+                return Err((self, error));
+            }
         }
+        *allocator = candidate;
+        Ok(())
     }
 }
 
@@ -649,6 +722,7 @@ mod tests {
     use super::{
         AllocatedKernelTranslationTable, DirectMapOverride, KernelPageTableError,
         KernelPageTablePlan, KernelTableMaterializationStage, KernelTranslationTableRole,
+        MaterializedKernelPageTables,
     };
     use crate::arch::aarch64::paging::{
         Descriptor, MappingAttributes, PagingError, TranslationLevel,
@@ -659,6 +733,12 @@ mod tests {
     };
 
     const OFFSET: usize = 0xffff_ff80_0000_0000;
+
+    #[test]
+    fn final_owner_drops_large_planning_metadata_before_publication() {
+        assert!(core::mem::size_of::<KernelPageTablePlan<8, 1024>>() < 48 * 1024);
+        assert!(core::mem::size_of::<MaterializedKernelPageTables<8>>() < 512);
+    }
 
     #[test]
     fn greedily_decomposes_ranges_at_exact_boundaries() {

@@ -31,7 +31,8 @@ build identity and deterministic success sentinel through PL011, then halt safel
 Completed without an emulator:
 
 - bootstrap assembly is integrated through the AArch64 kernel binary;
-- the higher-half linker layout, low physical load address, BSS, and 64 KiB boot stack are fixed;
+- the higher-half linker layout, low physical load address, BSS, and 512 KiB boot-construction
+  stack are fixed;
 - early PL011 output, panic output, build identity, and deterministic sentinels are implemented;
 - the ELF, raw image, linker map, and required symbols are checked automatically.
 
@@ -158,10 +159,11 @@ The first standalone AArch64 `init` ELF is reproducibly linked, stripped for emb
 by the real loader, and inspected as one RX page. A deterministic, strictly validated `newc`
 initramfs carries the exact executable under canonical path `init`. A focused kernel variant finds
 it there and connects the real boot DTB and allocator through ELF/stack population, dynamically
-allocated user tables, the combined ownership gate, `eret`, stack self-validation, and bounded
-`write`, `open`, `read`, `close`, and `exit` calls. Init reads an exact file from its initramfs into
-writable user memory and verifies EOF before successful exit. This entire path is Cross Compiled
-and ELF Inspected but remains Runtime Pending.
+allocated user tables, a retained final TTBR1 hierarchy, the combined ownership gate, `eret`,
+stack self-validation, and bounded `write`, `open`, `read`, `close`, and `exit` calls. Init reads an
+exact file from its initramfs into writable user memory and verifies EOF before successful exit.
+The harness requires ordered proof that the final kernel map was entered before EL0. This entire
+path is Cross Compiled and ELF Inspected but remains Runtime Pending.
 
 Observable result: Phoenix boots from a clean checkout, starts `init`, runs at least one child
 program, performs console and in-memory file I/O, and shuts down or reports test completion.

@@ -2,9 +2,9 @@
 
 This document describes the architecture-neutral bridge from a validated executable to owned
 physical pages. The implementation is Host Tested and Cross Compiled. A focused kernel variant
-connects the Runtime Pending AArch64 bootstrap backend to a real ELF selected from the embedded
-initramfs, native stack, dynamic tables, and ownership-gated activation. It has not executed on the
-target.
+connects the Runtime Pending AArch64 bootstrap loader and final direct map to a real ELF selected
+from the embedded initramfs, native stack, dynamic tables, and ownership-gated activation. It has
+not executed on the target.
 
 ## Current implementation
 
@@ -49,7 +49,8 @@ stale allocator from causing partial reclamation or an untracked leak.
 
 `ProcessImageMemory` is the narrow backend needed to clear a private frame and copy a checked byte
 slice into it. Host tests use ordinary owned byte arrays. QEMU `virt` has a Cross Compiled,
-Runtime Pending implementation using the temporary higher-half bootstrap RAM alias.
+Runtime Pending implementation using the temporary higher-half bootstrap RAM alias while loading;
+the completed owner is later accessed through the final direct map.
 
 `AllocatedProcessImage::populate` clears every complete page before copying its initialized ELF
 prefix. It returns `PopulatedProcessImage` only after every operation succeeds. A backend failure
@@ -98,7 +99,8 @@ artifact.
 
 ## TODO
 
-- replace the bootstrap memory backend with a final documented physical direct map;
+- replace the bootstrap-only population phase with a general mapped-frame API after final-map
+  activation can occur earlier in boot;
 - make instruction-cache maintenance explicit before newly copied executable bytes can run;
 - define when a complete address space becomes visible through an ASID and `TTBR0_EL1`;
 - execute the reproducibly built embedded ELF through this path and validate it in QEMU;
@@ -106,8 +108,8 @@ artifact.
 
 ## Skipped work
 
-This module does not implement physical-memory access, a permanent direct map, hardware page-table
-mutation, TLB invalidation, general fault recovery, process identifiers, scheduling, VFS lookup,
+This module does not itself implement physical-memory access, a permanent direct map, hardware
+page-table mutation, TLB invalidation, general fault recovery, process identifiers, scheduling, VFS lookup,
 initramfs, stack growth, demand paging, copy-on-write, ASLR, dynamic linking, TLS, or signals. The
 static `el0-probe` remains a separate, smaller conformance bridge for isolating failures in this
 larger dynamic path.

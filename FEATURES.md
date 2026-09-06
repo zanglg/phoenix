@@ -33,6 +33,7 @@ _No unclassified entries._
 | BUILD-004 | Kernel artifact and image packaging | Implemented | 0.1.0 | ELF, raw image, linker map, and static inspection |
 | BUILD-005 | Reproducible release artifacts and provenance | Deferred | Unscheduled | Revisit before public releases |
 | BUILD-006 | Explicit host/static/runtime validation states | Implemented | 0.1.0 | Runtime debt is recorded separately, never implied by compilation |
+| BUILD-007 | Early-stack footprint regression check | Captured | Unscheduled | The loaded-init debug frame is currently inspected manually; automate a build-time bound before shrinking the temporary 512 KiB stack |
 
 ## Boot and firmware
 
@@ -64,7 +65,7 @@ _No unclassified entries._
 | MM-002 | Virtual memory and kernel address space | In Progress | 0.1.0 | Final mixed-level TTBR1 planning, allocation, materialization, permission separation, and publication are built; QEMU evidence, low-alias retirement, heap, and guarded stacks remain |
 | MM-003 | Kernel heap and fallible allocation policy | Planned | 0.1.0 | Define allocation-failure behavior |
 | MM-004 | Kernel stacks and guard pages | Planned | 0.1.0 | Include exception-context requirements |
-| MM-005 | User address spaces and safe user copies | In Progress | 0.1.0 | Plans/materialization/ownership and bidirectional physical-frame user copies are Host Tested; retained ASID-zero activation is Cross Compiled; general fault recovery and runtime evidence remain |
+| MM-005 | User address spaces and safe user copies | In Progress | 0.1.0 | Plans/materialization/ownership and bidirectional copies are Host Tested; loaded init uses an ownership-checked final-direct-map adapter; general fault recovery, lifecycle, and runtime evidence remain |
 | MM-006 | Shared memory and copy-on-write | Deferred | Unscheduled | Requires process VM |
 | MM-007 | Huge pages and block mappings | Captured | Unscheduled | Revisit after basic paging |
 | MM-008 | DMA, cache coherence, and IOMMU policy | Deferred | Unscheduled | Required for robust device support |
@@ -139,7 +140,7 @@ _No unclassified entries._
 | OBS-001 | Structured logging and runtime ring buffer | Planned | 0.1.0 | Builds on early console |
 | OBS-002 | Panic register dump, symbols, and stack traces | In Progress | 0.1.0 | Fatal exception path reports vector, PC, status, ESR, and FAR; symbolization and stack traces remain |
 | OBS-003 | Tracing and profiling | Captured | Unscheduled | Avoid committing to a format early |
-| TEST-001 | QEMU boot smoke and focused probes with timeout and sentinels | In Progress | 0.1.0 | Boot, memory, final TTBR1, static EL0, and loaded init/file-I/O harnesses are implemented; QEMU execution remains Runtime Pending |
+| TEST-001 | QEMU boot smoke and focused probes with timeout and sentinels | In Progress | 0.1.0 | Boot, memory, final TTBR1, static EL0, and loaded-init/file-I/O harnesses are implemented; loaded init requires ordered final-map, EL0, output, and exit evidence; QEMU execution remains Runtime Pending |
 | TEST-002 | Host-side unit and property tests | Implemented | 0.1.0 | Console, build identity, config, and ELF-layout logic |
 | TEST-003 | Fuzzing and fault injection | Deferred | Unscheduled | Add with parsers and failure paths |
 | HARD-001 | Unsafe-code review and invariant audit | Deferred | Continuous | Applies as unsafe code appears |

@@ -35,7 +35,9 @@ remain disabled or deferred. The default image retains the coarse mapping; the o
 linked EL1 exception vector table before emitting its first console line, but keeps asynchronous
 exceptions masked.
 
-The linker reserves a zeroed BSS followed by a 64 KiB, 16-byte-aligned boot stack. Rust receives
+The linker reserves a zeroed BSS followed by a 512 KiB, 16-byte-aligned boot-construction stack.
+The larger temporary stack covers the statically inspected debug-build footprint of allocation-free
+page-table and process-image planning; it is not the future per-thread stack policy. Rust receives
 the higher-half stack address. QEMU `virt` PL011 is physically at `0x09000000`, but Rust accesses
 its temporary higher-half device alias at `0xffffff8009000000`; diagnostics therefore survive an
 opt-in replacement of TTBR0.

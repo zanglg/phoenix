@@ -99,7 +99,8 @@ terminal sentinel determines the result:
 - `PHOENIX_EL0_FAIL`: fail `test-el0` immediately;
 - `PHOENIX_INIT_OK`: pass for `test-init` only;
 - `PHOENIX_INIT_FAIL`: fail `test-init` immediately;
-- `PHOENIX_INIT_OK` without the earlier exact ordered greeting and `etc/motd` output: protocol fail;
+- `PHOENIX_INIT_OK` without the earlier ordered final-map enter/success markers, EL0 enter marker,
+  exact greeting, and `etc/motd` output: protocol fail;
 - QEMU exit before the required terminal sentinel: fail;
 - timeout: fail and terminate QEMU;
 - more than 1 MiB without a sentinel: fail and terminate QEMU;

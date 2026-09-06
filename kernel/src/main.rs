@@ -49,15 +49,16 @@ use phoenix_kernel::platform::aarch64::qemu_virt::{
 };
 #[cfg(feature = "boot-memory-probe")]
 use phoenix_kernel::process_image::ProcessImageMemory;
-#[cfg(all(
-    feature = "kernel-map-probe",
-    not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+#[cfg(any(
+    feature = "loaded-init-probe",
+    all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    )
 ))]
 use phoenix_kernel::{
     arch::aarch64::kernel_page_table::MaterializedKernelPageTables,
-    platform::aarch64::qemu_virt::{
-        FINAL_KERNEL_MAPPING_CAPACITY, FINAL_KERNEL_TABLE_CAPACITY, final_kernel_page_table_plan,
-    },
+    platform::aarch64::qemu_virt::{FINAL_KERNEL_TABLE_CAPACITY, final_kernel_page_table_plan},
 };
 
 #[cfg(feature = "loaded-init-probe")]
@@ -81,9 +82,15 @@ use phoenix_kernel::file::{FileError, ReadOnlyFileTable};
 #[cfg(feature = "loaded-init-probe")]
 use phoenix_kernel::initramfs::Initramfs;
 #[cfg(feature = "loaded-init-probe")]
+use phoenix_kernel::platform::aarch64::qemu_virt::{
+    BootstrapMemoryError, read_direct_mapped_frame, write_direct_mapped_frame,
+};
+#[cfg(feature = "loaded-init-probe")]
 use phoenix_kernel::process_image::ProcessImagePlan;
 #[cfg(feature = "loaded-init-probe")]
 use phoenix_kernel::user::{DEFAULT_USER_STACK_TOP, UserAddr, UserStackLayout};
+#[cfg(feature = "loaded-init-probe")]
+use phoenix_kernel::user_copy::{UserMemoryReader, UserMemoryWriter};
 #[cfg(feature = "loaded-init-probe")]
 use phoenix_kernel::user_stack::InitialStackImage;
 
@@ -115,6 +122,10 @@ const EL0_SUCCESS_SENTINEL: &str = "PHOENIX_EL0_OK";
 const EL0_FAILURE_SENTINEL: &str = "PHOENIX_EL0_FAIL";
 #[cfg(feature = "loaded-init-probe")]
 const INIT_ENTER_SENTINEL: &str = "PHOENIX_INIT_ENTER";
+#[cfg(feature = "loaded-init-probe")]
+const INIT_KERNEL_MAP_ENTER_SENTINEL: &str = "PHOENIX_INIT_KERNEL_MAP_ENTER";
+#[cfg(feature = "loaded-init-probe")]
+const INIT_KERNEL_MAP_SENTINEL: &str = "PHOENIX_INIT_KERNEL_MAP_OK";
 #[cfg(feature = "loaded-init-probe")]
 const INIT_SUCCESS_SENTINEL: &str = "PHOENIX_INIT_OK";
 #[cfg(feature = "loaded-init-probe")]
@@ -153,8 +164,71 @@ type InitAddressSpace = PreparedUserAddressSpace<
 #[cfg(feature = "loaded-init-probe")]
 struct InitRuntime {
     address_space: InitAddressSpace,
+    kernel_tables: FinalKernelTables,
     files: ReadOnlyFileTable<'static, INIT_OPEN_FILES>,
     _allocator: FrameAllocator<INIT_MEMORY_RANGES>,
+}
+#[cfg(feature = "loaded-init-probe")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ActiveInitMemoryError {
+    UnownedFrame,
+    Platform,
+}
+#[cfg(feature = "loaded-init-probe")]
+struct ActiveInitMemory {
+    address_space: &'static InitAddressSpace,
+}
+#[cfg(feature = "loaded-init-probe")]
+impl ActiveInitMemory {
+    const fn new(address_space: &'static InitAddressSpace) -> Self {
+        Self { address_space }
+    }
+
+    fn validate_frame(
+        &self,
+        frame: phoenix_kernel::memory::PageFrame,
+    ) -> Result<(), ActiveInitMemoryError> {
+        if self.address_space.owns_frame(frame) {
+            Ok(())
+        } else {
+            Err(ActiveInitMemoryError::UnownedFrame)
+        }
+    }
+}
+#[cfg(feature = "loaded-init-probe")]
+impl UserMemoryReader for ActiveInitMemory {
+    type Error = ActiveInitMemoryError;
+
+    fn read_frame(
+        &mut self,
+        frame: phoenix_kernel::memory::PageFrame,
+        offset: usize,
+        output: &mut [u8],
+    ) -> Result<(), Self::Error> {
+        self.validate_frame(frame)?;
+        // SAFETY: the retained address-space owner proves this exact frame is
+        // a live private user leaf. The final TTBR1 plan maps every allocator
+        // frame through the fixed normal-memory direct map.
+        unsafe { read_direct_mapped_frame(frame, offset, output) }
+            .map_err(|_error: BootstrapMemoryError| ActiveInitMemoryError::Platform)
+    }
+}
+#[cfg(feature = "loaded-init-probe")]
+impl UserMemoryWriter for ActiveInitMemory {
+    type Error = ActiveInitMemoryError;
+
+    fn write_frame(
+        &mut self,
+        frame: phoenix_kernel::memory::PageFrame,
+        offset: usize,
+        input: &[u8],
+    ) -> Result<(), Self::Error> {
+        self.validate_frame(frame)?;
+        // SAFETY: the retained owner proves this exact frame is a live private
+        // user leaf; copy_to_user separately proves its user mapping is writable.
+        unsafe { write_direct_mapped_frame(frame, offset, input) }
+            .map_err(|_error: BootstrapMemoryError| ActiveInitMemoryError::Platform)
+    }
 }
 #[cfg(feature = "loaded-init-probe")]
 static mut INIT_RUNTIME: MaybeUninit<InitRuntime> = MaybeUninit::uninit();
@@ -166,12 +240,14 @@ static INIT_WROTE_OUTPUT: AtomicBool = AtomicBool::new(false);
     not(any(feature = "el0-probe", feature = "loaded-init-probe"))
 ))]
 const KERNEL_MAP_MEMORY_RANGES: usize = 16;
-#[cfg(all(
-    feature = "kernel-map-probe",
-    not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+#[cfg(any(
+    feature = "loaded-init-probe",
+    all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    )
 ))]
-type FinalKernelTables =
-    MaterializedKernelPageTables<FINAL_KERNEL_TABLE_CAPACITY, FINAL_KERNEL_MAPPING_CAPACITY>;
+type FinalKernelTables = MaterializedKernelPageTables<FINAL_KERNEL_TABLE_CAPACITY>;
 #[cfg(all(
     feature = "kernel-map-probe",
     not(any(feature = "el0-probe", feature = "loaded-init-probe"))
@@ -425,7 +501,7 @@ fn run_loaded_init_probe(boot_argument: usize, console: &mut Console<EarlyPl011>
     // by the allocator-derived image or table type state below.
     let mut physical_memory = unsafe { BootstrapPhysicalMemory::assume_bootstrap_mapping() };
     let device_tree_start = PhysAddr::new(boot_argument);
-    let map = {
+    let (kernel_plan, map) = {
         let tree = physical_memory
             .device_tree(device_tree_start)
             .unwrap_or_else(|error| panic!("could not borrow boot DTB: {error:?}"));
@@ -434,8 +510,12 @@ fn run_loaded_init_probe(boot_argument: usize, console: &mut Console<EarlyPl011>
             .unwrap_or_else(|error| panic!("could not extract boot information: {error:?}"));
         let kernel_image = kernel_physical_range()
             .unwrap_or_else(|error| panic!("could not derive kernel image range: {error:?}"));
-        memory_map_from_boot_info::<INIT_MEMORY_RANGES>(info, kernel_image, device_tree_start)
-            .unwrap_or_else(|error| panic!("could not construct boot memory map: {error:?}"))
+        let kernel_plan = final_kernel_page_table_plan(info)
+            .unwrap_or_else(|error| panic!("could not plan final kernel page tables: {error:?}"));
+        let map =
+            memory_map_from_boot_info::<INIT_MEMORY_RANGES>(info, kernel_image, device_tree_start)
+                .unwrap_or_else(|error| panic!("could not construct boot memory map: {error:?}"));
+        (kernel_plan, map)
     };
     let mut allocator = map.into_allocator();
     let allocated = plan
@@ -477,15 +557,48 @@ fn run_loaded_init_probe(boot_argument: usize, console: &mut Console<EarlyPl011>
             error.reason()
         )
     });
+    let kernel_mapping_count = kernel_plan.mappings().len();
+    let kernel_table_count = kernel_plan.required_table_frames();
+    let allocated_kernel_tables = kernel_plan
+        .allocate(&mut allocator)
+        .unwrap_or_else(|error| panic!("could not allocate final kernel tables: {error:?}"));
+    let kernel_tables = allocated_kernel_tables
+        .materialize(&mut physical_memory)
+        .unwrap_or_else(|error| {
+            panic!(
+                "could not materialize final kernel table {:?} entry {:?} at {:?}: {:?}",
+                error.table(),
+                error.index(),
+                error.stage(),
+                error.error()
+            )
+        });
+    drop(physical_memory);
+    let kernel_root = kernel_tables.root_frame().start_address().as_usize();
     // SAFETY: this single-CPU boot path initializes the slot exactly once
     // before EL0 can issue an exception. The slot is never replaced or freed.
-    let prepared = unsafe {
+    let (prepared, kernel_tables) = unsafe {
         install_init_runtime(InitRuntime {
             address_space: prepared,
+            kernel_tables,
             files: ReadOnlyFileTable::new(initramfs),
             _allocator: allocator,
         })
     };
+
+    let _ = writeln!(
+        console,
+        "init-kernel-map: root={kernel_root:#018x} tables={kernel_table_count} leaves={kernel_mapping_count}"
+    );
+    let _ = writeln!(console, "{INIT_KERNEL_MAP_ENTER_SENTINEL}");
+    console.sink_mut().flush();
+    // SAFETY: the retained final hierarchy covers the current image, stack,
+    // vectors, direct-mapped RAM, and PL011. The bootstrap handle was dropped,
+    // and this remains a masked, single-core boot path.
+    unsafe {
+        kernel_tables.activate();
+    }
+    let _ = writeln!(console, "{INIT_KERNEL_MAP_SENTINEL}");
 
     let _ = writeln!(
         console,
@@ -508,14 +621,19 @@ fn run_loaded_init_probe(boot_argument: usize, console: &mut Console<EarlyPl011>
 }
 
 #[cfg(feature = "loaded-init-probe")]
-unsafe fn install_init_runtime(runtime: InitRuntime) -> &'static InitAddressSpace {
+unsafe fn install_init_runtime(
+    runtime: InitRuntime,
+) -> (&'static InitAddressSpace, &'static FinalKernelTables) {
     let slot = &raw mut INIT_RUNTIME;
     // SAFETY: the caller guarantees unique one-time initialization and eternal
     // retention; raw pointers avoid manufacturing a reference before init.
     unsafe {
         (*slot).write(runtime);
         let runtime = (*slot).as_ptr();
-        &*core::ptr::addr_of!((*runtime).address_space)
+        (
+            &*core::ptr::addr_of!((*runtime).address_space),
+            &*core::ptr::addr_of!((*runtime).kernel_tables),
+        )
     }
 }
 
@@ -653,18 +771,15 @@ fn handle_init_write(frame: &mut ExceptionFrame, request: phoenix_kernel::abi::S
         }
     };
     let mut buffer = [0_u8; INIT_WRITE_LIMIT];
-    // SAFETY: lower-EL SVC dispatch is reachable only after the one-time init
-    // address-space installation and while the bootstrap TTBR1 RAM alias is
-    // still active. The user-copy layer accepts only frames retained by it.
-    let result = unsafe {
-        let address_space = active_init_address_space();
-        let mut memory = BootstrapPhysicalMemory::assume_bootstrap_mapping();
-        address_space.copy_from_user(
-            &mut memory,
-            write.user_buffer(),
-            &mut buffer[..write.length()],
-        )
-    };
+    // SAFETY: lower-EL dispatch is reachable only after the one-time runtime
+    // installation, which retains this immutable address-space field forever.
+    let address_space = unsafe { active_init_address_space() };
+    let mut memory = ActiveInitMemory::new(address_space);
+    let result = address_space.copy_from_user(
+        &mut memory,
+        write.user_buffer(),
+        &mut buffer[..write.length()],
+    );
     if result.is_err() {
         syscall::set_return(frame, SyscallReturn::error(Errno::BadAddress));
         return;
@@ -694,17 +809,15 @@ fn handle_init_open(frame: &mut ExceptionFrame, request: phoenix_kernel::abi::Sy
         }
     };
     let mut path_bytes = [0_u8; INIT_PATH_LIMIT];
-    // SAFETY: syscall dispatch starts only after runtime publication, and the
-    // checked physical backend reads only frames retained by the active owner.
-    let copied = unsafe {
-        let address_space = active_init_address_space();
-        let mut memory = BootstrapPhysicalMemory::assume_bootstrap_mapping();
-        address_space.copy_from_user(
-            &mut memory,
-            open.path_buffer(),
-            &mut path_bytes[..open.path_length()],
-        )
-    };
+    // SAFETY: syscall dispatch starts only after the one-time runtime owner is
+    // installed and retained permanently.
+    let address_space = unsafe { active_init_address_space() };
+    let mut memory = ActiveInitMemory::new(address_space);
+    let copied = address_space.copy_from_user(
+        &mut memory,
+        open.path_buffer(),
+        &mut path_bytes[..open.path_length()],
+    );
     if copied.is_err() {
         syscall::set_return(frame, SyscallReturn::error(Errno::BadAddress));
         return;
@@ -745,14 +858,11 @@ fn handle_init_read(frame: &mut ExceptionFrame, request: phoenix_kernel::abi::Sy
             return;
         }
     };
-    // SAFETY: runtime publication precedes dispatch; the destination is
-    // checked against writable frames retained by the active owner, and the
-    // bootstrap physical alias is still active.
-    let copied = unsafe {
-        let address_space = active_init_address_space();
-        let mut memory = BootstrapPhysicalMemory::assume_bootstrap_mapping();
-        address_space.copy_to_user(&mut memory, read.user_buffer(), window.bytes())
-    };
+    // SAFETY: runtime publication precedes dispatch and permanently retains
+    // the active user-frame owner.
+    let address_space = unsafe { active_init_address_space() };
+    let mut memory = ActiveInitMemory::new(address_space);
+    let copied = address_space.copy_to_user(&mut memory, read.user_buffer(), window.bytes());
     if copied.is_err() {
         syscall::set_return(frame, SyscallReturn::error(Errno::BadAddress));
         return;

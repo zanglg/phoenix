@@ -907,6 +907,8 @@ mod tests {
         let prepared = PreparedUserAddressSpace::new(populated, tables).unwrap();
         assert_eq!(prepared.entry(), UserAddr::new(0x40_0000).unwrap());
         assert_eq!(prepared.resident_page_count(), 3);
+        assert!(prepared.owns_frame(PageFrame::from_start(PhysAddr::new(0x50_0000)).unwrap()));
+        assert!(!prepared.owns_frame(PageFrame::from_start(PhysAddr::new(0x50_3000)).unwrap()));
         assert_eq!(
             prepared.root_frame().start_address(),
             PhysAddr::new(0x50_3000)

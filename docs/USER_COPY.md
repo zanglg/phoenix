@@ -2,8 +2,8 @@
 
 This document describes Phoenix's first `copy_from_user` and `copy_to_user` boundaries plus their
 bounded syscall consumers. The generic range walks and ABI request validation are Host Tested. The
-concrete AArch64 bootstrap backend, active-address-space retention, syscall paths, and userspace
-calls are Cross Compiled but Runtime Pending.
+concrete AArch64 bootstrap/final-direct-map backends, active-address-space retention, syscall
+paths, and userspace calls are Cross Compiled but Runtime Pending.
 
 ## Current implementation
 
@@ -23,11 +23,13 @@ modify the destination. A backend failure may leave the private destination buff
 callers must discard it unless the operation returns success. A zero-length operation still
 validates pointer width and the user-region boundary but requires no mapped page.
 
-The QEMU `virt` bootstrap backend accesses only frames inside its checked temporary high-RAM alias.
-The loaded-init probe retains the complete prepared address space and remaining allocator state in
-a one-time static runtime slot before `eret`. Lower-EL syscall dispatch may borrow that immutable
-ownership metadata while EL0 is stopped in the exception; the address space is never replaced or
-reclaimed, while its disjoint file-table field has exclusive single-core mutation.
+The QEMU `virt` bootstrap backend populates frames while the temporary high-RAM alias is active.
+The loaded-init probe then publishes the final physical direct map and uses a narrower active
+adapter: it first rejects any frame not owned by the retained prepared address space, then performs
+the exact checked copy through the permanent higher-half offset. Lower-EL syscall dispatch may
+borrow that immutable ownership metadata while EL0 is stopped in the exception; the address space
+is never replaced or reclaimed, while its disjoint file-table field has exclusive single-core
+mutation.
 
 `copy_to_user` applies the same pointer, range, residency, and complete prevalidation rules but
 requires write permission and copies a kernel slice into owned physical frames. A backend failure
@@ -79,7 +81,7 @@ did not precede it. Target execution is covered by `RUN-UCOPY-001` and `RUN-INIT
 ## TODO
 
 - run the loaded-init write path on QEMU and retain its complete serial evidence;
-- replace the bootstrap high-RAM backend with the final physical direct map;
+- replace the probe-local ownership-checked direct-map adapter with a process/VM-owned API;
 - move the static runtime slot into a process owner with locking and lifecycle states;
 - add recoverable architecture fault handling before supporting user virtual dereferences or
   mappings that can change concurrently;

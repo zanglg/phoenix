@@ -20,7 +20,7 @@ valuable evidence but cannot close an entry in this ledger.
 | RUN-BOOT-001 | Enter `_start` through QEMU direct kernel boot | Runtime Pending | Exact QEMU machine/CPU command reaches early output |
 | RUN-BOOT-002 | Normalize EL2 or EL1 state and enter Rust at EL1 | Runtime Pending | Observed EL path and `kernel_main` entry |
 | RUN-BOOT-003 | Temporary identity and higher-half mappings | Runtime Pending | Execution crosses MMU enable and continues at higher-half Rust code |
-| RUN-BOOT-004 | BSS initialization and 64 KiB boot stack | Runtime Pending | Runtime probes confirm zeroed BSS and stack bounds/alignment |
+| RUN-BOOT-004 | BSS initialization and 512 KiB boot-construction stack | Runtime Pending | Runtime probes confirm zeroed BSS and stack bounds/alignment without crossing the linker-owned range |
 | RUN-CONSOLE-001 | QEMU `virt` PL011 output and flush | Runtime Pending | Complete build identity and success sentinel are observed |
 | RUN-PANIC-001 | Early panic reporting | Runtime Pending | Deliberate panic emits `PHOENIX_PANIC` before timeout |
 | RUN-SMOKE-001 | Bounded automated boot smoke test | Runtime Pending | `cargo xtask test-boot` observes the sentinel and terminates QEMU predictably on the pinned board |
@@ -34,9 +34,9 @@ valuable evidence but cannot close an entry in this ledger.
 | RUN-EXC-002 | Preserve and restore the exception frame | Runtime Pending | All `x0..x30`, SP, PC, status, syndrome, and fault-address values match controlled probes |
 | RUN-ELF-001 | Populate and map a validated AArch64 ELF image | Runtime Pending | File bytes, zero-fill, page permissions, entry address, and rollback behavior match the image contract |
 | RUN-STACK-001 | Consume the native initial user stack | Runtime Pending | EL0 observes aligned SP, exact argc/argv/envp strings, page size, entry, ABI revision, and both terminators |
-| RUN-UCOPY-001 | Copy an active user range through retained frame ownership | Runtime Pending | Valid and invalid same-page/cross-page reads and writes return exact bytes or `BadAddress` without a kernel fault |
+| RUN-UCOPY-001 | Copy an active user range through retained frame ownership | Runtime Pending | After final TTBR1 publication, valid and invalid same-page/cross-page reads and writes use only owned direct-mapped frames and return exact bytes or `BadAddress` without a kernel fault |
 | RUN-FS-001 | Read a process-local initramfs descriptor into user memory | Runtime Pending | `open("etc/motd")`, bounded `read`, EOF, and `close` preserve exact bytes, offsets, and errors through the syscall path |
-| RUN-INIT-001 | Execute the separately linked native init ELF | Runtime Pending | `cargo xtask test-init` selects the exact inspected RX image, validates its stack, emits its greeting and exact `etc/motd` bytes through checked I/O, then reaches `PHOENIX_INIT_OK` through `exit(42)` |
+| RUN-INIT-001 | Execute the separately linked native init ELF | Runtime Pending | `cargo xtask test-init` observes ordered final-TTBR1 enter/success and EL0-enter markers, selects the exact inspected RX image, validates its stack, emits its greeting and exact `etc/motd` bytes through checked I/O, then reaches `PHOENIX_INIT_OK` through `exit(42)` |
 | RUN-EL0-001 | Enter and return from the first EL0 program | Runtime Pending | `cargo xtask test-el0` reaches `PHOENIX_EL0_OK` after TTBR0 switch, EL0 `eret`, returning unknown syscall, and `exit(42)` |
 | RUN-ABI-001 | Dispatch native `SVC #0` calls | Runtime Pending | Register arguments, return values, unknown calls, `write`, and `exit` match ABI revision 0 |
 

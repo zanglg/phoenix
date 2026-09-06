@@ -187,26 +187,28 @@ where
         if frames.is_empty() {
             continue;
         }
-        plan.map_direct_frames(
-            frames,
-            KERNEL_VIRTUAL_OFFSET,
-            MappingAttributes::kernel_data(),
-            &overrides,
-        )
-        .map_err(FinalKernelMapError::PageTable)?;
+        plan = plan
+            .with_direct_frames(
+                frames,
+                KERNEL_VIRTUAL_OFFSET,
+                MappingAttributes::kernel_data(),
+                &overrides,
+            )
+            .map_err(FinalKernelMapError::PageTable)?;
         mapped_ram = true;
     }
     if !mapped_ram {
         return Err(FinalKernelMapError::MissingRam);
     }
 
-    plan.map(
-        VirtAddr::new(PL011_VIRTUAL_BASE),
-        PhysAddr::new(PL011_PHYSICAL_BASE),
-        TranslationLevel::L3,
-        MappingAttributes::kernel_device(),
-    )
-    .map_err(FinalKernelMapError::PageTable)?;
+    plan = plan
+        .with_mapping(
+            VirtAddr::new(PL011_VIRTUAL_BASE),
+            PhysAddr::new(PL011_PHYSICAL_BASE),
+            TranslationLevel::L3,
+            MappingAttributes::kernel_device(),
+        )
+        .map_err(FinalKernelMapError::PageTable)?;
     validate_critical_mappings(&plan, layout)?;
     Ok(plan)
 }
@@ -286,6 +288,13 @@ pub struct BootstrapPhysicalMemory {
     _private: (),
 }
 
+impl Drop for BootstrapPhysicalMemory {
+    fn drop(&mut self) {
+        // This explicit destructor makes capability revocation visible at the
+        // final TTBR1 publication boundary even though no storage is released.
+    }
+}
+
 impl BootstrapPhysicalMemory {
     /// Assert that the QEMU `virt` bootstrap higher-half RAM alias is active.
     ///
@@ -329,18 +338,9 @@ impl BootstrapPhysicalMemory {
         offset: usize,
         output: &mut [u8],
     ) -> Result<(), BootstrapMemoryError> {
-        let source = Self::translated_address(frame, offset, output.len())? as *const u8;
-        if output.is_empty() {
-            return Ok(());
-        }
-        // SAFETY: construction guarantees that the complete source frame is
-        // readable normal memory and the checked range stays within it. The
-        // caller's mutable slice is valid and cannot overlap a higher-half
-        // bootstrap mapping in safe code.
-        unsafe {
-            ptr::copy_nonoverlapping(source, output.as_mut_ptr(), output.len());
-        }
-        Ok(())
+        // SAFETY: construction guarantees that every frame in the complete
+        // bootstrap window is mapped as readable normal memory.
+        unsafe { read_direct_mapped_frame(frame, offset, output) }
     }
 
     fn translated_address(
@@ -383,6 +383,58 @@ impl BootstrapPhysicalMemory {
             .checked_add(KERNEL_VIRTUAL_OFFSET)
             .ok_or(BootstrapMemoryError::AddressOverflow)
     }
+}
+
+/// Copy bytes from one frame through the QEMU kernel's fixed higher-half offset.
+///
+/// # Safety
+///
+/// The complete frame must currently be mapped as readable normal memory at
+/// `frame.start_address() + KERNEL_VIRTUAL_OFFSET`. Its contents must be valid
+/// to read, and no concurrent mutation may race with this copy.
+pub unsafe fn read_direct_mapped_frame(
+    frame: PageFrame,
+    offset: usize,
+    output: &mut [u8],
+) -> Result<(), BootstrapMemoryError> {
+    let source =
+        BootstrapPhysicalMemory::translated_address(frame, offset, output.len())? as *const u8;
+    if output.is_empty() {
+        return Ok(());
+    }
+    // SAFETY: the caller guarantees the validated source frame is mapped and
+    // readable; the mutable destination slice is valid. `ptr::copy` permits
+    // defensive overlap with a destination already inside the direct map.
+    unsafe {
+        ptr::copy(source, output.as_mut_ptr(), output.len());
+    }
+    Ok(())
+}
+
+/// Copy bytes into one frame through the QEMU kernel's fixed higher-half offset.
+///
+/// # Safety
+///
+/// The complete frame must currently be mapped as writable normal memory at
+/// `frame.start_address() + KERNEL_VIRTUAL_OFFSET`. The caller must uniquely
+/// own its contents for the duration of this copy.
+pub unsafe fn write_direct_mapped_frame(
+    frame: PageFrame,
+    offset: usize,
+    input: &[u8],
+) -> Result<(), BootstrapMemoryError> {
+    let destination =
+        BootstrapPhysicalMemory::translated_address(frame, offset, input.len())? as *mut u8;
+    if input.is_empty() {
+        return Ok(());
+    }
+    // SAFETY: the caller guarantees unique writable mapped destination bytes;
+    // range validation keeps the operation within one frame. `ptr::copy`
+    // permits overlap with a source already inside the direct map.
+    unsafe {
+        ptr::copy(input.as_ptr(), destination, input.len());
+    }
+    Ok(())
 }
 
 #[cfg(target_arch = "aarch64")]

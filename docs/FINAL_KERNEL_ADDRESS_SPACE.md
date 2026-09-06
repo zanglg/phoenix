@@ -42,6 +42,12 @@ the remaining 510 MiB uses 255 L2 blocks. The single PL011 page brings the exact
 table frames and 768 leaf mappings. The configured limits are eight table frames and 1024 leaves,
 so an unexpected DTB topology fails explicitly rather than truncating the address space.
 
+The platform builder consumes its unpublished plan as it appends each range, avoiding a second
+roughly 32 KiB rollback copy on the bounded early stack. Public incremental mutation remains
+transactional for general callers. After descriptor materialization, the permanent owner discards
+all leaf-planning metadata and retains only the compact table-role/frame array; a host test keeps
+that owner below 512 bytes.
+
 The QEMU platform builder verifies both ends of text, rodata, and data through the offline
 translation model and verifies the PL011 physical address, page level, and device attributes
 before any table frame is allocated.
@@ -84,6 +90,11 @@ The bounded harness cannot pass on the earlier boot or enter marker. Panic, exce
 timeout, and excessive output are failures. Output is retained in
 `target/phoenix/aarch64-unknown-none-softfloat/debug/qemu-kernel-map.log`.
 
+The `loaded-init-probe` uses the same builder and owner in its end-to-end path. It constructs both
+kernel and user tables before publication, switches TTBR1 first, then installs the prepared TTBR0
+user hierarchy and enters EL0. Its syscall-side direct-map adapter accepts only frames proven to
+belong to the retained init address space.
+
 ## Validation completed without QEMU
 
 Host tests cover range decomposition, exact translation, permission replacement, deterministic
@@ -107,7 +118,6 @@ load addresses, and the final success sentinel. None of this is runtime evidence
 - add guarded kernel and exception stacks;
 - define safe live mapping updates, break-before-make, local versus broadcast TLB maintenance,
   ASIDs, and SMP synchronization;
-- integrate the final TTBR1 hierarchy into the loaded-init path after its standalone probe passes.
 
 ## Skipped work
 
