@@ -91,7 +91,9 @@ ordering, unaligned and unreadable pages, duplicates, table and leaf capacity, t
 out-of-memory behavior, exact descriptor links and outputs, injected materialization failure,
 clean retry, leaf-identity mismatch, combined ownership, and atomic complete release. The module is
 Cross Compiled for the AArch64 bare-metal target, including the ownership-consuming activation
-path. Runtime register, barrier, invalidation, permission, and `eret` effects remain unverified.
+path. A focused loaded-init variant now reaches this API with allocator-owned program, stack, and
+table frames. Runtime register, barrier, invalidation, permission, and `eret` effects remain
+unverified.
 
 ## TODO
 

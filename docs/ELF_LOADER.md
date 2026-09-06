@@ -2,8 +2,9 @@
 
 This document describes the accepted executable format and current parser. Phoenix can validate a
 strict ELF image, transactionally plan and assign its pages, and drive abstract population plus
-AArch64 table materialization. The target physical-memory backend and ownership-gated root
-activation are Cross Compiled but are not yet connected to the separately linked init image.
+AArch64 table materialization. A focused Cross Compiled kernel variant connects the target
+physical-memory backend and ownership-gated activation to the separately linked init image. Target
+execution remains Runtime Pending.
 
 ## Current implementation
 
@@ -66,13 +67,11 @@ segments, page overlap, non-executable entry, null-page placement, and unaligned
 compilation checks that the parser remains `no_std` compatible.
 
 The exact separately linked `phoenix-init` artifact is also stripped, passed through this parser,
-and inspected for one bounded RX load page, fixed entry, and linker symbols during every
-emulator-free CI run.
+inspected for one bounded RX load page, fixed entry, and linker symbols, then embedded byte-for-byte
+in the loaded-init kernel during every emulator-free CI run.
 
 ## TODO
 
-- connect the inspected init ELF to boot allocation, population, table materialization, and owned
-  activation in a focused kernel variant;
 - decide whether program headers must themselves be available through `AT_PHDR`;
 - add property/fuzz tests with a bounded malformed-input corpus;
 - validate instruction-cache maintenance before executing freshly copied code;

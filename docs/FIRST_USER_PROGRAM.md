@@ -1,8 +1,9 @@
 # First Native User Program
 
 This document describes Phoenix's first separately linked userspace executable,
-`userspace/init`. It is built, stripped for embedding, accepted by the real Phoenix ELF parser, and
-statically inspected. It has not executed at EL0 and is therefore Runtime Pending.
+`userspace/init`. It is built, stripped for embedding, accepted by the real Phoenix ELF parser,
+embedded byte-for-byte in a focused kernel image, and statically inspected. It has not executed at
+EL0 and is therefore Runtime Pending.
 
 ## Current implementation
 
@@ -26,7 +27,9 @@ returns from the terminal syscall.
 `cargo xtask build-init` produces the development ELF, an embeddable ELF with debug sections
 removed, and a linker map. `cargo xtask inspect-init` feeds the exact embeddable artifact into
 `ElfImage::parse`, requires one page-bounded RX segment, checks the fixed entry and linker symbols,
-and applies a 128 KiB defensive artifact-size ceiling. Emulator-free `cargo xtask ci` runs both.
+and applies a 128 KiB defensive artifact-size ceiling. The loaded-init kernel inspection also
+requires the exact inspected byte sequence to be present in that kernel ELF. Emulator-free
+`cargo xtask ci` runs all of these checks.
 
 ## Invariants
 
@@ -35,6 +38,7 @@ and applies a 128 KiB defensive artifact-size ceiling. Emulator-free `cargo xtas
 - `_start` and `__init_start` equal `0x00400000`;
 - linked executable bytes occupy no more than one 4 KiB virtual page;
 - the Phoenix loader accepts the exact stripped artifact intended for embedding;
+- the focused kernel contains that exact artifact, not merely another ELF with the same name;
 - the only load segment is user-readable, user-executable, and never writable;
 - program success and stack-validation failure have distinct exit statuses;
 - building or inspecting the program cannot imply EL0 execution.
@@ -45,14 +49,13 @@ The AArch64 assembler and linker validate every instruction and the linker asser
 inspection validates loader acceptance, machine/type/header fields through the parser, entry,
 load count, final permissions, rounded virtual extent, in-memory size, named symbols, file-size
 bound, and nonempty linker map. The source was also disassembled during implementation to verify
-both `SVC #0` paths and expected stack offsets. Target execution is tracked by `RUN-INIT-001`.
+both `SVC #0` paths and expected stack offsets. The loaded-init kernel path that consumes this
+artifact is documented in `docs/LOADED_INIT_PROBE.md`. Target execution is tracked by
+`RUN-INIT-001`.
 
 ## TODO
 
-- embed this exact inspected artifact in a focused kernel variant;
-- feed it through DTB allocation, process-image population, dynamic user tables, and owned
-  activation;
-- add a QEMU harness requiring a dedicated loaded-init success sentinel;
+- execute `cargo xtask test-init` and record the complete target evidence;
 - implement production process exit and teardown instead of halting in the probe dispatcher;
 - implement native `write` after fault-safe user copying exists;
 - move from a conformance-only init to a small Rust runtime once its startup ABI is stable enough;

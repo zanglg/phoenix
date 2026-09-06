@@ -45,4 +45,7 @@ under `Unreleased` and the Cargo version remains 0.0.0 until the 0.1.0 release g
   owner before publishing TTBR0 and entering EL0t.
 - Separately linked AArch64 `phoenix-init` conformance ELF plus canonical build and static
   inspection through the production loader contract.
+- Opt-in loaded-init kernel variant and bounded QEMU protocol connecting the real DTB allocator,
+  embedded ELF population, native stack, dynamic user tables, ownership-gated EL0 entry, and
+  terminal `exit(42)`, with exact embedded-artifact inspection.
 - Project, Agent, Roadmap, and kernel capability documentation.

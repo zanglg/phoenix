@@ -148,8 +148,10 @@ is included with 16-byte alignment. The QEMU bootstrap backend can perform targe
 coarse high alias remains active. Activation, initramfs ownership, and executable entry remain.
 
 The first standalone AArch64 `init` ELF is reproducibly linked, stripped for embedding, accepted
-by the real loader, and inspected as one RX page. It validates the current startup stack and exits
-through the native ABI; connecting it to the dynamic ownership path remains.
+by the real loader, and inspected as one RX page. A focused kernel variant now connects the real
+boot DTB and allocator through ELF/stack population, dynamically allocated user tables, the
+combined ownership gate, `eret`, stack self-validation, and native `exit(42)`. This entire path is
+Cross Compiled and ELF Inspected but remains Runtime Pending.
 
 Observable result: Phoenix boots from a clean checkout, starts `init`, runs at least one child
 program, performs console and in-memory file I/O, and shuts down or reports test completion.

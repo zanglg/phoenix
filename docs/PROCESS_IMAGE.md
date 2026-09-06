@@ -1,9 +1,9 @@
 # Process Image Planning and Frame Ownership
 
 This document describes the architecture-neutral bridge from a validated executable to owned
-physical pages. The implementation is Host Tested and Cross Compiled. Physical access is
-expressed through a backend contract with a Runtime Pending AArch64 bootstrap implementation;
-ownership-gated AArch64 activation is Cross Compiled but has not executed with this dynamic image.
+physical pages. The implementation is Host Tested and Cross Compiled. A focused kernel variant
+connects the Runtime Pending AArch64 bootstrap backend to a real embedded ELF, native stack,
+dynamic tables, and ownership-gated activation. It has not executed on the target.
 
 ## Current implementation
 
@@ -86,14 +86,15 @@ ordering independent of program-header order, guard collision, mapping and page 
 deterministic frame pairing, exact release, out-of-memory rollback, a failed release against a
 wrong allocator snapshot, complete zeroing, partial final pages, injected write failure, clean
 retry, release of source storage, and combination with matching AArch64 table ownership. Target
-checks compile the same ownership model for bare-metal AArch64.
+checks compile the same ownership model for bare-metal AArch64. Static inspection requires the
+exact loader-accepted init ELF inside the resulting kernel artifact.
 
 ## TODO
 
 - replace the bootstrap memory backend with a final documented physical direct map;
 - make instruction-cache maintenance explicit before newly copied executable bytes can run;
 - define when a complete address space becomes visible through an ASID and `TTBR0_EL1`;
-- load a reproducibly built embedded ELF fixture through this path and validate it in QEMU;
+- execute the reproducibly built embedded ELF through this path and validate it in QEMU;
 - integrate resource accounting and a process owner before supporting teardown outside tests.
 
 ## Skipped work
@@ -101,5 +102,5 @@ checks compile the same ownership model for bare-metal AArch64.
 This module does not implement physical-memory access, a permanent direct map, hardware page-table
 mutation, TLB invalidation, safe user copying, process identifiers, scheduling, VFS lookup,
 initramfs, stack growth, demand paging, copy-on-write, ASLR, dynamic linking, TLS, or signals. The
-static `el0-probe` remains a separate conformance bridge until these production ownership stages
-are connected.
+static `el0-probe` remains a separate, smaller conformance bridge for isolating failures in this
+larger dynamic path.

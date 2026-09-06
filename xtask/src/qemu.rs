@@ -23,6 +23,8 @@ pub const EXCEPTION_SENTINEL: &str = "PHOENIX_EXCEPTION";
 pub const MEMORY_SUCCESS_SENTINEL: &str = "PHOENIX_MEMORY_OK";
 pub const EL0_SUCCESS_SENTINEL: &str = "PHOENIX_EL0_OK";
 pub const EL0_FAILURE_SENTINEL: &str = "PHOENIX_EL0_FAIL";
+pub const INIT_SUCCESS_SENTINEL: &str = "PHOENIX_INIT_OK";
+pub const INIT_FAILURE_SENTINEL: &str = "PHOENIX_INIT_FAIL";
 
 struct QemuCommand {
     arguments: Vec<OsString>,
@@ -83,6 +85,7 @@ enum ExpectedOutput {
     Boot,
     Memory,
     El0,
+    Init,
 }
 
 impl ExpectedOutput {
@@ -91,6 +94,7 @@ impl ExpectedOutput {
             Self::Boot => BOOT_SUCCESS_SENTINEL,
             Self::Memory => MEMORY_SUCCESS_SENTINEL,
             Self::El0 => EL0_SUCCESS_SENTINEL,
+            Self::Init => INIT_SUCCESS_SENTINEL,
         }
     }
 
@@ -99,6 +103,15 @@ impl ExpectedOutput {
             Self::Boot => "AArch64 boot",
             Self::Memory => "AArch64 boot-memory probe",
             Self::El0 => "AArch64 EL0 probe",
+            Self::Init => "dynamically loaded AArch64 init probe",
+        }
+    }
+
+    const fn failure_sentinel(self) -> Option<&'static str> {
+        match self {
+            Self::El0 => Some(EL0_FAILURE_SENTINEL),
+            Self::Init => Some(INIT_FAILURE_SENTINEL),
+            Self::Boot | Self::Memory => None,
         }
     }
 }
@@ -156,6 +169,10 @@ pub fn test_el0(image: &Path, log: &Path, workspace_root: &Path) -> bool {
 
 pub fn test_memory(image: &Path, log: &Path, workspace_root: &Path) -> bool {
     test_kernel(image, log, workspace_root, ExpectedOutput::Memory)
+}
+
+pub fn test_init(image: &Path, log: &Path, workspace_root: &Path) -> bool {
+    test_kernel(image, log, workspace_root, ExpectedOutput::Init)
 }
 
 fn test_kernel(image: &Path, log: &Path, workspace_root: &Path, expected: ExpectedOutput) -> bool {
@@ -234,8 +251,13 @@ fn test_kernel(image: &Path, log: &Path, workspace_root: &Path, expected: Expect
             true
         }
         TestOutcome::Failure => {
-            eprintln!("QEMU_TEST_RESULT=el0-failure");
-            eprintln!("error: observed {EL0_FAILURE_SENTINEL}");
+            eprintln!("QEMU_TEST_RESULT=probe-failure");
+            eprintln!(
+                "error: observed {}",
+                expected
+                    .failure_sentinel()
+                    .expect("failure outcome requires a failure sentinel")
+            );
             false
         }
         TestOutcome::Panic => {
@@ -411,11 +433,9 @@ fn drain_output(receiver: &Receiver<StreamEvent>, output: &mut Vec<u8>) {
 
 fn classify_output(output: &[u8], expected: ExpectedOutput) -> Option<TerminalOutput> {
     let success = find_bytes(output, expected.sentinel().as_bytes());
-    let failure = if expected == ExpectedOutput::El0 {
-        find_bytes(output, EL0_FAILURE_SENTINEL.as_bytes())
-    } else {
-        None
-    };
+    let failure = expected
+        .failure_sentinel()
+        .and_then(|sentinel| find_bytes(output, sentinel.as_bytes()));
     let panic = find_bytes(output, PANIC_SENTINEL.as_bytes());
     let exception = find_bytes(output, EXCEPTION_SENTINEL.as_bytes());
     [
@@ -455,8 +475,9 @@ mod tests {
 
     use super::{
         BOOT_SUCCESS_SENTINEL, CPU, EL0_FAILURE_SENTINEL, EL0_SUCCESS_SENTINEL, EXCEPTION_SENTINEL,
-        ExpectedOutput, MACHINE, MEMORY_SUCCESS_SENTINEL, PANIC_SENTINEL, QemuCommand,
-        TerminalOutput, classify_output, has_named_item, shell_quote,
+        ExpectedOutput, INIT_FAILURE_SENTINEL, INIT_SUCCESS_SENTINEL, MACHINE,
+        MEMORY_SUCCESS_SENTINEL, PANIC_SENTINEL, QemuCommand, TerminalOutput, classify_output,
+        has_named_item, shell_quote,
     };
 
     #[test]
@@ -554,6 +575,29 @@ mod tests {
                 ExpectedOutput::Memory
             ),
             Some(TerminalOutput::Panic)
+        );
+    }
+
+    #[test]
+    fn init_classifier_requires_the_loaded_program_result() {
+        assert_eq!(
+            classify_output(
+                format!("{BOOT_SUCCESS_SENTINEL}\n{MEMORY_SUCCESS_SENTINEL}\nPHOENIX_INIT_ENTER\n")
+                    .as_bytes(),
+                ExpectedOutput::Init
+            ),
+            None
+        );
+        assert_eq!(
+            classify_output(INIT_SUCCESS_SENTINEL.as_bytes(), ExpectedOutput::Init),
+            Some(TerminalOutput::Success)
+        );
+        assert_eq!(
+            classify_output(
+                format!("{INIT_FAILURE_SENTINEL}: status=1").as_bytes(),
+                ExpectedOutput::Init
+            ),
+            Some(TerminalOutput::Failure)
         );
     }
 

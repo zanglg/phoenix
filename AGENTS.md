@@ -38,6 +38,7 @@ not create speculative implementations for them.
 - `docs/PROCESS_IMAGE.md`: executable/stack page planning and transactional frame ownership.
 - `docs/INITIAL_USER_STACK.md`: native argc/argv/envp/auxv layout and process-image integration.
 - `docs/FIRST_USER_PROGRAM.md`: standalone init ELF contract and static validation boundary.
+- `docs/LOADED_INIT_PROBE.md`: end-to-end embedded ELF loading, ownership, entry, and runtime boundary.
 - `docs/NATIVE_ABI.md`: unstable native syscall numbers, AArch64 registers, and return encoding.
 - `docs/EL0_PROBE.md`: opt-in static first-user-mode bridge and exact validation boundary.
 - `docs/QEMU.md`: pinned virtual board, runtime commands, timeout, sentinels, and evidence policy.
@@ -82,13 +83,14 @@ cargo xtask run
 cargo xtask test-boot
 cargo xtask test-memory
 cargo xtask test-el0
+cargo xtask test-init
 cargo xtask ci
 ```
 
 Run `cargo xtask ci` before reporting completion. Never state that an unexecuted check passed.
 QEMU is optional in 0.0.0. Static artifact inspection is required. `run`, `test-boot`,
-`test-memory`, and `test-el0` are runtime-only commands; do not install or invoke QEMU in an
-environment where it is unavailable.
+`test-memory`, `test-el0`, and `test-init` are runtime-only commands; do not install or invoke QEMU
+in an environment where it is unavailable.
 
 Use these validation states consistently:
 

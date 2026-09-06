@@ -63,9 +63,16 @@ Build the opt-in DTB, allocator, and RAM-access integration image and require it
 cargo xtask test-memory
 ```
 
-`run`, `test-boot`, `test-memory`, and `test-el0` first verify that `qemu-system-aarch64`, the
-pinned machine, and the CPU model exist. They refuse to substitute another machine silently. The
-normal emulator-free `cargo xtask ci` command never launches QEMU.
+Build the standalone init, embed it in the dynamic loader path, and require its stack-validated
+terminal marker:
+
+```bash
+cargo xtask test-init
+```
+
+`run`, `test-boot`, `test-memory`, `test-el0`, and `test-init` first verify that
+`qemu-system-aarch64`, the pinned machine, and the CPU model exist. They refuse to substitute
+another machine silently. The normal emulator-free `cargo xtask ci` command never launches QEMU.
 
 Static inspection also requires each image variant's own terminal sentinel to be embedded in its
 ELF, preventing a default image built under the wrong feature set from masquerading as a focused
@@ -82,7 +89,9 @@ terminal sentinel determines the result:
 - `PHOENIX_MEMORY_OK`: pass for `test-memory` only;
 - `PHOENIX_EL0_OK`: pass for `test-el0` only;
 - `PHOENIX_EL0_FAIL`: fail `test-el0` immediately;
-- QEMU exit before either sentinel: fail;
+- `PHOENIX_INIT_OK`: pass for `test-init` only;
+- `PHOENIX_INIT_FAIL`: fail `test-init` immediately;
+- QEMU exit before the required terminal sentinel: fail;
 - timeout: fail and terminate QEMU;
 - more than 1 MiB without a sentinel: fail and terminate QEMU;
 - output read error: fail.
@@ -91,9 +100,10 @@ Because the kernel currently halts after output, the harness terminates QEMU aft
 terminal sentinel. It writes boot output to
 `target/phoenix/aarch64-unknown-none-softfloat/debug/qemu-boot.log`, memory-probe output to the
 adjacent `qemu-memory.log`, and EL0 output to `qemu-el0.log`. It emits one stable summary such as
-`QEMU_TEST_RESULT=pass`, `panic`, `timeout`, or `early-exit`. A missing emulator is an error for
-runtime commands, never a skipped or passing test. `test-memory` and `test-el0` ignore the
-intermediate `PHOENIX_BOOT_OK` marker, so neither can pass before its own path completes.
+`QEMU_TEST_RESULT=pass`, `probe-failure`, `panic`, `timeout`, or `early-exit`. Loaded-init output is
+written to `qemu-init.log`. A missing emulator is an error for runtime commands, never a skipped or
+passing test. `test-memory`, `test-el0`, and `test-init` ignore the intermediate
+`PHOENIX_BOOT_OK` marker, so none can pass before its own path completes.
 
 ## How to report the first run
 
@@ -113,8 +123,9 @@ process termination behavior against `docs/BOOT.md`.
 ## Validation of the harness
 
 Host tests cover exact command construction, shell-safe display, exact machine-name discovery,
-sentinel detection across arbitrary read boundaries, and the rule that the earlier of competing
-sentinels wins. The QEMU child-process path itself has not executed locally.
+sentinel detection across arbitrary read boundaries, per-probe terminal-marker selection, and the
+rule that the earlier of competing sentinels wins. The QEMU child-process path itself has not
+executed locally.
 
 ## TODO
 
@@ -124,7 +135,7 @@ sentinels wins. The QEMU child-process path itself has not executed locally.
 - add a deterministic guest-driven exit device after platform discovery is available;
 - dump and retain the generated DTB for compatibility fixtures;
 - add GDB attach support using the same pinned board configuration;
-- add tests for exceptions, page-table replacement, and production EL0 entry;
+- add tests for exceptions, final page-table replacement, and production process entry;
 - decide when a QEMU-enabled CI runner becomes required.
 
 ## Skipped work

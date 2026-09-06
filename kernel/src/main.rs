@@ -13,23 +13,33 @@ use phoenix_kernel::build_info::BuildInfo;
 use phoenix_kernel::console::Console;
 use phoenix_kernel::platform::aarch64::qemu_virt::EarlyPl011;
 
-#[cfg(feature = "boot-memory-probe")]
+#[cfg(any(feature = "boot-memory-probe", feature = "loaded-init-probe"))]
 use phoenix_kernel::memory::{PhysAddr, memory_map_from_boot_info};
-#[cfg(feature = "boot-memory-probe")]
+#[cfg(any(feature = "boot-memory-probe", feature = "loaded-init-probe"))]
 use phoenix_kernel::platform::aarch64::qemu_virt::{
     BootstrapPhysicalMemory, kernel_physical_range,
 };
 #[cfg(feature = "boot-memory-probe")]
 use phoenix_kernel::process_image::ProcessImageMemory;
 
-#[cfg(feature = "el0-probe")]
+#[cfg(any(feature = "el0-probe", feature = "loaded-init-probe"))]
 use phoenix_kernel::abi::{Errno, NATIVE_SVC_IMMEDIATE, NativeSyscall, SyscallReturn};
-#[cfg(feature = "el0-probe")]
+#[cfg(all(feature = "el0-probe", not(feature = "loaded-init-probe")))]
 use phoenix_kernel::arch::aarch64::el0;
-#[cfg(feature = "el0-probe")]
+#[cfg(any(feature = "el0-probe", feature = "loaded-init-probe"))]
 use phoenix_kernel::arch::aarch64::exception::{ExceptionClass, ExceptionKind, VectorOrigin};
-#[cfg(feature = "el0-probe")]
+#[cfg(any(feature = "el0-probe", feature = "loaded-init-probe"))]
 use phoenix_kernel::arch::aarch64::syscall;
+#[cfg(feature = "loaded-init-probe")]
+use phoenix_kernel::arch::aarch64::user_page_table::{PreparedUserAddressSpace, UserPageTablePlan};
+#[cfg(feature = "loaded-init-probe")]
+use phoenix_kernel::elf::ElfImage;
+#[cfg(feature = "loaded-init-probe")]
+use phoenix_kernel::process_image::ProcessImagePlan;
+#[cfg(feature = "loaded-init-probe")]
+use phoenix_kernel::user::{DEFAULT_USER_STACK_TOP, UserAddr, UserStackLayout};
+#[cfg(feature = "loaded-init-probe")]
+use phoenix_kernel::user_stack::InitialStackImage;
 
 core::arch::global_asm!(include_str!("arch/aarch64/boot.S"));
 core::arch::global_asm!(include_str!("arch/aarch64/vectors.S"));
@@ -41,12 +51,21 @@ const PANIC_SENTINEL: &str = "PHOENIX_PANIC";
 const EXCEPTION_SENTINEL: &str = "PHOENIX_EXCEPTION";
 #[cfg(feature = "boot-memory-probe")]
 const MEMORY_SUCCESS_SENTINEL: &str = "PHOENIX_MEMORY_OK";
-#[cfg(feature = "el0-probe")]
+#[cfg(all(feature = "el0-probe", not(feature = "loaded-init-probe")))]
 const EL0_ENTER_SENTINEL: &str = "PHOENIX_EL0_ENTER";
-#[cfg(feature = "el0-probe")]
+#[cfg(all(feature = "el0-probe", not(feature = "loaded-init-probe")))]
 const EL0_SUCCESS_SENTINEL: &str = "PHOENIX_EL0_OK";
-#[cfg(feature = "el0-probe")]
+#[cfg(all(feature = "el0-probe", not(feature = "loaded-init-probe")))]
 const EL0_FAILURE_SENTINEL: &str = "PHOENIX_EL0_FAIL";
+#[cfg(feature = "loaded-init-probe")]
+const INIT_ENTER_SENTINEL: &str = "PHOENIX_INIT_ENTER";
+#[cfg(feature = "loaded-init-probe")]
+const INIT_SUCCESS_SENTINEL: &str = "PHOENIX_INIT_OK";
+#[cfg(feature = "loaded-init-probe")]
+const INIT_FAILURE_SENTINEL: &str = "PHOENIX_INIT_FAIL";
+
+#[cfg(feature = "loaded-init-probe")]
+static INIT_ELF: &[u8] = include_bytes!(env!("PHOENIX_INIT_ELF"));
 
 /// Rust entry point reached by the AArch64 bootstrap.
 #[unsafe(no_mangle)]
@@ -65,7 +84,10 @@ pub extern "C" fn kernel_main(boot_argument: usize) -> ! {
     #[cfg(feature = "boot-memory-probe")]
     run_boot_memory_probe(boot_argument, &mut console);
 
-    #[cfg(feature = "el0-probe")]
+    #[cfg(feature = "loaded-init-probe")]
+    run_loaded_init_probe(boot_argument, &mut console);
+
+    #[cfg(all(feature = "el0-probe", not(feature = "loaded-init-probe")))]
     {
         // SAFETY: this is the single-core boot path and no root has been
         // published; the returned tables are activated immediately below.
@@ -80,7 +102,7 @@ pub extern "C" fn kernel_main(boot_argument: usize) -> ! {
         }
     }
 
-    #[cfg(not(feature = "el0-probe"))]
+    #[cfg(not(any(feature = "el0-probe", feature = "loaded-init-probe")))]
     halt()
 }
 
@@ -151,6 +173,109 @@ fn run_boot_memory_probe(boot_argument: usize, console: &mut Console<EarlyPl011>
     console.sink_mut().flush();
 }
 
+#[cfg(feature = "loaded-init-probe")]
+fn run_loaded_init_probe(boot_argument: usize, console: &mut Console<EarlyPl011>) -> ! {
+    const MEMORY_RANGES: usize = 16;
+    const IMAGE_MAPPINGS: usize = 2;
+    const IMAGE_PAGES: usize = 5;
+    const TABLE_PAGES: usize = 5;
+    const TABLE_LEAVES: usize = IMAGE_PAGES;
+    const INITIAL_STACK_BYTES: usize = 512;
+
+    let image = ElfImage::parse(INIT_ELF)
+        .unwrap_or_else(|error| panic!("embedded init ELF is invalid: {error:?}"));
+    let stack_top = UserAddr::new(DEFAULT_USER_STACK_TOP)
+        .unwrap_or_else(|error| panic!("default user stack top is invalid: {error:?}"));
+    let stack = UserStackLayout::new(stack_top, 4, 1)
+        .unwrap_or_else(|error| panic!("could not plan init stack: {error:?}"));
+    let initial_stack = InitialStackImage::<INITIAL_STACK_BYTES>::new(
+        stack,
+        image.entry(),
+        &["/init", "phoenix"],
+        &["TERM=phoenix"],
+    )
+    .unwrap_or_else(|error| panic!("could not construct init stack: {error:?}"));
+    let plan =
+        ProcessImagePlan::<IMAGE_MAPPINGS, IMAGE_PAGES>::with_initial_stack(image, &initial_stack)
+            .unwrap_or_else(|error| panic!("could not plan init process image: {error:?}"));
+
+    // SAFETY: this is the single-CPU bootstrap path while the documented
+    // TTBR1 RAM alias is active. Every frame handed to this backend is owned
+    // by the allocator-derived image or table type state below.
+    let mut physical_memory = unsafe { BootstrapPhysicalMemory::assume_bootstrap_mapping() };
+    let device_tree_start = PhysAddr::new(boot_argument);
+    let map = {
+        let tree = physical_memory
+            .device_tree(device_tree_start)
+            .unwrap_or_else(|error| panic!("could not borrow boot DTB: {error:?}"));
+        let info = tree
+            .boot_info()
+            .unwrap_or_else(|error| panic!("could not extract boot information: {error:?}"));
+        let kernel_image = kernel_physical_range()
+            .unwrap_or_else(|error| panic!("could not derive kernel image range: {error:?}"));
+        memory_map_from_boot_info::<MEMORY_RANGES>(info, kernel_image, device_tree_start)
+            .unwrap_or_else(|error| panic!("could not construct boot memory map: {error:?}"))
+    };
+    let mut allocator = map.into_allocator();
+    let allocated = plan
+        .allocate(&mut allocator)
+        .unwrap_or_else(|error| panic!("could not allocate init image: {error:?}"));
+    let populated = allocated
+        .populate(&mut physical_memory)
+        .unwrap_or_else(|error| {
+            panic!(
+                "could not populate init page {} at {:?}: {:?}",
+                error.page_index(),
+                error.stage(),
+                error.error()
+            )
+        });
+
+    let mut table_plan = UserPageTablePlan::<TABLE_PAGES, TABLE_LEAVES>::new()
+        .unwrap_or_else(|error| panic!("could not start init table plan: {error:?}"));
+    table_plan
+        .map_process_image(&populated)
+        .unwrap_or_else(|error| panic!("could not map init image: {error:?}"));
+    let allocated_tables = table_plan
+        .allocate(&mut allocator)
+        .unwrap_or_else(|error| panic!("could not allocate init page tables: {error:?}"));
+    let materialized = allocated_tables
+        .materialize(&mut physical_memory)
+        .unwrap_or_else(|error| {
+            panic!(
+                "could not materialize init table {:?} entry {:?} at {:?}: {:?}",
+                error.table(),
+                error.index(),
+                error.stage(),
+                error.error()
+            )
+        });
+    let prepared = PreparedUserAddressSpace::new(populated, materialized).unwrap_or_else(|error| {
+        panic!(
+            "could not combine init address-space ownership: {:?}",
+            error.reason()
+        )
+    });
+
+    let _ = writeln!(
+        console,
+        "init: entry={:#018x} stack={:#018x} pages={} root={:#018x}",
+        prepared.entry().as_usize(),
+        prepared.stack_pointer().as_usize(),
+        prepared.resident_page_count(),
+        prepared.root_frame().start_address().as_usize()
+    );
+    let _ = writeln!(console, "{INIT_ENTER_SENTINEL}");
+    console.sink_mut().flush();
+
+    // SAFETY: `prepared` owns every fully initialized leaf and table frame.
+    // The bootstrap keeps caches disabled, vectors and the EL1 stack are
+    // active, and this single-core probe is the only user of ASID zero.
+    unsafe {
+        prepared.activate_and_enter();
+    }
+}
+
 /// Common target of the assembly exception vectors.
 ///
 /// # Safety
@@ -164,7 +289,7 @@ pub unsafe extern "C" fn phoenix_exception_dispatch(frame: *mut ExceptionFrame, 
     let frame = unsafe { &mut *frame };
     let slot = VectorSlot::ALL.get(slot_index).copied();
 
-    #[cfg(feature = "el0-probe")]
+    #[cfg(any(feature = "el0-probe", feature = "loaded-init-probe"))]
     if handle_probe_syscall(frame, slot) {
         return;
     }
@@ -180,7 +305,7 @@ pub unsafe extern "C" fn phoenix_exception_dispatch(frame: *mut ExceptionFrame, 
     halt()
 }
 
-#[cfg(feature = "el0-probe")]
+#[cfg(any(feature = "el0-probe", feature = "loaded-init-probe"))]
 fn handle_probe_syscall(frame: &mut ExceptionFrame, slot: Option<VectorSlot>) -> bool {
     let expected_slot = VectorSlot::new(VectorOrigin::LowerAArch64, ExceptionKind::Synchronous);
     let syndrome = frame.syndrome();
@@ -196,11 +321,18 @@ fn handle_probe_syscall(frame: &mut ExceptionFrame, slot: Option<VectorSlot>) ->
         NativeSyscall::Exit => {
             let status = request.argument(0).expect("exit status is in x0");
             let mut console = Console::new(EarlyPl011::new());
-            if status == 42 {
-                let _ = writeln!(console, "{EL0_SUCCESS_SENTINEL}");
+            #[cfg(feature = "loaded-init-probe")]
+            let _ = if status == 42 {
+                writeln!(console, "{INIT_SUCCESS_SENTINEL}")
             } else {
-                let _ = writeln!(console, "{EL0_FAILURE_SENTINEL}: status={status}");
-            }
+                writeln!(console, "{INIT_FAILURE_SENTINEL}: status={status}")
+            };
+            #[cfg(all(feature = "el0-probe", not(feature = "loaded-init-probe")))]
+            let _ = if status == 42 {
+                writeln!(console, "{EL0_SUCCESS_SENTINEL}")
+            } else {
+                writeln!(console, "{EL0_FAILURE_SENTINEL}: status={status}")
+            };
             console.sink_mut().flush();
             halt()
         }

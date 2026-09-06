@@ -2,7 +2,8 @@
 
 This document defines Phoenix native ABI revision 0 process-entry stack construction. The
 allocation-free builder and its process-image integration are Host Tested and Cross Compiled. No
-dynamically loaded user program has consumed this layout, so target behavior is Runtime Pending.
+dynamically loaded user program has yet consumed this layout on a target, so behavior is Runtime
+Pending. The loaded-init kernel variant now constructs this exact layout before EL0 entry.
 
 ## Current implementation
 
@@ -39,7 +40,7 @@ Phoenix ABI key is private to the unstable native ABI and is not a Linux compati
 The builder owns its output, so argument and environment source strings may be released after
 construction.
 
-`ProcessImagePlan::with_initial_stack` splits the owned byte image at page boundaries. Each stack
+`ProcessImagePlan::with_initial_stack` splits the borrowed byte image at page boundaries. Each stack
 page records both a destination offset and its exact source slice. The ordinary population
 transaction clears every complete stack frame before writing these slices, so the stack has the
 same retry and unpublished-ownership guarantees as ELF segment data. Successful population drops
@@ -67,7 +68,7 @@ pointer, and frame release. AArch64 checks compile the same representation and p
 
 ## TODO
 
-- execute the separately linked stack-validating init ELF through the dynamic loader path;
+- execute `cargo xtask test-init` so the separately linked init validates this stack on target;
 - add executable program-header information when the ELF subset supports `AT_PHDR`, `AT_PHENT`,
   and `AT_PHNUM`;
 - add random bytes and `AT_RANDOM` only after a kernel entropy policy exists;

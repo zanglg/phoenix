@@ -40,6 +40,7 @@ fn main() -> ExitCode {
         "test-boot" => test_boot(),
         "test-memory" => test_memory(),
         "test-el0" => test_el0(),
+        "test-init" => test_init(),
         "ci" => ci(),
         "help" | "--help" | "-h" => {
             print_help();
@@ -79,6 +80,7 @@ fn print_help() {
     println!("  test-boot  Run the bounded QEMU boot integration test");
     println!("  test-memory  Run the bounded QEMU boot-memory integration probe");
     println!("  test-el0  Run the bounded QEMU EL0 conformance probe");
+    println!("  test-init  Run the bounded dynamically loaded init probe");
     println!("  ci       Run every validation available without an emulator");
 }
 
@@ -271,18 +273,23 @@ fn check() -> bool {
         eprintln!("error: no kernel target is configured in .cargo/lsp.toml");
         return false;
     };
-    run(
-        "check kernel for configured LSP target",
-        "cargo",
-        &[
-            "--config",
-            ".cargo/lsp.toml",
-            "check",
-            "--workspace",
-            "--all-features",
-            "--target",
-            &target,
-        ],
+    let Some(init_elf) = prepare_init_elf(&target) else {
+        return false;
+    };
+    let mut target_check = Command::new("cargo");
+    target_check.args([
+        "--config",
+        ".cargo/lsp.toml",
+        "check",
+        "--workspace",
+        "--all-features",
+        "--target",
+        &target,
+    ]);
+    target_check.env("PHOENIX_INIT_ELF", init_elf);
+    run_command(
+        "check kernel and init for configured LSP target",
+        &mut target_check,
     ) && run(
         "check kernel library for host tests",
         "cargo",
@@ -299,64 +306,70 @@ fn lint() -> bool {
         eprintln!("error: no kernel target is configured in .cargo/lsp.toml");
         return false;
     };
-    run(
-        "lint kernel for configured LSP target",
-        "cargo",
-        &[
-            "--config",
-            ".cargo/lsp.toml",
-            "clippy",
-            "--workspace",
-            "--lib",
-            "--bin",
-            "phoenix-kernel",
-            "--all-features",
-            "--target",
-            &target,
-            "--",
-            "-D",
-            "warnings",
-        ],
-    ) && run(
-        "lint init for configured LSP target",
-        "cargo",
-        &[
-            "clippy",
-            "--package",
-            "phoenix-init",
-            "--bin",
-            "phoenix-init",
-            "--target",
-            &target,
-            "--",
-            "-D",
-            "warnings",
-        ],
-    ) && run(
-        "lint kernel library for host tests",
-        "cargo",
-        &[
-            "clippy",
-            "--workspace",
-            "--lib",
-            "--tests",
-            "--",
-            "-D",
-            "warnings",
-        ],
-    ) && run(
-        "lint xtask for host",
-        "cargo",
-        &[
-            "clippy",
-            "--manifest-path",
-            "xtask/Cargo.toml",
-            "--all-targets",
-            "--",
-            "-D",
-            "warnings",
-        ],
-    )
+    let Some(init_elf) = prepare_init_elf(&target) else {
+        return false;
+    };
+    let mut kernel_lint = Command::new("cargo");
+    kernel_lint.args([
+        "--config",
+        ".cargo/lsp.toml",
+        "clippy",
+        "--package",
+        "phoenix-kernel",
+        "--lib",
+        "--bin",
+        "phoenix-kernel",
+        "--all-features",
+        "--target",
+        &target,
+        "--",
+        "-D",
+        "warnings",
+    ]);
+    kernel_lint.env("PHOENIX_INIT_ELF", init_elf);
+    run_command("lint kernel for configured LSP target", &mut kernel_lint)
+        && run(
+            "lint init for configured LSP target",
+            "cargo",
+            &[
+                "clippy",
+                "--package",
+                "phoenix-init",
+                "--bin",
+                "phoenix-init",
+                "--target",
+                &target,
+                "--",
+                "-D",
+                "warnings",
+            ],
+        )
+        && run(
+            "lint kernel library for host tests",
+            "cargo",
+            &[
+                "clippy",
+                "--workspace",
+                "--lib",
+                "--tests",
+                "--",
+                "-D",
+                "warnings",
+            ],
+        )
+        && run(
+            "lint xtask for host",
+            "cargo",
+            &[
+                "clippy",
+                "--manifest-path",
+                "xtask/Cargo.toml",
+                "--all-targets",
+                "--",
+                "-D",
+                "warnings",
+            ],
+        )
 }
 
 fn test() -> bool {
@@ -379,6 +392,7 @@ struct Artifacts {
     qemu_log: PathBuf,
     qemu_memory_log: PathBuf,
     qemu_el0_log: PathBuf,
+    qemu_init_log: PathBuf,
 }
 
 struct InitArtifacts {
@@ -393,6 +407,7 @@ enum KernelVariant {
     Default,
     BootMemoryProbe,
     El0Probe,
+    LoadedInitProbe,
 }
 
 impl KernelVariant {
@@ -401,6 +416,7 @@ impl KernelVariant {
             Self::Default => "default",
             Self::BootMemoryProbe => "boot-memory-probe",
             Self::El0Probe => "el0-probe",
+            Self::LoadedInitProbe => "loaded-init-probe",
         }
     }
 
@@ -409,6 +425,7 @@ impl KernelVariant {
             Self::Default => &[],
             Self::BootMemoryProbe => &["boot-memory-probe"],
             Self::El0Probe => &["el0-probe"],
+            Self::LoadedInitProbe => &["loaded-init-probe"],
         }
     }
 
@@ -416,11 +433,16 @@ impl KernelVariant {
         matches!(self, Self::El0Probe)
     }
 
+    const fn expects_loaded_init(self) -> bool {
+        matches!(self, Self::LoadedInitProbe)
+    }
+
     const fn expected_sentinel(self) -> &'static str {
         match self {
             Self::Default => qemu::BOOT_SUCCESS_SENTINEL,
             Self::BootMemoryProbe => qemu::MEMORY_SUCCESS_SENTINEL,
             Self::El0Probe => qemu::EL0_SUCCESS_SENTINEL,
+            Self::LoadedInitProbe => qemu::INIT_SUCCESS_SENTINEL,
         }
     }
 }
@@ -433,6 +455,7 @@ fn kernel_artifacts(target: &str, variant: KernelVariant) -> Artifacts {
         KernelVariant::Default => "phoenix-kernel",
         KernelVariant::BootMemoryProbe => "phoenix-kernel-memory",
         KernelVariant::El0Probe => "phoenix-kernel-el0",
+        KernelVariant::LoadedInitProbe => "phoenix-kernel-init",
     };
     Artifacts {
         elf: cargo_target_dir.join(target).join("debug/phoenix-kernel"),
@@ -441,6 +464,7 @@ fn kernel_artifacts(target: &str, variant: KernelVariant) -> Artifacts {
         qemu_log: output.join("qemu-boot.log"),
         qemu_memory_log: output.join("qemu-memory.log"),
         qemu_el0_log: output.join("qemu-el0.log"),
+        qemu_init_log: output.join("qemu-init.log"),
         cargo_target_dir,
     }
 }
@@ -522,6 +546,13 @@ fn build_init() -> bool {
     );
     println!("artifact: init linker map: {}", artifacts.map.display());
     true
+}
+
+fn prepare_init_elf(target: &str) -> Option<PathBuf> {
+    if target != AARCH64_TARGET || !build_init() || !inspect_init() {
+        return None;
+    }
+    Some(init_artifacts(target).embedded_elf)
 }
 
 fn inspect_init() -> bool {
@@ -647,6 +678,14 @@ fn build_kernel_variant(variant: KernelVariant) -> bool {
         return false;
     };
     let artifacts = kernel_artifacts(&target, variant);
+    let init_elf = if matches!(variant, KernelVariant::LoadedInitProbe) {
+        let Some(path) = prepare_init_elf(&target) else {
+            return false;
+        };
+        Some(path)
+    } else {
+        None
+    };
     let Some(output_dir) = artifacts.image.parent() else {
         eprintln!("error: invalid kernel artifact path");
         return false;
@@ -673,6 +712,9 @@ fn build_kernel_variant(variant: KernelVariant) -> bool {
     let features = variant.features();
     if !features.is_empty() {
         cargo.arg("--features").arg(features.join(","));
+    }
+    if let Some(init_elf) = init_elf {
+        cargo.env("PHOENIX_INIT_ELF", init_elf);
     }
     cargo.args(["--", &link_arg]);
     if !run_command(
@@ -903,21 +945,47 @@ fn inspect_kernel_variant(variant: KernelVariant) -> bool {
     }
 
     let sentinel = variant.expected_sentinel();
-    match fs::read(&artifacts.elf) {
-        Ok(bytes)
-            if bytes
-                .windows(sentinel.len())
-                .any(|window| window == sentinel.as_bytes()) =>
-        {
-            println!("ok: expected terminal sentinel is embedded: {sentinel}");
+    let kernel_bytes = match fs::read(&artifacts.elf) {
+        Ok(bytes) => Some(bytes),
+        Err(error) => {
+            errors.push(format!(
+                "could not read ELF {} for content inspection: {error}",
+                artifacts.elf.display()
+            ));
+            None
         }
-        Ok(_) => errors.push(format!(
+    };
+    if kernel_bytes.as_ref().is_some_and(|bytes| {
+        bytes
+            .windows(sentinel.len())
+            .any(|window| window == sentinel.as_bytes())
+    }) {
+        println!("ok: expected terminal sentinel is embedded: {sentinel}");
+    } else if kernel_bytes.is_some() {
+        errors.push(format!(
             "ELF does not contain expected terminal sentinel: {sentinel}"
-        )),
-        Err(error) => errors.push(format!(
-            "could not read ELF {} for sentinel inspection: {error}",
-            artifacts.elf.display()
-        )),
+        ));
+    }
+
+    if variant.expects_loaded_init() {
+        let init = init_artifacts(&target);
+        match (kernel_bytes.as_deref(), fs::read(&init.embedded_elf)) {
+            (Some(kernel), Ok(embedded))
+                if !embedded.is_empty()
+                    && kernel
+                        .windows(embedded.len())
+                        .any(|window| window == embedded.as_slice()) =>
+            {
+                println!("ok: exact inspected init ELF is embedded in the kernel");
+            }
+            (Some(_), Ok(_)) => errors
+                .push("kernel does not contain the exact inspected standalone init ELF".to_owned()),
+            (_, Err(error)) => errors.push(format!(
+                "could not read embedded init ELF {}: {error}",
+                init.embedded_elf.display()
+            )),
+            (None, Ok(_)) => {}
+        }
     }
 
     if errors.is_empty() {
@@ -925,6 +993,9 @@ fn inspect_kernel_variant(variant: KernelVariant) -> bool {
         println!("ok: bootstrap page table, exception vectors, BSS, stack, image, and map");
         if variant.expects_el0_probe() {
             println!("ok: EL0 probe text, entry, and stack static layout");
+        }
+        if variant.expects_loaded_init() {
+            println!("ok: loaded-init image content and terminal protocol");
         }
         true
     } else {
@@ -989,6 +1060,20 @@ fn test_memory() -> bool {
         )
 }
 
+fn test_init() -> bool {
+    let Some(target) = require_aarch64_target() else {
+        return false;
+    };
+    let artifacts = kernel_artifacts(&target, KernelVariant::LoadedInitProbe);
+    build_kernel_variant(KernelVariant::LoadedInitProbe)
+        && inspect_kernel_variant(KernelVariant::LoadedInitProbe)
+        && qemu::test_init(
+            &artifacts.image,
+            &artifacts.qemu_init_log,
+            &workspace_root(),
+        )
+}
+
 fn ci() -> bool {
     doctor()
         && format()
@@ -1001,6 +1086,8 @@ fn ci() -> bool {
         && inspect_kernel_variant(KernelVariant::BootMemoryProbe)
         && build_kernel_variant(KernelVariant::El0Probe)
         && inspect_kernel_variant(KernelVariant::El0Probe)
+        && build_kernel_variant(KernelVariant::LoadedInitProbe)
+        && inspect_kernel_variant(KernelVariant::LoadedInitProbe)
         && build_kernel()
         && inspect_kernel()
 }

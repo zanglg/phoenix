@@ -22,7 +22,7 @@ vector with exception class `SupervisorCallAArch64` and immediate zero.
 
 | Number | Name | Intended arguments | Status |
 | ---: | --- | --- | --- |
-| 0 | `exit` | `x0=status` | Implemented only by the opt-in EL0 probe |
+| 0 | `exit` | `x0=status` | Implemented only by the opt-in static and loaded-init probes |
 | 1 | `write` | `x0=fd`, `x1=user buffer`, `x2=length` | Assigned, not implemented |
 
 Unknown numbers are preserved and the opt-in probe returns `NotImplemented`; they are not parser errors. These
@@ -68,7 +68,7 @@ window. The types and adapter are Cross Compiled for AArch64.
 - define short writes, interruption, and maximum transfer sizes;
 - decide file-descriptor values and stderr/stdout initialization;
 - separate ABI revisioning from the project version when revision 1 is proposed;
-- add an EL0 conformance program and QEMU transcript.
+- execute both EL0 conformance programs and retain their QEMU transcripts.
 
 ## Skipped work
 

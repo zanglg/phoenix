@@ -34,7 +34,7 @@ valuable evidence but cannot close an entry in this ledger.
 | RUN-EXC-002 | Preserve and restore the exception frame | Runtime Pending | All `x0..x30`, SP, PC, status, syndrome, and fault-address values match controlled probes |
 | RUN-ELF-001 | Populate and map a validated AArch64 ELF image | Runtime Pending | File bytes, zero-fill, page permissions, entry address, and rollback behavior match the image contract |
 | RUN-STACK-001 | Consume the native initial user stack | Runtime Pending | EL0 observes aligned SP, exact argc/argv/envp strings, page size, entry, ABI revision, and both terminators |
-| RUN-INIT-001 | Execute the separately linked native init ELF | Runtime Pending | The inspected RX image enters at `0x00400000`, validates its stack, and reaches kernel `exit(42)` through `SVC #0` |
+| RUN-INIT-001 | Execute the separately linked native init ELF | Runtime Pending | `cargo xtask test-init` loads the exact inspected RX image through the DTB allocator and dynamic tables, enters at `0x00400000`, validates its stack, and reaches `PHOENIX_INIT_OK` through kernel `exit(42)` |
 | RUN-EL0-001 | Enter and return from the first EL0 program | Runtime Pending | `cargo xtask test-el0` reaches `PHOENIX_EL0_OK` after TTBR0 switch, EL0 `eret`, returning unknown syscall, and `exit(42)` |
 | RUN-ABI-001 | Dispatch native `SVC #0` calls | Runtime Pending | Register arguments, return values, unknown calls, `write`, and `exit` match ABI revision 0 |
 

@@ -19,6 +19,8 @@ narrow support claim:
 - validated ELF segments and a guarded stack can be planned and assigned frames transactionally;
 - native argc/argv/envp and minimal auxiliary-vector stack bytes are host tested;
 - a separately linked one-page AArch64 `init` ELF is accepted by the Phoenix loader and inspected;
+- an opt-in loaded-init image connects the real DTB allocator, ELF population, native stack,
+  dynamically allocated user tables, ownership-gated `eret`, and terminal `exit(42)` path;
 - lower-half AArch64 user-table topology and descriptor materialization are host tested;
 - a checked QEMU `virt` bootstrap physical-memory backend is cross-compiled but runtime pending;
 - DTB memory plus firmware/kernel/DTB reservations form a transactional boot allocator map;
@@ -70,6 +72,7 @@ cargo xtask run
 cargo xtask test-boot
 cargo xtask test-memory
 cargo xtask test-el0
+cargo xtask test-init
 cargo xtask ci
 ```
 
@@ -78,10 +81,12 @@ artifacts without executing them. `build-init` and `inspect-init` do the same fo
 standalone native user ELF. `qemu-command` prints the pinned command without starting an
 emulator. `run` is interactive and `test-boot` is bounded; neither is part of emulator-free `ci`.
 `test-memory` builds the opt-in boot-memory integration image; `test-el0` builds the opt-in
-user-mode conformance image. Each requires its own final marker. See
+statically linked user-mode conformance image; `test-init` builds the full dynamically loaded
+standalone-init path. Each requires its own final marker. See
 [`docs/QEMU.md`](docs/QEMU.md), [`docs/BOOT_MEMORY_PROBE.md`](docs/BOOT_MEMORY_PROBE.md), and
 [`docs/EL0_PROBE.md`](docs/EL0_PROBE.md) for their exact validation boundaries. The separately
-linked program is documented in [`docs/FIRST_USER_PROGRAM.md`](docs/FIRST_USER_PROGRAM.md).
+linked program is documented in [`docs/FIRST_USER_PROGRAM.md`](docs/FIRST_USER_PROGRAM.md), and
+its end-to-end kernel integration in [`docs/LOADED_INIT_PROBE.md`](docs/LOADED_INIT_PROBE.md).
 
 ## LSP target
 
