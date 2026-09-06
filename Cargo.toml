@@ -1,0 +1,28 @@
+[workspace]
+members = ["kernel"]
+exclude = ["xtask"]
+resolver = "3"
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+unused_must_use = "deny"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+correctness = "deny"
+suspicious = "deny"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+panic = "abort"
+

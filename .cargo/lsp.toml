@@ -1,0 +1,8 @@
+# This is the single switch for rust-analyzer's default kernel target.
+# Future examples, once their ports and Rust targets are installed:
+# target = "riscv64gc-unknown-none-elf"
+# target = "x86_64-unknown-none"
+
+[build]
+target = "aarch64-unknown-none-softfloat"
+
