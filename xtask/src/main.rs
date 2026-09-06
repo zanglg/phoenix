@@ -4,6 +4,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
+mod qemu;
+
 const AARCH64_TARGET: &str = "aarch64-unknown-none-softfloat";
 const KERNEL_PHYS_BASE: u64 = 0x0000_0000_4008_0000;
 const KERNEL_VIRT_BASE: u64 = 0xffff_ff80_4008_0000;
@@ -29,6 +31,9 @@ fn main() -> ExitCode {
         "test" => test(),
         "build" => build_kernel(),
         "inspect" => inspect_kernel(),
+        "qemu-command" => print_qemu_command(),
+        "run" => run_kernel(),
+        "test-boot" => test_boot(),
         "ci" => ci(),
         "help" | "--help" | "-h" => {
             print_help();
@@ -61,6 +66,9 @@ fn print_help() {
     println!("  test     Run host-side unit tests");
     println!("  build    Build the configured kernel ELF and raw image");
     println!("  inspect  Validate the built AArch64 ELF and raw image");
+    println!("  qemu-command  Print the pinned QEMU command without running it");
+    println!("  run      Build and run Phoenix interactively on QEMU");
+    println!("  test-boot  Run the bounded QEMU boot integration test");
     println!("  ci       Run every validation available without an emulator");
 }
 
@@ -340,6 +348,7 @@ struct Artifacts {
     elf: PathBuf,
     image: PathBuf,
     map: PathBuf,
+    qemu_log: PathBuf,
 }
 
 fn kernel_artifacts(target: &str) -> Artifacts {
@@ -352,6 +361,7 @@ fn kernel_artifacts(target: &str) -> Artifacts {
             .join("debug/phoenix-kernel"),
         image: output.join("phoenix-kernel.bin"),
         map: output.join("phoenix-kernel.map"),
+        qemu_log: output.join("qemu-boot.log"),
     }
 }
 
@@ -578,6 +588,33 @@ fn inspect_kernel() -> bool {
         }
         false
     }
+}
+
+fn print_qemu_command() -> bool {
+    let Some(target) = require_aarch64_target() else {
+        return false;
+    };
+    qemu::print_command(&kernel_artifacts(&target).image);
+    true
+}
+
+fn run_kernel() -> bool {
+    let Some(target) = require_aarch64_target() else {
+        return false;
+    };
+    build_kernel()
+        && inspect_kernel()
+        && qemu::run_interactive(&kernel_artifacts(&target).image, &workspace_root())
+}
+
+fn test_boot() -> bool {
+    let Some(target) = require_aarch64_target() else {
+        return false;
+    };
+    let artifacts = kernel_artifacts(&target);
+    build_kernel()
+        && inspect_kernel()
+        && qemu::test_boot(&artifacts.image, &artifacts.qemu_log, &workspace_root())
 }
 
 fn ci() -> bool {

@@ -41,24 +41,28 @@ On the intended platform, `kernel_main` should print the Phoenix build identity,
 argument, and `PHOENIX_BOOT_OK`, then flush PL011 and wait. A Rust panic should print
 `PHOENIX_PANIC`, the available panic information, flush, and wait.
 
-These strings define the future smoke-test protocol. They have not yet been observed on QEMU.
+These strings define the implemented smoke-test protocol. They have not yet been observed on QEMU.
 
 ## Current validation
 
 ```bash
 cargo xtask build
 cargo xtask inspect
+cargo xtask qemu-command
 ```
 
 These commands build and statically verify the ELF machine type, entry address, first physical
 and virtual load addresses, required boot symbols, page-table alignment, BSS ordering, stack
 size/alignment, raw image, and linker map. `cargo xtask ci` includes both commands.
 
+The bounded `cargo xtask test-boot` runner is documented in `docs/QEMU.md`. It is implemented and
+Host Tested at the command-construction and output-classification level, but has not been executed.
+
 ## Open runtime decisions
 
-- exact QEMU `virt` machine version and CPU model to pin;
-- the verified QEMU command line;
-- timeout and process-exit mechanism for automated smoke tests;
+- whether the initial `virt-9.2` and Cortex-A72 pins remain after real compatibility evidence;
+- the verified, rather than merely constructed, QEMU command line;
+- a guest-driven process-exit mechanism to replace host termination after the sentinel;
 - observed EL1 and EL2 entry behavior;
 - confirmation that direct boot supplies every assumed register and cache state.
 

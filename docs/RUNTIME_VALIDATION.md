@@ -23,7 +23,7 @@ valuable evidence but cannot close an entry in this ledger.
 | RUN-BOOT-004 | BSS initialization and 64 KiB boot stack | Runtime Pending | Runtime probes confirm zeroed BSS and stack bounds/alignment |
 | RUN-CONSOLE-001 | QEMU `virt` PL011 output and flush | Runtime Pending | Complete build identity and success sentinel are observed |
 | RUN-PANIC-001 | Early panic reporting | Runtime Pending | Deliberate panic emits `PHOENIX_PANIC` before timeout |
-| RUN-SMOKE-001 | Bounded automated boot smoke test | Runtime Pending | Verified command exits or is terminated predictably after sentinel |
+| RUN-SMOKE-001 | Bounded automated boot smoke test | Runtime Pending | `cargo xtask test-boot` observes the sentinel and terminates QEMU predictably on the pinned board |
 | RUN-DTB-001 | Parse the QEMU-provided DTB in early boot | Runtime Pending | Real blob validates and yields expected CPU, memory, chosen, and reservation data |
 | RUN-MM-001 | Initialize the frame allocator from discovered memory | Runtime Pending | Allocations avoid the image, DTB, boot tables, stack, and firmware reservations |
 | RUN-MMU-001 | Install final permission-separated kernel tables | Runtime Pending | Text, rodata, data, stack, DTB, and MMIO mappings behave with documented permissions |

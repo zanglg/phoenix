@@ -1,0 +1,427 @@
+use std::ffi::{OsStr, OsString};
+use std::fs;
+use std::io::{self, Read};
+use std::path::Path;
+use std::process::{Command, ExitStatus, Stdio};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::thread;
+use std::time::{Duration, Instant};
+
+const PROGRAM: &str = "qemu-system-aarch64";
+const MACHINE: &str = "virt-9.2,virtualization=on,gic-version=3,highmem=off";
+const MACHINE_TYPE: &str = "virt-9.2";
+const CPU: &str = "cortex-a72";
+const MEMORY: &str = "512M";
+const CPUS: &str = "1";
+const TEST_TIMEOUT: Duration = Duration::from_secs(10);
+const POLL_INTERVAL: Duration = Duration::from_millis(25);
+const OUTPUT_LIMIT: usize = 1024 * 1024;
+
+pub const BOOT_SUCCESS_SENTINEL: &str = "PHOENIX_BOOT_OK";
+pub const PANIC_SENTINEL: &str = "PHOENIX_PANIC";
+
+struct QemuCommand {
+    arguments: Vec<OsString>,
+}
+
+impl QemuCommand {
+    fn for_kernel(image: &Path) -> Self {
+        Self {
+            arguments: vec![
+                "-machine".into(),
+                MACHINE.into(),
+                "-cpu".into(),
+                CPU.into(),
+                "-accel".into(),
+                "tcg".into(),
+                "-m".into(),
+                MEMORY.into(),
+                "-smp".into(),
+                CPUS.into(),
+                "-nodefaults".into(),
+                "-nographic".into(),
+                "-monitor".into(),
+                "none".into(),
+                "-serial".into(),
+                "stdio".into(),
+                "-no-reboot".into(),
+                "-kernel".into(),
+                image.as_os_str().to_owned(),
+            ],
+        }
+    }
+
+    fn command(&self) -> Command {
+        let mut command = Command::new(PROGRAM);
+        command.args(&self.arguments);
+        command
+    }
+
+    fn display(&self) -> String {
+        std::iter::once(OsString::from(PROGRAM))
+            .chain(self.arguments.iter().cloned())
+            .map(|argument| shell_quote(&argument))
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TerminalOutput {
+    Success,
+    Panic,
+}
+
+#[derive(Debug)]
+enum TestOutcome {
+    Success,
+    Panic,
+    Timeout,
+    OutputLimit,
+    Exited(ExitStatus),
+    StreamError(String),
+}
+
+enum StreamEvent {
+    Data(Vec<u8>),
+    Error(String),
+    Done,
+}
+
+pub fn print_command(image: &Path) {
+    println!("{}", QemuCommand::for_kernel(image).display());
+}
+
+pub fn run_interactive(image: &Path, workspace_root: &Path) -> bool {
+    if !preflight() {
+        return false;
+    }
+
+    let specification = QemuCommand::for_kernel(image);
+    println!("==> run AArch64 kernel on QEMU");
+    println!("command: {}", specification.display());
+    match specification.command().current_dir(workspace_root).status() {
+        Ok(status) if status.success() => true,
+        Ok(status) => {
+            eprintln!("error: QEMU exited with {status}");
+            false
+        }
+        Err(error) => {
+            eprintln!("error: could not start QEMU: {error}");
+            false
+        }
+    }
+}
+
+pub fn test_boot(image: &Path, log: &Path, workspace_root: &Path) -> bool {
+    if !preflight() {
+        return false;
+    }
+    if let Some(parent) = log.parent()
+        && let Err(error) = fs::create_dir_all(parent)
+    {
+        eprintln!("error: could not create QEMU log directory: {error}");
+        return false;
+    }
+
+    let specification = QemuCommand::for_kernel(image);
+    println!("==> test AArch64 boot on QEMU");
+    println!("command: {}", specification.display());
+    println!("timeout: {} seconds", TEST_TIMEOUT.as_secs());
+
+    let mut command = specification.command();
+    command
+        .current_dir(workspace_root)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            eprintln!("QEMU_TEST_RESULT=spawn-error");
+            eprintln!("error: could not start QEMU: {error}");
+            return false;
+        }
+    };
+
+    let stdout = child.stdout.take().expect("piped QEMU stdout must exist");
+    let stderr = child.stderr.take().expect("piped QEMU stderr must exist");
+    let (sender, receiver) = mpsc::channel();
+    let stdout_reader = spawn_reader(stdout, sender.clone(), "stdout");
+    let stderr_reader = spawn_reader(stderr, sender, "stderr");
+
+    let (outcome, mut output) = observe(&mut child, &receiver);
+    if matches!(
+        outcome,
+        TestOutcome::Success | TestOutcome::Panic | TestOutcome::Timeout | TestOutcome::OutputLimit
+    ) {
+        let _ = child.kill();
+    }
+    let _ = child.wait();
+    let _ = stdout_reader.join();
+    let _ = stderr_reader.join();
+    drain_output(&receiver, &mut output);
+
+    if let Err(error) = fs::write(log, &output) {
+        eprintln!("error: could not write QEMU log {}: {error}", log.display());
+        return false;
+    }
+
+    if !output.is_empty() {
+        println!("--- QEMU output ---");
+        print!("{}", String::from_utf8_lossy(&output));
+        if output.last().is_some_and(|byte| *byte != b'\n') {
+            println!();
+        }
+        println!("--- end QEMU output ---");
+    }
+    println!("QEMU_TEST_LOG={}", log.display());
+
+    match outcome {
+        TestOutcome::Success => {
+            println!("QEMU_TEST_RESULT=pass");
+            println!("QEMU_TEST_SENTINEL={BOOT_SUCCESS_SENTINEL}");
+            true
+        }
+        TestOutcome::Panic => {
+            eprintln!("QEMU_TEST_RESULT=panic");
+            eprintln!("error: observed {PANIC_SENTINEL} before the boot success sentinel");
+            false
+        }
+        TestOutcome::Timeout => {
+            eprintln!("QEMU_TEST_RESULT=timeout");
+            eprintln!("error: did not observe a terminal sentinel before the timeout");
+            false
+        }
+        TestOutcome::OutputLimit => {
+            eprintln!("QEMU_TEST_RESULT=output-limit");
+            eprintln!("error: QEMU produced more than {OUTPUT_LIMIT} bytes without a sentinel");
+            false
+        }
+        TestOutcome::Exited(status) => {
+            eprintln!("QEMU_TEST_RESULT=early-exit");
+            eprintln!("error: QEMU exited with {status} before a terminal sentinel");
+            false
+        }
+        TestOutcome::StreamError(error) => {
+            eprintln!("QEMU_TEST_RESULT=stream-error");
+            eprintln!("error: failed while reading QEMU output: {error}");
+            false
+        }
+    }
+}
+
+fn preflight() -> bool {
+    let Some(version) = command_output(&["--version"]) else {
+        eprintln!("error: {PROGRAM} is unavailable or could not run");
+        eprintln!("hint: install QEMU with AArch64 system emulation, then retry");
+        return false;
+    };
+    let version_line = version.lines().next().unwrap_or("unknown QEMU version");
+    println!("ok: {version_line}");
+
+    let Some(machines) = command_output(&["-machine", "help"]) else {
+        eprintln!("error: could not query QEMU machine types");
+        return false;
+    };
+    if !has_named_item(&machines, MACHINE_TYPE) {
+        eprintln!("error: QEMU does not provide the pinned machine '{MACHINE_TYPE}'");
+        eprintln!("hint: install QEMU 9.2 or newer; do not silently substitute another board");
+        return false;
+    }
+
+    let Some(cpus) = command_output(&["-cpu", "help"]) else {
+        eprintln!("error: could not query QEMU CPU types");
+        return false;
+    };
+    if !has_named_item(&cpus, CPU) {
+        eprintln!("error: QEMU does not provide the pinned CPU '{CPU}'");
+        return false;
+    }
+    true
+}
+
+fn command_output(arguments: &[&str]) -> Option<String> {
+    let output = Command::new(PROGRAM).args(arguments).output().ok()?;
+    output.status.success().then(|| {
+        let mut text = String::from_utf8_lossy(&output.stdout).into_owned();
+        text.push_str(&String::from_utf8_lossy(&output.stderr));
+        text
+    })
+}
+
+fn has_named_item(output: &str, expected: &str) -> bool {
+    output
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .any(|item| item == expected)
+}
+
+fn spawn_reader<R: Read + Send + 'static>(
+    mut reader: R,
+    sender: Sender<StreamEvent>,
+    name: &'static str,
+) -> thread::JoinHandle<()> {
+    thread::spawn(move || {
+        let mut buffer = [0_u8; 4096];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(read) => {
+                    if sender
+                        .send(StreamEvent::Data(buffer[..read].to_vec()))
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) => {
+                    let _ = sender.send(StreamEvent::Error(format!("{name}: {error}")));
+                    break;
+                }
+            }
+        }
+        let _ = sender.send(StreamEvent::Done);
+    })
+}
+
+fn observe(
+    child: &mut std::process::Child,
+    receiver: &Receiver<StreamEvent>,
+) -> (TestOutcome, Vec<u8>) {
+    let deadline = Instant::now() + TEST_TIMEOUT;
+    let mut output = Vec::new();
+    let mut completed_streams = 0;
+
+    loop {
+        if let Some(terminal) = classify_output(&output) {
+            return (
+                match terminal {
+                    TerminalOutput::Success => TestOutcome::Success,
+                    TerminalOutput::Panic => TestOutcome::Panic,
+                },
+                output,
+            );
+        }
+        if output.len() > OUTPUT_LIMIT {
+            output.truncate(OUTPUT_LIMIT);
+            return (TestOutcome::OutputLimit, output);
+        }
+        match child.try_wait() {
+            Ok(Some(status)) if completed_streams == 2 => {
+                return (TestOutcome::Exited(status), output);
+            }
+            Ok(_) => {}
+            Err(error) => return (TestOutcome::StreamError(error.to_string()), output),
+        }
+
+        let now = Instant::now();
+        if now >= deadline {
+            return (TestOutcome::Timeout, output);
+        }
+        let wait = deadline.saturating_duration_since(now).min(POLL_INTERVAL);
+        match receiver.recv_timeout(wait) {
+            Ok(StreamEvent::Data(bytes)) => output.extend_from_slice(&bytes),
+            Ok(StreamEvent::Error(error)) => return (TestOutcome::StreamError(error), output),
+            Ok(StreamEvent::Done) => completed_streams += 1,
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => completed_streams = 2,
+        }
+    }
+}
+
+fn drain_output(receiver: &Receiver<StreamEvent>, output: &mut Vec<u8>) {
+    for event in receiver.try_iter() {
+        if let StreamEvent::Data(bytes) = event {
+            let remaining = OUTPUT_LIMIT.saturating_sub(output.len());
+            output.extend_from_slice(&bytes[..bytes.len().min(remaining)]);
+        }
+    }
+}
+
+fn classify_output(output: &[u8]) -> Option<TerminalOutput> {
+    let success = find_bytes(output, BOOT_SUCCESS_SENTINEL.as_bytes());
+    let panic = find_bytes(output, PANIC_SENTINEL.as_bytes());
+    match (success, panic) {
+        (Some(success), Some(panic)) if panic < success => Some(TerminalOutput::Panic),
+        (Some(_), _) => Some(TerminalOutput::Success),
+        (None, Some(_)) => Some(TerminalOutput::Panic),
+        (None, None) => None,
+    }
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+fn shell_quote(argument: &OsStr) -> String {
+    let argument = argument.to_string_lossy();
+    if !argument.is_empty()
+        && argument
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"-._/:,=".contains(&byte))
+    {
+        argument.into_owned()
+    } else {
+        format!("'{}'", argument.replace('\'', "'\\''"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
+
+    use super::{
+        BOOT_SUCCESS_SENTINEL, CPU, MACHINE, PANIC_SENTINEL, QemuCommand, TerminalOutput,
+        classify_output, has_named_item, shell_quote,
+    };
+
+    #[test]
+    fn command_is_pinned_and_uses_the_raw_image() {
+        let command = QemuCommand::for_kernel(Path::new("target/kernel image.bin"));
+        let display = command.display();
+
+        assert!(display.contains(MACHINE));
+        assert!(display.contains(CPU));
+        assert!(display.contains("-accel tcg"));
+        assert!(display.contains("-smp 1"));
+        assert!(display.contains("-kernel 'target/kernel image.bin'"));
+    }
+
+    #[test]
+    fn terminal_classifier_handles_split_and_competing_sentinels() {
+        assert_eq!(classify_output(b"PHOENIX_BOOT_"), None);
+        assert_eq!(
+            classify_output(format!("boot\n{BOOT_SUCCESS_SENTINEL}\n").as_bytes()),
+            Some(TerminalOutput::Success)
+        );
+        assert_eq!(
+            classify_output(format!("{PANIC_SENTINEL}\n{BOOT_SUCCESS_SENTINEL}").as_bytes()),
+            Some(TerminalOutput::Panic)
+        );
+        assert_eq!(
+            classify_output(format!("{BOOT_SUCCESS_SENTINEL}\n{PANIC_SENTINEL}").as_bytes()),
+            Some(TerminalOutput::Success)
+        );
+    }
+
+    #[test]
+    fn named_item_check_does_not_accept_prefixes() {
+        let machines = "virt-9.1 old\nvirt-9.2 pinned\nvirt latest";
+        assert!(has_named_item(machines, "virt-9.2"));
+        assert!(!has_named_item(machines, "virt-9"));
+    }
+
+    #[test]
+    fn shell_quoting_preserves_simple_values_and_escapes_spaces() {
+        assert_eq!(
+            shell_quote("virt-9.2,gic-version=3".as_ref()),
+            "virt-9.2,gic-version=3"
+        );
+        assert_eq!(shell_quote("two words".as_ref()), "'two words'");
+        assert_eq!(shell_quote("it's".as_ref()), "'it'\\''s'");
+    }
+}

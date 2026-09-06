@@ -27,6 +27,7 @@ not create speculative implementations for them.
 - `kernel/src/arch/aarch64/boot.S`: first AArch64 bootstrap implementation.
 - `docs/BOOT.md`: current boot contract and runtime-validation boundary.
 - `docs/AARCH64_PAGING.md`: temporary and final page-table model, permissions, and remaining work.
+- `docs/QEMU.md`: pinned virtual board, runtime commands, timeout, sentinels, and evidence policy.
 - `docs/RUNTIME_VALIDATION.md`: hardware-dependent checks deferred until an emulator is available.
 - `FEATURES.md`: comprehensive capability catalog.
 - `ROADMAP.md`: ordered path to the first formal release.
@@ -61,12 +62,15 @@ cargo xtask lint
 cargo xtask test
 cargo xtask build
 cargo xtask inspect
+cargo xtask qemu-command
+cargo xtask run
+cargo xtask test-boot
 cargo xtask ci
 ```
 
 Run `cargo xtask ci` before reporting completion. Never state that an unexecuted check passed.
-QEMU is optional in 0.0.0, and there is no runtime boot test yet. Static artifact inspection is
-required. Do not install or invoke QEMU in an environment where it is unavailable.
+QEMU is optional in 0.0.0. Static artifact inspection is required. `run` and `test-boot` are
+runtime-only commands; do not install or invoke QEMU in an environment where it is unavailable.
 
 Use these validation states consistently:
 

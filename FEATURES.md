@@ -138,7 +138,7 @@ _No unclassified entries._
 | OBS-001 | Structured logging and runtime ring buffer | Planned | 0.1.0 | Builds on early console |
 | OBS-002 | Panic register dump, symbols, and stack traces | Planned | 0.1.0 | Preserve postmortem information |
 | OBS-003 | Tracing and profiling | Captured | Unscheduled | Avoid committing to a format early |
-| TEST-001 | QEMU boot smoke test with timeout and sentinel | Planned | 0.1.0 | Required from the first boot onward |
+| TEST-001 | QEMU boot smoke test with timeout and sentinel | In Progress | 0.1.0 | Harness and host tests implemented; QEMU execution remains Runtime Pending |
 | TEST-002 | Host-side unit and property tests | Implemented | 0.1.0 | Console, build identity, config, and ELF-layout logic |
 | TEST-003 | Fuzzing and fault injection | Deferred | Unscheduled | Add with parsers and failure paths |
 | HARD-001 | Unsafe-code review and invariant audit | Deferred | Continuous | Applies as unsafe code appears |

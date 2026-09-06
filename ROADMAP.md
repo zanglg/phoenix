@@ -34,10 +34,10 @@ Completed without an emulator:
 - early PL011 output, panic output, build identity, and deterministic sentinels are implemented;
 - the ELF, raw image, linker map, and required symbols are checked automatically.
 
-Remaining:
+Remaining runtime validation:
 
 - observe the success and panic paths on a compatible QEMU environment;
-- add a bounded runtime smoke test only after the real command and output have been verified.
+- execute the implemented bounded runtime smoke test and reconcile its assumptions with evidence.
 
 Observable result: one command builds and boots Phoenix on AArch64 QEMU `virt`; an automated test
 passes only after observing the success sentinel before its timeout.
