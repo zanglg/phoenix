@@ -42,6 +42,9 @@ Only a complete pass yields `MaterializedUserPageTables`. A backend failure iden
 intermediate link, or final leaf work and returns the allocated ownership for a clean retry. An
 unpublished materialized hierarchy can be released transactionally.
 
+The QEMU `virt` bootstrap now supplies one checked target implementation of this backend while the
+temporary TTBR1 RAM block remains active. It is not the final direct map and is Runtime Pending.
+
 ## Combined ownership before activation
 
 The materialized table object owns only translation-table frames. Its L3 descriptors refer to
@@ -82,7 +85,7 @@ Cross Compiled for the AArch64 bare-metal target.
 
 ## TODO
 
-- provide a target `TranslationTableMemory` implementation through the final physical direct map;
+- replace the bootstrap implementation with the final physical direct map;
 - assign and recycle nonzero ASIDs with generation handling;
 - add an activation/retirement API with precise `DSB`, `ISB`, and TLB invalidation rules;
 - define break-before-make for changes to published descriptors;

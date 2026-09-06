@@ -45,8 +45,8 @@ stale allocator from causing partial reclamation or an untracked leak.
 ## Population type state
 
 `ProcessImageMemory` is the narrow backend needed to clear a private frame and copy a checked byte
-slice into it. A future kernel implementation may satisfy it through a physical direct map or a
-temporary mapping window; host tests use ordinary owned byte arrays.
+slice into it. Host tests use ordinary owned byte arrays. QEMU `virt` has a Cross Compiled,
+Runtime Pending implementation using the temporary higher-half bootstrap RAM alias.
 
 `AllocatedProcessImage::populate` clears every complete page before copying its initialized ELF
 prefix. It returns `PopulatedProcessImage` only after every operation succeeds. A backend failure
@@ -86,7 +86,7 @@ checks compile the same ownership model for bare-metal AArch64.
 
 ## TODO
 
-- implement the `ProcessImageMemory` backend through a documented physical direct map;
+- replace the bootstrap memory backend with a final documented physical direct map;
 - make instruction-cache maintenance explicit before newly copied executable bytes can run;
 - define when a complete address space becomes visible through an ASID and `TTBR0_EL1`;
 - construct `argc`, `argv`, `envp`, and the minimal auxiliary vector on the guarded stack;

@@ -26,6 +26,7 @@ valuable evidence but cannot close an entry in this ledger.
 | RUN-SMOKE-001 | Bounded automated boot smoke test | Runtime Pending | `cargo xtask test-boot` observes the sentinel and terminates QEMU predictably on the pinned board |
 | RUN-DTB-001 | Parse the QEMU-provided DTB in early boot | Runtime Pending | Real blob validates and yields expected CPU, memory, chosen, and reservation data |
 | RUN-MM-001 | Initialize the frame allocator from discovered memory | Runtime Pending | Allocations avoid the image, DTB, boot tables, stack, and firmware reservations |
+| RUN-MM-002 | Mutate private frames through the bootstrap high RAM alias | Runtime Pending | First/last valid pages clear and copy correctly; out-of-window frames are rejected without a target fault |
 | RUN-MMU-001 | Install final permission-separated kernel tables | Runtime Pending | Text, rodata, data, stack, DTB, and MMIO mappings behave with documented permissions |
 | RUN-MMU-002 | Retire temporary aliases and maintain the TLB | Runtime Pending | Execution survives table switch, barriers, invalidation, and low-RAM alias removal |
 | RUN-EXC-001 | Install and enter the EL1 exception vector table | Runtime Pending | Installed `VBAR_EL1` points at the linked 2 KiB table and a deliberate fault emits `PHOENIX_EXCEPTION` from the correct slot |

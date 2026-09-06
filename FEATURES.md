@@ -61,7 +61,7 @@ _No unclassified entries._
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
 | MM-001 | Physical page allocator | In Progress | 0.1.0 | Fixed-capacity model is Host Tested; DTB/runtime integration remains |
-| MM-002 | Virtual memory and kernel address space | In Progress | 0.1.0 | Descriptors and offline plan are Host Tested; ownership, installation, and runtime validation remain |
+| MM-002 | Virtual memory and kernel address space | In Progress | 0.1.0 | Descriptors, plans, and checked bootstrap private-frame access are built; final TTBR1 and runtime validation remain |
 | MM-003 | Kernel heap and fallible allocation policy | Planned | 0.1.0 | Define allocation-failure behavior |
 | MM-004 | Kernel stacks and guard pages | Planned | 0.1.0 | Include exception-context requirements |
 | MM-005 | User address spaces and safe user copies | In Progress | 0.1.0 | Lower-39-bit plans, table materialization, and combined leaf/table ownership are Host Tested; target backend, activation, and user copies remain |

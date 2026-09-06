@@ -18,6 +18,7 @@ narrow support claim:
 - an opt-in first-EL0 probe is cross-linked and statically inspected, but not runtime verified;
 - validated ELF segments and a guarded stack can be planned and assigned frames transactionally;
 - lower-half AArch64 user-table topology and descriptor materialization are host tested;
+- a checked QEMU `virt` bootstrap physical-memory backend is cross-compiled but runtime pending;
 - runtime boot and serial output have **not** been validated because the current development
   environment has no QEMU.
 
