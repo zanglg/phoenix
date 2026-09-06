@@ -67,7 +67,7 @@ pointer, and frame release. AArch64 checks compile the same representation and p
 
 ## TODO
 
-- load and execute an ELF fixture that validates its received stack in EL0;
+- execute the separately linked stack-validating init ELF through the dynamic loader path;
 - add executable program-header information when the ELF subset supports `AT_PHDR`, `AT_PHENT`,
   and `AT_PHNUM`;
 - add random bytes and `AT_RANDOM` only after a kernel entropy policy exists;

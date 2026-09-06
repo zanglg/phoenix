@@ -2,8 +2,8 @@
 
 This document describes the accepted executable format and current parser. Phoenix can validate a
 strict ELF image, transactionally plan and assign its pages, and drive abstract population plus
-AArch64 table materialization. It does not yet provide the target physical-memory backend, install
-the resulting root, or execute this production image.
+AArch64 table materialization. The target physical-memory backend and ownership-gated root
+activation are Cross Compiled but are not yet connected to the separately linked init image.
 
 ## Current implementation
 
@@ -36,14 +36,15 @@ from the earliest loader.
 
 1. validate the whole image before allocating resources;
 2. reserve all required virtual ranges in one user plan;
-3. include a non-overlapping guarded stack;
-4. create one clear-and-copy operation per mapped page;
+3. include a non-overlapping guarded stack and optional native initial stack bytes;
+4. create one offset-aware clear-and-copy operation per mapped page;
 5. assign all physical frames atomically against an allocator snapshot.
 
 The generic population type state now clears every frame and copies exactly the planned source
-bytes through an abstract private-frame backend. The target-specific materializer must provide that
-backend, maintain instruction-cache coherency, install final W^X permissions, and roll back every
-frame and table on any failure. See `docs/PROCESS_IMAGE.md` for the ownership boundary.
+bytes through an abstract private-frame backend. QEMU `virt` has a checked bootstrap implementation,
+and AArch64 materialization preserves W^X permissions while retaining every leaf and table frame
+in one activation owner. Explicit instruction-cache coherency is still required before copied
+instructions execute. See `docs/PROCESS_IMAGE.md` for the ownership boundary.
 
 Executable bytes must never be writable at EL0. The source image may be released only after every
 borrow and copy completes.
@@ -64,11 +65,14 @@ wrong machine and header sizes, truncated data, file size larger than memory, W^
 segments, page overlap, non-executable entry, null-page placement, and unaligned loads. Cross-target
 compilation checks that the parser remains `no_std` compatible.
 
+The exact separately linked `phoenix-init` artifact is also stripped, passed through this parser,
+and inspected for one bounded RX load page, fixed entry, and linker symbols during every
+emulator-free CI run.
+
 ## TODO
 
-- add the first user linker script and reproducibly build a tiny AArch64 test executable;
-- implement physical frame population and hardware mapping for the transactional plan;
-- construct the initial guarded stack and auxiliary vector;
+- connect the inspected init ELF to boot allocation, population, table materialization, and owned
+  activation in a focused kernel variant;
 - decide whether program headers must themselves be available through `AT_PHDR`;
 - add property/fuzz tests with a bounded malformed-input corpus;
 - validate instruction-cache maintenance before executing freshly copied code;

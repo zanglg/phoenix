@@ -147,6 +147,10 @@ enforced through an explicit populated type state, and the native argc/argv/envp
 is included with 16-byte alignment. The QEMU bootstrap backend can perform target writes while its
 coarse high alias remains active. Activation, initramfs ownership, and executable entry remain.
 
+The first standalone AArch64 `init` ELF is reproducibly linked, stripped for embedding, accepted
+by the real loader, and inspected as one RX page. It validates the current startup stack and exits
+through the native ABI; connecting it to the dynamic ownership path remains.
+
 Observable result: Phoenix boots from a clean checkout, starts `init`, runs at least one child
 program, performs console and in-memory file I/O, and shuts down or reports test completion.
 

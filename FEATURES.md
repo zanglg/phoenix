@@ -91,6 +91,7 @@ _No unclassified entries._
 | PROC-001 | Process and thread lifecycle | Planned | 0.1.0 | Includes identifiers and teardown |
 | ABI-001 | Native Phoenix syscall ABI | In Progress | 0.1.0 | Revision-0 values and probe-only unknown/exit dispatch are built; production dispatch is Runtime Pending |
 | ABI-002 | ELF loader, user stack, TLS, and auxiliary vector | In Progress | 0.1.0 | ELF planning/population and native argc/argv/envp/minimal-auxv stack construction are Host Tested; target execution and TLS remain |
+| ABI-003 | Separately linked first native user program | In Progress | 0.1.0 | One-page RX AArch64 init ELF is loader-accepted and statically inspected; dynamic handoff is Runtime Pending |
 | PROC-002 | Signals and exception delivery | Deferred | Unscheduled | Requires process lifecycle |
 | IPC-001 | Pipes, message passing, and shared memory IPC | Deferred | Unscheduled | Split when designs become concrete |
 | IPC-002 | Wait, poll, and event readiness | Captured | Unscheduled | Coordinate with file descriptors |

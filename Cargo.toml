@@ -1,5 +1,5 @@
 [workspace]
-members = ["kernel"]
+members = ["kernel", "userspace/init"]
 exclude = ["xtask"]
 resolver = "3"
 

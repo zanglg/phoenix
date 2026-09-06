@@ -11,6 +11,7 @@ const KERNEL_PHYS_BASE: u64 = 0x0000_0000_4008_0000;
 const KERNEL_VIRT_BASE: u64 = 0xffff_ff80_4008_0000;
 const BOOT_STACK_SIZE: u64 = 64 * 1024;
 const EXCEPTION_VECTOR_TABLE_SIZE: u64 = 2048;
+const INIT_ENTRY: usize = 0x0040_0000;
 
 fn main() -> ExitCode {
     let mut args = env::args().skip(1);
@@ -32,6 +33,8 @@ fn main() -> ExitCode {
         "test" => test(),
         "build" => build_kernel(),
         "inspect" => inspect_kernel(),
+        "build-init" => build_init(),
+        "inspect-init" => inspect_init(),
         "qemu-command" => print_qemu_command(),
         "run" => run_kernel(),
         "test-boot" => test_boot(),
@@ -69,6 +72,8 @@ fn print_help() {
     println!("  test     Run host-side unit tests");
     println!("  build    Build the configured kernel ELF and raw image");
     println!("  inspect  Validate the built AArch64 ELF and raw image");
+    println!("  build-init  Build the first standalone AArch64 userspace ELF");
+    println!("  inspect-init  Validate the first standalone userspace ELF");
     println!("  qemu-command  Print the pinned QEMU command without running it");
     println!("  run      Build and run Phoenix interactively on QEMU");
     println!("  test-boot  Run the bounded QEMU boot integration test");
@@ -313,6 +318,21 @@ fn lint() -> bool {
             "warnings",
         ],
     ) && run(
+        "lint init for configured LSP target",
+        "cargo",
+        &[
+            "clippy",
+            "--package",
+            "phoenix-init",
+            "--bin",
+            "phoenix-init",
+            "--target",
+            &target,
+            "--",
+            "-D",
+            "warnings",
+        ],
+    ) && run(
         "lint kernel library for host tests",
         "cargo",
         &[
@@ -359,6 +379,13 @@ struct Artifacts {
     qemu_log: PathBuf,
     qemu_memory_log: PathBuf,
     qemu_el0_log: PathBuf,
+}
+
+struct InitArtifacts {
+    cargo_target_dir: PathBuf,
+    elf: PathBuf,
+    embedded_elf: PathBuf,
+    map: PathBuf,
 }
 
 #[derive(Clone, Copy)]
@@ -418,6 +445,18 @@ fn kernel_artifacts(target: &str, variant: KernelVariant) -> Artifacts {
     }
 }
 
+fn init_artifacts(target: &str) -> InitArtifacts {
+    let root = workspace_root();
+    let output = root.join("target/phoenix").join(target).join("debug");
+    let cargo_target_dir = root.join("target/phoenix/build/init");
+    InitArtifacts {
+        elf: cargo_target_dir.join(target).join("debug/phoenix-init"),
+        embedded_elf: output.join("phoenix-init.elf"),
+        map: output.join("phoenix-init.map"),
+        cargo_target_dir,
+    }
+}
+
 fn require_aarch64_target() -> Option<String> {
     let target = configured_target()?;
     if target != AARCH64_TARGET {
@@ -430,6 +469,177 @@ fn require_aarch64_target() -> Option<String> {
 
 fn build_kernel() -> bool {
     build_kernel_variant(KernelVariant::Default)
+}
+
+fn build_init() -> bool {
+    let Some(target) = require_aarch64_target() else {
+        return false;
+    };
+    let artifacts = init_artifacts(&target);
+    let Some(output_dir) = artifacts.embedded_elf.parent() else {
+        eprintln!("error: invalid init artifact path");
+        return false;
+    };
+    if let Err(error) = fs::create_dir_all(output_dir) {
+        eprintln!("error: could not create {}: {error}", output_dir.display());
+        return false;
+    }
+
+    let link_arg = format!("-Clink-arg=-Map={}", artifacts.map.display());
+    let mut cargo = Command::new("cargo");
+    cargo.args([
+        "rustc",
+        "--package",
+        "phoenix-init",
+        "--bin",
+        "phoenix-init",
+        "--target",
+        &target,
+    ]);
+    cargo.arg("--target-dir").arg(&artifacts.cargo_target_dir);
+    cargo.args(["--", &link_arg]);
+    if !run_command("build standalone AArch64 init ELF", &mut cargo) {
+        return false;
+    }
+
+    let Some(objcopy) = llvm_tool("llvm-objcopy") else {
+        eprintln!("error: llvm-objcopy is unavailable; install the llvm-tools component");
+        return false;
+    };
+    let mut command = Command::new(objcopy);
+    command
+        .arg("--strip-debug")
+        .arg(&artifacts.elf)
+        .arg(&artifacts.embedded_elf);
+    if !run_command("create embeddable init ELF", &mut command) {
+        return false;
+    }
+
+    println!("artifact: init ELF: {}", artifacts.elf.display());
+    println!(
+        "artifact: embeddable init ELF: {}",
+        artifacts.embedded_elf.display()
+    );
+    println!("artifact: init linker map: {}", artifacts.map.display());
+    true
+}
+
+fn inspect_init() -> bool {
+    let Some(target) = require_aarch64_target() else {
+        return false;
+    };
+    let artifacts = init_artifacts(&target);
+    for path in [&artifacts.elf, &artifacts.embedded_elf, &artifacts.map] {
+        if !path.is_file() {
+            eprintln!(
+                "error: missing init artifact {}; run cargo xtask build-init",
+                path.display()
+            );
+            return false;
+        }
+    }
+
+    let bytes = match fs::read(&artifacts.embedded_elf) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!(
+                "error: could not read init ELF {}: {error}",
+                artifacts.embedded_elf.display()
+            );
+            return false;
+        }
+    };
+    let image = match phoenix_kernel::elf::ElfImage::parse(&bytes) {
+        Ok(image) => image,
+        Err(error) => {
+            eprintln!("error: Phoenix loader rejects init ELF: {error:?}");
+            return false;
+        }
+    };
+    let mut errors = Vec::new();
+    if image.entry().as_usize() != INIT_ENTRY {
+        errors.push(format!(
+            "init entry is {:#x}, expected {INIT_ENTRY:#x}",
+            image.entry().as_usize()
+        ));
+    }
+    if image.load_segment_count() != 1 {
+        errors.push(format!(
+            "init has {} load segments, expected exactly one",
+            image.load_segment_count()
+        ));
+    }
+    let segments: Vec<_> = image.load_segments().collect();
+    match segments.as_slice() {
+        [Ok(segment)] => {
+            if segment.virtual_range().start().as_usize() != INIT_ENTRY
+                || segment.virtual_range().byte_len() != 4096
+                || segment.memory_size() > 4096
+                || !segment.permissions().readable()
+                || !segment.permissions().executable()
+                || segment.permissions().writable()
+            {
+                errors.push("init load segment is not one bounded RX page".to_owned());
+            }
+        }
+        _ => errors.push("init load-segment iteration is inconsistent".to_owned()),
+    }
+    match fs::metadata(&artifacts.embedded_elf) {
+        Ok(metadata) if metadata.len() <= 128 * 1024 => {}
+        Ok(metadata) => errors.push(format!(
+            "embeddable init ELF is unexpectedly large: {} bytes",
+            metadata.len()
+        )),
+        Err(error) => errors.push(format!("could not stat embeddable init ELF: {error}")),
+    }
+    match fs::metadata(&artifacts.map) {
+        Ok(metadata) if metadata.len() > 0 => {}
+        Ok(_) => errors.push("init linker map is empty".to_owned()),
+        Err(error) => errors.push(format!("could not stat init linker map: {error}")),
+    }
+
+    let Some(nm) = llvm_tool("llvm-nm") else {
+        eprintln!("error: llvm-nm is unavailable; install the llvm-tools component");
+        return false;
+    };
+    let Some(symbol_output) = capture_command(
+        Command::new(nm)
+            .arg("--defined-only")
+            .arg("--numeric-sort")
+            .arg(&artifacts.embedded_elf),
+    ) else {
+        eprintln!("error: llvm-nm could not inspect the init ELF");
+        return false;
+    };
+    let symbols = parse_nm_symbols(&symbol_output);
+    for symbol in ["_start", "__init_start", "__init_end"] {
+        if !symbols.contains_key(symbol) {
+            errors.push(format!("required init symbol '{symbol}' is missing"));
+        }
+    }
+    if symbols.get("_start") != Some(&(INIT_ENTRY as u64))
+        || symbols.get("__init_start") != Some(&(INIT_ENTRY as u64))
+    {
+        errors.push("init start symbols do not match the fixed entry".to_owned());
+    }
+    if symbols
+        .get("__init_end")
+        .and_then(|end| end.checked_sub(INIT_ENTRY as u64))
+        .is_none_or(|size| size == 0 || size > 4096)
+    {
+        errors.push("init linked text is empty or exceeds one page".to_owned());
+    }
+
+    if errors.is_empty() {
+        println!("ok: init ELF is accepted by the Phoenix loader");
+        println!("ok: init entry, RX page, symbols, size bound, and map");
+        true
+    } else {
+        for error in errors {
+            eprintln!("error: {error}");
+        }
+        false
+    }
 }
 
 fn build_kernel_variant(variant: KernelVariant) -> bool {
@@ -785,6 +995,8 @@ fn ci() -> bool {
         && check()
         && lint()
         && test()
+        && build_init()
+        && inspect_init()
         && build_kernel_variant(KernelVariant::BootMemoryProbe)
         && inspect_kernel_variant(KernelVariant::BootMemoryProbe)
         && build_kernel_variant(KernelVariant::El0Probe)

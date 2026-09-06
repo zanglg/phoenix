@@ -18,6 +18,7 @@ narrow support claim:
 - an opt-in first-EL0 probe is cross-linked and statically inspected, but not runtime verified;
 - validated ELF segments and a guarded stack can be planned and assigned frames transactionally;
 - native argc/argv/envp and minimal auxiliary-vector stack bytes are host tested;
+- a separately linked one-page AArch64 `init` ELF is accepted by the Phoenix loader and inspected;
 - lower-half AArch64 user-table topology and descriptor materialization are host tested;
 - a checked QEMU `virt` bootstrap physical-memory backend is cross-compiled but runtime pending;
 - DTB memory plus firmware/kernel/DTB reservations form a transactional boot allocator map;
@@ -62,6 +63,8 @@ cargo xtask lint
 cargo xtask test
 cargo xtask build
 cargo xtask inspect
+cargo xtask build-init
+cargo xtask inspect-init
 cargo xtask qemu-command
 cargo xtask run
 cargo xtask test-boot
@@ -70,13 +73,15 @@ cargo xtask test-el0
 cargo xtask ci
 ```
 
-`build` produces an ELF, raw image, and linker map under `target/`; `inspect` validates those
-artifacts without executing them. `qemu-command` prints the pinned command without starting an
+`build` produces a kernel ELF, raw image, and linker map under `target/`; `inspect` validates those
+artifacts without executing them. `build-init` and `inspect-init` do the same for the first
+standalone native user ELF. `qemu-command` prints the pinned command without starting an
 emulator. `run` is interactive and `test-boot` is bounded; neither is part of emulator-free `ci`.
 `test-memory` builds the opt-in boot-memory integration image; `test-el0` builds the opt-in
 user-mode conformance image. Each requires its own final marker. See
 [`docs/QEMU.md`](docs/QEMU.md), [`docs/BOOT_MEMORY_PROBE.md`](docs/BOOT_MEMORY_PROBE.md), and
-[`docs/EL0_PROBE.md`](docs/EL0_PROBE.md) for their exact validation boundaries.
+[`docs/EL0_PROBE.md`](docs/EL0_PROBE.md) for their exact validation boundaries. The separately
+linked program is documented in [`docs/FIRST_USER_PROGRAM.md`](docs/FIRST_USER_PROGRAM.md).
 
 ## LSP target
 

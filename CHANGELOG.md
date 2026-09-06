@@ -43,4 +43,6 @@ under `Unreleased` and the Cargo version remains 0.0.0 until the 0.1.0 release g
   16-byte alignment, checked capacity, and page-offset-aware process-image population.
 - Ownership-gated AArch64 user-address-space activation that consumes the complete leaf/table
   owner before publishing TTBR0 and entering EL0t.
+- Separately linked AArch64 `phoenix-init` conformance ELF plus canonical build and static
+  inspection through the production loader contract.
 - Project, Agent, Roadmap, and kernel capability documentation.
