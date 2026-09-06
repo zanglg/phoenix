@@ -136,7 +136,7 @@ _No unclassified entries._
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
 | OBS-001 | Structured logging and runtime ring buffer | Planned | 0.1.0 | Builds on early console |
-| OBS-002 | Panic register dump, symbols, and stack traces | Planned | 0.1.0 | Preserve postmortem information |
+| OBS-002 | Panic register dump, symbols, and stack traces | In Progress | 0.1.0 | Fatal exception path reports vector, PC, status, ESR, and FAR; symbolization and stack traces remain |
 | OBS-003 | Tracing and profiling | Captured | Unscheduled | Avoid committing to a format early |
 | TEST-001 | QEMU boot smoke test with timeout and sentinel | In Progress | 0.1.0 | Harness and host tests implemented; QEMU execution remains Runtime Pending |
 | TEST-002 | Host-side unit and property tests | Implemented | 0.1.0 | Console, build identity, config, and ELF-layout logic |

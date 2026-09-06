@@ -62,6 +62,7 @@ terminal sentinel determines the result:
 
 - `PHOENIX_BOOT_OK`: pass;
 - `PHOENIX_PANIC`: fail immediately;
+- `PHOENIX_EXCEPTION`: fail immediately and retain the register report;
 - QEMU exit before either sentinel: fail;
 - timeout: fail and terminate QEMU;
 - more than 1 MiB without a sentinel: fail and terminate QEMU;

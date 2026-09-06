@@ -12,7 +12,8 @@ source and ELF layout require; it is not evidence that the image has run on an e
 - The entry CPU must already be in AArch64 state at EL1 or non-secure EL2. EL3 is unsupported.
 - Stage-1 translation must be disabled at entry. Instruction and data caches must be disabled, or
   firmware must have completed the cache maintenance needed to make the loaded image coherent.
-- Asynchronous exceptions are masked because exception vectors do not exist yet.
+- Asynchronous exceptions are masked during bootstrap; Rust installs vectors before any later
+  interrupt source may be enabled.
 - `x0` is preserved and passed to `kernel_main`; it is expected to contain the physical DTB
   address, but Phoenix does not parse it yet.
 - Only a CPU whose `MPIDR_EL1.Aff0` is zero proceeds. Other CPUs remain in a `wfe` loop.
@@ -29,7 +30,8 @@ translation regime:
 
 The MMU is enabled before entering Rust. Instruction and data caches, FP/SIMD, interrupts, and
 final permission-separated page tables remain disabled or deferred. This coarse mapping exists
-only for early boot.
+only for early boot. Rust installs the linked EL1 exception vector table before emitting its first
+console line, but keeps asynchronous exceptions masked.
 
 The linker reserves a zeroed BSS followed by a 64 KiB, 16-byte-aligned boot stack. Rust receives
 the higher-half stack address. QEMU `virt` PL011 registers are accessed through the low device

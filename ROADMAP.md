@@ -10,9 +10,9 @@ passed. The broader, unscheduled capability surface remains in `FEATURES.md`.
 
 ## Current position
 
-The engineering foundation is complete. **Bootstrap and early console** is Runtime Pending: its
-build and static-inspection work is complete, while emulator validation remains outstanding. The
-active no-emulator work is **Host-verifiable architecture foundations**.
+The engineering foundation and **Host-verifiable architecture foundations** are complete.
+**Bootstrap and early console** remains Runtime Pending because emulator validation is outstanding.
+The active no-emulator work is **Exceptions and diagnostics**.
 
 ## Completed foundation
 
@@ -67,6 +67,19 @@ AArch64 artifact retains all required static layout checks.
 
 Install exception vectors, preserve a complete register context, classify faults, and produce a
 useful panic report with symbols or enough addresses for offline symbolization.
+
+Completed without an emulator:
+
+- all vector slots, the exception-frame ABI, ESR and data-abort decoding are Host Tested;
+- the linked vector table saves/restores complete integer state and is installed in `VBAR_EL1`;
+- ELF inspection enforces the table's 2 KiB size and alignment;
+- the fatal dispatcher emits a stable exception sentinel plus vector, PC, status, ESR, and FAR.
+
+Remaining:
+
+- execute deliberate exception probes and verify register preservation on QEMU;
+- add offline symbolization and a reliable stack trace;
+- define recoverable EL0 faults and syscall dispatch before returning from exceptions.
 
 Observable result: deliberate synchronous exceptions are caught and reported deterministically
 instead of silently hanging QEMU.

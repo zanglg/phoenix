@@ -19,6 +19,7 @@ const OUTPUT_LIMIT: usize = 1024 * 1024;
 
 pub const BOOT_SUCCESS_SENTINEL: &str = "PHOENIX_BOOT_OK";
 pub const PANIC_SENTINEL: &str = "PHOENIX_PANIC";
+pub const EXCEPTION_SENTINEL: &str = "PHOENIX_EXCEPTION";
 
 struct QemuCommand {
     arguments: Vec<OsString>,
@@ -70,12 +71,14 @@ impl QemuCommand {
 enum TerminalOutput {
     Success,
     Panic,
+    Exception,
 }
 
 #[derive(Debug)]
 enum TestOutcome {
     Success,
     Panic,
+    Exception,
     Timeout,
     OutputLimit,
     Exited(ExitStatus),
@@ -153,7 +156,11 @@ pub fn test_boot(image: &Path, log: &Path, workspace_root: &Path) -> bool {
     let (outcome, mut output) = observe(&mut child, &receiver);
     if matches!(
         outcome,
-        TestOutcome::Success | TestOutcome::Panic | TestOutcome::Timeout | TestOutcome::OutputLimit
+        TestOutcome::Success
+            | TestOutcome::Panic
+            | TestOutcome::Exception
+            | TestOutcome::Timeout
+            | TestOutcome::OutputLimit
     ) {
         let _ = child.kill();
     }
@@ -186,6 +193,11 @@ pub fn test_boot(image: &Path, log: &Path, workspace_root: &Path) -> bool {
         TestOutcome::Panic => {
             eprintln!("QEMU_TEST_RESULT=panic");
             eprintln!("error: observed {PANIC_SENTINEL} before the boot success sentinel");
+            false
+        }
+        TestOutcome::Exception => {
+            eprintln!("QEMU_TEST_RESULT=exception");
+            eprintln!("error: observed {EXCEPTION_SENTINEL} before the boot success sentinel");
             false
         }
         TestOutcome::Timeout => {
@@ -300,6 +312,7 @@ fn observe(
                 match terminal {
                     TerminalOutput::Success => TestOutcome::Success,
                     TerminalOutput::Panic => TestOutcome::Panic,
+                    TerminalOutput::Exception => TestOutcome::Exception,
                 },
                 output,
             );
@@ -343,12 +356,16 @@ fn drain_output(receiver: &Receiver<StreamEvent>, output: &mut Vec<u8>) {
 fn classify_output(output: &[u8]) -> Option<TerminalOutput> {
     let success = find_bytes(output, BOOT_SUCCESS_SENTINEL.as_bytes());
     let panic = find_bytes(output, PANIC_SENTINEL.as_bytes());
-    match (success, panic) {
-        (Some(success), Some(panic)) if panic < success => Some(TerminalOutput::Panic),
-        (Some(_), _) => Some(TerminalOutput::Success),
-        (None, Some(_)) => Some(TerminalOutput::Panic),
-        (None, None) => None,
-    }
+    let exception = find_bytes(output, EXCEPTION_SENTINEL.as_bytes());
+    [
+        success.map(|position| (position, TerminalOutput::Success)),
+        panic.map(|position| (position, TerminalOutput::Panic)),
+        exception.map(|position| (position, TerminalOutput::Exception)),
+    ]
+    .into_iter()
+    .flatten()
+    .min_by_key(|(position, _)| *position)
+    .map(|(_, terminal)| terminal)
 }
 
 fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -375,8 +392,8 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        BOOT_SUCCESS_SENTINEL, CPU, MACHINE, PANIC_SENTINEL, QemuCommand, TerminalOutput,
-        classify_output, has_named_item, shell_quote,
+        BOOT_SUCCESS_SENTINEL, CPU, EXCEPTION_SENTINEL, MACHINE, PANIC_SENTINEL, QemuCommand,
+        TerminalOutput, classify_output, has_named_item, shell_quote,
     };
 
     #[test]
@@ -405,6 +422,10 @@ mod tests {
         assert_eq!(
             classify_output(format!("{BOOT_SUCCESS_SENTINEL}\n{PANIC_SENTINEL}").as_bytes()),
             Some(TerminalOutput::Success)
+        );
+        assert_eq!(
+            classify_output(format!("{EXCEPTION_SENTINEL}\n{BOOT_SUCCESS_SENTINEL}").as_bytes()),
+            Some(TerminalOutput::Exception)
         );
     }
 

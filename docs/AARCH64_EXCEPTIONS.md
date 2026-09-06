@@ -1,8 +1,8 @@
 # AArch64 Exceptions
 
-This document defines Phoenix's Host Tested exception metadata and the frame layout reserved for
-the future EL1 assembly entry path. No vector table is installed and no exception has been handled
-on a target yet.
+This document defines Phoenix's exception metadata, frame ABI, assembly vector table, and fatal
+diagnostic path. The implementation is Host Tested, Cross Compiled, and ELF Inspected; no exception
+has been handled on a target yet.
 
 ## Vector table model
 
@@ -15,8 +15,9 @@ models each slot as the product of:
 The model computes and reversibly decodes every architectural offset from `0x000` through `0x780`.
 The ordering follows Arm's
 [`Exception model`](https://developer.arm.com/-/media/Arm%20Developer%20Community/PDF/Learn%20the%20Architecture/Exception%20model.pdf)
-guide. `VBAR_EL1` remains unset because the assembly entries and handler contract are the next
-runtime-bearing step.
+guide. `vectors.S` emits all slots at those offsets and fails assembly if an entry exceeds 128
+bytes. The linked table is checked for 2 KiB size and alignment before it is installed in
+`VBAR_EL1` at the beginning of `kernel_main` while exceptions remain masked.
 
 ## Exception frame ABI
 
@@ -35,10 +36,15 @@ Compile-time assertions make layout drift a build failure. The 288-byte size pre
 AArch64 16-byte stack alignment. `x30` is saved explicitly; there is no implicit call-frame link
 register. FP/SIMD, debug, pointer-authentication, and SVE state are not part of this initial frame.
 
-The future assembly entry must allocate the whole frame before calling Rust and must restore it
-exactly before `eret`. It must not assume that an exception from EL0 arrives on a trusted user
-stack. Current-EL `SP_EL0` entries will be treated as a kernel invariant violation until Phoenix
-defines a deliberate use for that stack selection.
+Every assembly entry masks DAIF, allocates the whole frame, saves all general registers and system
+state, and passes the frame plus vector index to `phoenix_exception_dispatch`. If a future
+dispatcher returns, assembly writes back mutable SP/PC/status state, restores all registers, and
+uses `eret`. Current-EL `SP_EL0` slots switch to `SP_EL1` before touching memory, so they do not
+trust the interrupted stack.
+
+The current Rust dispatcher is deliberately fatal. It emits `PHOENIX_EXCEPTION`, the decoded
+vector, PC, saved status, syndrome, and fault address, then halts. Recovery and syscall return are
+not yet enabled even though the assembly epilogue is present.
 
 ## Syndrome decoding
 
@@ -62,6 +68,8 @@ decoder fails only when applied to the wrong exception class.
 
 - vector offsets are aligned, unique, and contained within the 2 KiB table;
 - the Rust frame size, alignment, and every assembly-visible field offset are compile-time checked;
+- no general register is modified before its original value is stored;
+- an exception never calls Rust on an untrusted `SP_EL0` stack;
 - raw syndrome values and unknown enumerants are never silently discarded;
 - data-abort transfer fields are exposed only when `ISV` says they are valid;
 - decoding has no allocation, MMIO, system-register, or unsafe behavior;
@@ -72,20 +80,19 @@ decoder fails only when applied to the wrong exception class.
 Host tests cover all vector offsets, invalid offsets, frame size/alignment/register boundaries,
 known and unknown exception classes, SVC immediates, instruction length, data-abort flags and
 access metadata, every initially classified fault-status family, and wrong-class rejection. The
-same code is Cross Compiled for AArch64.
+same code is Cross Compiled for AArch64. Assembly-time size checks cover each vector entry, and ELF
+inspection verifies the complete table's address, alignment, and size.
 
-The future assembly table, `VBAR_EL1` write, exception entry/return, register preservation, and
-fault output remain Runtime Pending in `docs/RUNTIME_VALIDATION.md`.
+The `VBAR_EL1` write, exception entry/return, register preservation, and fault output remain Runtime
+Pending in `docs/RUNTIME_VALIDATION.md`.
 
 ## TODO
 
-- implement a 2 KiB-aligned assembly vector table with compile-time slot-size checks;
-- save and restore the exact `ExceptionFrame` layout;
-- install `VBAR_EL1` before enabling any exception source;
+- validate vector installation and every save/restore path on QEMU;
 - choose dedicated exception-stack and nested-exception policies;
 - dispatch current-EL faults, EL0 faults/syscalls, IRQ, FIQ, and SError separately;
 - validate `FAR_EL1` only for classes and syndrome values where the architecture defines it;
-- add readable diagnostic formatting without allocation;
+- expand diagnostic formatting with class-specific detail without allocation;
 - define recoverable user faults versus fatal kernel faults;
 - add guarded exception stacks and a double-fault/emergency path;
 - add QEMU probes for register preservation, deliberate aborts, `SVC`, and `eret`.

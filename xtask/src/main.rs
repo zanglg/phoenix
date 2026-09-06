@@ -10,6 +10,7 @@ const AARCH64_TARGET: &str = "aarch64-unknown-none-softfloat";
 const KERNEL_PHYS_BASE: u64 = 0x0000_0000_4008_0000;
 const KERNEL_VIRT_BASE: u64 = 0xffff_ff80_4008_0000;
 const BOOT_STACK_SIZE: u64 = 64 * 1024;
+const EXCEPTION_VECTOR_TABLE_SIZE: u64 = 2048;
 
 fn main() -> ExitCode {
     let mut args = env::args().skip(1);
@@ -452,6 +453,8 @@ fn validate_symbol_layout(symbols: &BTreeMap<String, u64>) -> Vec<String> {
         "__boot_l1_page_table",
         "__boot_stack_bottom",
         "__boot_stack_top",
+        "__exception_vectors",
+        "__exception_vectors_end",
     ];
     let mut errors = Vec::new();
     for symbol in required {
@@ -471,6 +474,8 @@ fn validate_symbol_layout(symbols: &BTreeMap<String, u64>) -> Vec<String> {
     let table = symbols["__boot_l1_page_table"];
     let stack_bottom = symbols["__boot_stack_bottom"];
     let stack_top = symbols["__boot_stack_top"];
+    let vectors = symbols["__exception_vectors"];
+    let vectors_end = symbols["__exception_vectors_end"];
 
     if start != KERNEL_VIRT_BASE {
         errors.push(format!(
@@ -494,6 +499,12 @@ fn validate_symbol_layout(symbols: &BTreeMap<String, u64>) -> Vec<String> {
     }
     if stack_top & 0xf != 0 {
         errors.push("bootstrap stack top is not 16-byte aligned".to_owned());
+    }
+    if vectors & (EXCEPTION_VECTOR_TABLE_SIZE - 1) != 0 {
+        errors.push("exception vector table is not 2 KiB aligned".to_owned());
+    }
+    if vectors_end.checked_sub(vectors) != Some(EXCEPTION_VECTOR_TABLE_SIZE) {
+        errors.push("exception vector table is not exactly 2 KiB".to_owned());
     }
     errors
 }
@@ -580,7 +591,7 @@ fn inspect_kernel() -> bool {
 
     if errors.is_empty() {
         println!("ok: AArch64 ELF machine, entry, load addresses, and symbols");
-        println!("ok: bootstrap page table, BSS, stack, raw image, and linker map");
+        println!("ok: bootstrap page table, exception vectors, BSS, stack, image, and map");
         true
     } else {
         for error in errors {
@@ -656,6 +667,8 @@ mod tests {
              ffffff8040080000 T _start\n\
              ffffff8040080650 T kernel_main\n\
              ffffff8040084000 D __boot_l1_page_table\n\
+             ffffff8040084800 T __exception_vectors\n\
+             ffffff8040085000 T __exception_vectors_end\n\
              ffffff8040085000 D __bss_start\n\
              ffffff8040085000 B __bss_end\n\
              ffffff8040085000 B __boot_stack_bottom\n\

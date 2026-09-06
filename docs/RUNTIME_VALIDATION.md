@@ -28,7 +28,7 @@ valuable evidence but cannot close an entry in this ledger.
 | RUN-MM-001 | Initialize the frame allocator from discovered memory | Runtime Pending | Allocations avoid the image, DTB, boot tables, stack, and firmware reservations |
 | RUN-MMU-001 | Install final permission-separated kernel tables | Runtime Pending | Text, rodata, data, stack, DTB, and MMIO mappings behave with documented permissions |
 | RUN-MMU-002 | Retire temporary aliases and maintain the TLB | Runtime Pending | Execution survives table switch, barriers, invalidation, and low-RAM alias removal |
-| RUN-EXC-001 | Install and enter the EL1 exception vector table | Runtime Pending | A deliberate synchronous fault reaches the correct 128-byte slot and Rust dispatcher |
+| RUN-EXC-001 | Install and enter the EL1 exception vector table | Runtime Pending | Installed `VBAR_EL1` points at the linked 2 KiB table and a deliberate fault emits `PHOENIX_EXCEPTION` from the correct slot |
 | RUN-EXC-002 | Preserve and restore the exception frame | Runtime Pending | All `x0..x30`, SP, PC, status, syndrome, and fault-address values match controlled probes |
 
 ## Validation procedure template
