@@ -14,8 +14,9 @@ source and ELF layout require; it is not evidence that the image has run on an e
   firmware must have completed the cache maintenance needed to make the loaded image coherent.
 - Asynchronous exceptions are masked during bootstrap; Rust installs vectors before any later
   interrupt source may be enabled.
-- `x0` is preserved and passed to `kernel_main`; it is expected to contain the physical DTB
-  address, but Phoenix does not parse it yet.
+- `x0` is preserved and passed to `kernel_main` as the physical DTB address. A target helper can
+  validate and borrow that blob through the temporary high RAM alias; the default boot path does
+  not consume it yet.
 - Only a CPU whose `MPIDR_EL1.Aff0` is zero proceeds. Other CPUs remain in a `wfe` loop.
 
 ## Temporary execution environment

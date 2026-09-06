@@ -1,8 +1,9 @@
 # Boot Physical Memory Map
 
 This document describes how validated firmware memory information becomes Phoenix's first frame
-allocator. The construction logic is Host Tested and Cross Compiled; consuming the real QEMU DTB
-and linker symbols remains Runtime Pending.
+allocator. The construction logic is Host Tested and Cross Compiled. Target helpers now borrow the
+real DTB through the bootstrap high mapping and derive physical kernel bounds from linker symbols;
+executing that complete path remains Runtime Pending.
 
 ## Current implementation
 
@@ -52,8 +53,7 @@ rounding, sorting, merging, splitting, and allocator behavior.
 
 ## TODO
 
-- obtain physical `__kernel_start` and `__kernel_end` through one checked linker-layout helper;
-- validate and borrow the firmware DTB from the physical boot argument;
+- run the DTB/linker/allocator path in a bounded opt-in early-boot integration probe;
 - define policy for dynamically allocated `/reserved-memory` children when a real consumer appears;
 - add child-address translation if a supported platform supplies non-empty `ranges`;
 - constrain allocations to memory reachable through the active physical-memory backend;

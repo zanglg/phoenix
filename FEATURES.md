@@ -40,7 +40,7 @@ _No unclassified entries._
 | --- | --- | --- | --- | --- |
 | BOOT-001 | AArch64 QEMU `virt` direct boot | In Progress | 0.1.0 | Image builds; emulator execution is unverified |
 | BOOT-002 | Early stack, BSS initialization, panic, and halt | In Progress | 0.1.0 | Implemented and statically checked; runtime unverified |
-| BOOT-003 | Device Tree discovery and ownership | In Progress | 0.1.0 | Structure, header/static reserved memory, RAM, bootargs, size, and CPU ID are Host Tested; target ownership remains |
+| BOOT-003 | Device Tree discovery and ownership | In Progress | 0.1.0 | Parsing is Host Tested; checked target borrowing through the bootstrap mapping is Cross Compiled and Runtime Pending |
 | BOOT-004 | UEFI boot | Deferred | Unscheduled | Future firmware path |
 | BOOT-005 | Multiboot-compatible x86_64 boot path | Deferred | Unscheduled | Decide with x86_64 port |
 | BOOT-006 | Shutdown and reboot | Deferred | Unscheduled | Platform-specific mechanisms |
@@ -60,7 +60,7 @@ _No unclassified entries._
 
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
-| MM-001 | Physical page allocator | In Progress | 0.1.0 | Fixed-capacity allocator and transactional DTB/kernel/firmware reservation map are Host Tested; target linker/DTB integration remains |
+| MM-001 | Physical page allocator | In Progress | 0.1.0 | Allocator/map logic is Host Tested; target DTB borrowing and linker-bound derivation are Cross Compiled and Runtime Pending |
 | MM-002 | Virtual memory and kernel address space | In Progress | 0.1.0 | Descriptors, plans, and checked bootstrap private-frame access are built; final TTBR1 and runtime validation remain |
 | MM-003 | Kernel heap and fallible allocation policy | Planned | 0.1.0 | Define allocation-failure behavior |
 | MM-004 | Kernel stacks and guard pages | Planned | 0.1.0 | Include exception-context requirements |

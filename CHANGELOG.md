@@ -35,4 +35,6 @@ under `Unreleased` and the Cargo version remains 0.0.0 until the 0.1.0 release g
 - Checked QEMU `virt` bootstrap physical-memory backend for private image frames and translation tables under the temporary TTBR1 RAM alias.
 - Transactional DTB-derived boot memory map that removes firmware reservations, the complete kernel image, and the borrowed DTB before allocator creation.
 - Conservative `/reserved-memory` parsing that reserves static child ranges and rejects unsupported dynamic or translated reservation forms.
+- Checked target-side DTB borrowing and linker-symbol conversion for the physical boot image
+  reservation under the temporary QEMU `virt` high-memory alias.
 - Project, Agent, Roadmap, and kernel capability documentation.
