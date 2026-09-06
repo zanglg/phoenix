@@ -24,9 +24,12 @@ reservation and structure blocks require 8-byte and 4-byte offsets respectively.
 - root `#address-cells` and `#size-cells`, supporting one or two 32-bit cells;
 - one or more `reg` entries from root-level `memory` nodes;
 - fixed memory reservation entries.
+- static `reg` entries from direct `/reserved-memory` children.
 
 Memory ranges are returned as checked half-open physical ranges. Unsupported cell widths,
 partial `reg` entries, address overflow, and a tree without non-empty memory are rejected.
+Dynamic `size`-only reserved-memory requests and non-empty address-translating `ranges` are rejected
+rather than silently made allocatable.
 
 ## Deferred target integration
 

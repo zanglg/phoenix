@@ -54,6 +54,10 @@ pub fn memory_map_from_boot_info<const CAPACITY: usize>(
         map.reserve(reservation_range(reservation)?)
             .map_err(BootMemoryError::MemoryMap)?;
     }
+    for reservation in info.reserved_memory_regions() {
+        map.reserve(reservation.map_err(BootMemoryError::DeviceTree)?)
+            .map_err(BootMemoryError::MemoryMap)?;
+    }
     map.reserve(kernel_image)
         .map_err(BootMemoryError::MemoryMap)?;
     map.reserve(device_tree)

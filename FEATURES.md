@@ -40,7 +40,7 @@ _No unclassified entries._
 | --- | --- | --- | --- | --- |
 | BOOT-001 | AArch64 QEMU `virt` direct boot | In Progress | 0.1.0 | Image builds; emulator execution is unverified |
 | BOOT-002 | Early stack, BSS initialization, panic, and halt | In Progress | 0.1.0 | Implemented and statically checked; runtime unverified |
-| BOOT-003 | Device Tree discovery and ownership | In Progress | 0.1.0 | Structure, reservations, memory, bootargs, and CPU ID are Host Tested; target ownership remains |
+| BOOT-003 | Device Tree discovery and ownership | In Progress | 0.1.0 | Structure, header/static reserved memory, RAM, bootargs, size, and CPU ID are Host Tested; target ownership remains |
 | BOOT-004 | UEFI boot | Deferred | Unscheduled | Future firmware path |
 | BOOT-005 | Multiboot-compatible x86_64 boot path | Deferred | Unscheduled | Decide with x86_64 port |
 | BOOT-006 | Shutdown and reboot | Deferred | Unscheduled | Platform-specific mechanisms |

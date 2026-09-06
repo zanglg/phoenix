@@ -4,7 +4,7 @@ use core::str;
 
 mod boot;
 
-pub use boot::{BootInfo, MemoryRegions};
+pub use boot::{BootInfo, MemoryRegions, ReservedMemoryRegions};
 
 const FDT_MAGIC: u32 = 0xd00d_feed;
 const FDT_HEADER_SIZE: usize = 40;
@@ -151,6 +151,10 @@ pub enum Error {
         /// Required bytes per entry.
         entry_size: usize,
     },
+    /// `/reserved-memory/ranges` is non-empty and would require address translation.
+    UnsupportedReservedMemoryRanges,
+    /// A `/reserved-memory` child requests dynamic allocation through `size` without `reg`.
+    UnsupportedDynamicReservedMemory,
     /// A physical range from the tree overflows or cannot fit the target address width.
     InvalidPhysicalRange {
         /// Physical start supplied by firmware.

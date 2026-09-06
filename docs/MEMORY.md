@@ -25,8 +25,9 @@ a heap:
   map.
 
 `memory_map_from_boot_info` implements the first boot integration: it adds DTB memory ranges and
-then reserves firmware reservation-map entries, the complete kernel physical image, and the DTB
-blob itself. Bootstrap tables and stacks are covered by the supplied full linker-image range.
+then reserves firmware reservation-map entries, static `/reserved-memory` children, the complete
+kernel physical image, and the DTB blob itself. Bootstrap tables and stacks are covered by the
+supplied full linker-image range.
 
 ## Frame allocator
 
@@ -58,7 +59,7 @@ AArch64 by `cargo xtask ci`.
 
 - choose the production range capacity using observed QEMU DTBs;
 - connect the Host Tested `BootInfo` map builder to linker-provided physical bounds at runtime;
-- parse and reserve `/reserved-memory` nodes;
+- add explicitly designed dynamic and translated `/reserved-memory` policies when needed;
 - reserve the DTB for the lifetime of its borrowed references;
 - add an early allocation audit log and runtime self-check;
 - select a scalable allocator only after allocation patterns are observable;

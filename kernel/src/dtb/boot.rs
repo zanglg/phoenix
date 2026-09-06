@@ -42,6 +42,9 @@ impl<'a> BootInfo<'a> {
         if !found_memory {
             return Err(Error::MissingMemory);
         }
+        for region in info.reserved_memory_regions() {
+            region?;
+        }
         Ok(info)
     }
 
@@ -68,6 +71,130 @@ impl<'a> BootInfo<'a> {
     /// Iterate over physical reservations declared in the DTB reservation map.
     pub fn reservations(self) -> Reservations<'a> {
         self.tree.reservations()
+    }
+
+    /// Iterate over static `reg` ranges in direct `/reserved-memory` children.
+    pub fn reserved_memory_regions(self) -> ReservedMemoryRegions<'a> {
+        ReservedMemoryRegions::new(self.tree, self.cells)
+    }
+}
+
+/// Iterator over statically placed `/reserved-memory` child ranges.
+#[derive(Clone, Debug)]
+pub struct ReservedMemoryRegions<'a> {
+    events: Events<'a>,
+    cells: CellCounts,
+    depth: usize,
+    container_depth: Option<usize>,
+    child_depth: Option<usize>,
+    child_has_reg: bool,
+    child_has_size: bool,
+    pending: Option<RegEntries<'a>>,
+}
+
+impl<'a> ReservedMemoryRegions<'a> {
+    fn new(tree: DeviceTree<'a>, cells: CellCounts) -> Self {
+        Self {
+            events: tree.events(),
+            cells,
+            depth: 0,
+            container_depth: None,
+            child_depth: None,
+            child_has_reg: false,
+            child_has_size: false,
+            pending: None,
+        }
+    }
+}
+
+impl<'a> Iterator for ReservedMemoryRegions<'a> {
+    type Item = Result<AddressRange<PhysAddr>, Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(entries) = &mut self.pending {
+                if let Some(region) = entries.next() {
+                    return Some(region);
+                }
+                self.pending = None;
+            }
+
+            let event = match self.events.next()? {
+                Ok(event) => event,
+                Err(error) => return Some(Err(error)),
+            };
+            match event {
+                Event::BeginNode { name } => {
+                    self.depth += 1;
+                    if self.depth == 2 && base_name(name) == "reserved-memory" {
+                        self.container_depth = Some(self.depth);
+                    } else if self
+                        .container_depth
+                        .is_some_and(|depth| self.depth == depth + 1)
+                    {
+                        self.child_depth = Some(self.depth);
+                        self.child_has_reg = false;
+                        self.child_has_size = false;
+                    }
+                }
+                Event::EndNode => {
+                    if self.child_depth == Some(self.depth) {
+                        self.child_depth = None;
+                        if self.child_has_size && !self.child_has_reg {
+                            self.depth -= 1;
+                            return Some(Err(Error::UnsupportedDynamicReservedMemory));
+                        }
+                    }
+                    if self.container_depth == Some(self.depth) {
+                        self.container_depth = None;
+                    }
+                    self.depth -= 1;
+                }
+                Event::Property {
+                    name: "#address-cells",
+                    value,
+                } if self.container_depth == Some(self.depth) => {
+                    match scalar_u32("#address-cells", value).and_then(|count| {
+                        validate_cell_count("#address-cells", count).map(|()| count)
+                    }) {
+                        Ok(count) => self.cells.address = count,
+                        Err(error) => return Some(Err(error)),
+                    }
+                }
+                Event::Property {
+                    name: "#size-cells",
+                    value,
+                } if self.container_depth == Some(self.depth) => {
+                    match scalar_u32("#size-cells", value)
+                        .and_then(|count| validate_cell_count("#size-cells", count).map(|()| count))
+                    {
+                        Ok(count) => self.cells.size = count,
+                        Err(error) => return Some(Err(error)),
+                    }
+                }
+                Event::Property {
+                    name: "ranges",
+                    value,
+                } if self.container_depth == Some(self.depth) => {
+                    if !value.is_empty() {
+                        return Some(Err(Error::UnsupportedReservedMemoryRanges));
+                    }
+                }
+                Event::Property {
+                    name: "reg", value, ..
+                } if self.child_depth == Some(self.depth) => {
+                    self.child_has_reg = true;
+                    match RegEntries::new(value, self.cells) {
+                        Ok(entries) => self.pending = Some(entries),
+                        Err(error) => return Some(Err(error)),
+                    }
+                }
+                Event::Property { name: "size", .. } if self.child_depth == Some(self.depth) => {
+                    self.child_has_size = true;
+                }
+                Event::Property { .. } | Event::Nop | Event::End => {}
+            }
+        }
     }
 }
 
@@ -387,6 +514,71 @@ mod tests {
         blob
     }
 
+    fn reserved_memory_fixture(reg: Option<&[u8]>, nonempty_ranges: bool) -> Vec<u8> {
+        const ADDRESS_CELLS: u32 = 0;
+        const SIZE_CELLS: u32 = 15;
+        const DEVICE_TYPE: u32 = 27;
+        const REG: u32 = 39;
+        const RANGES: u32 = 43;
+        const SIZE: u32 = 50;
+        let strings = b"#address-cells\0#size-cells\0device_type\0reg\0ranges\0size\0";
+        let memory_reg = two_cell_reg(&[(0x4000_0000, 0x1000_0000)]);
+
+        let mut structure = Vec::new();
+        begin_node(&mut structure, "");
+        property(&mut structure, ADDRESS_CELLS, &2_u32.to_be_bytes());
+        property(&mut structure, SIZE_CELLS, &2_u32.to_be_bytes());
+        begin_node(&mut structure, "memory@40000000");
+        property(&mut structure, DEVICE_TYPE, b"memory\0");
+        property(&mut structure, REG, &memory_reg);
+        push_u32(&mut structure, FDT_END_NODE);
+        begin_node(&mut structure, "reserved-memory");
+        property(&mut structure, ADDRESS_CELLS, &2_u32.to_be_bytes());
+        property(&mut structure, SIZE_CELLS, &2_u32.to_be_bytes());
+        property(
+            &mut structure,
+            RANGES,
+            if nonempty_ranges { &[0, 0, 0, 0] } else { &[] },
+        );
+        begin_node(&mut structure, "secure@41000000");
+        if let Some(reg) = reg {
+            property(&mut structure, REG, reg);
+        } else {
+            property(&mut structure, SIZE, &0x20_000_u64.to_be_bytes());
+        }
+        push_u32(&mut structure, FDT_END_NODE);
+        push_u32(&mut structure, FDT_END_NODE);
+        push_u32(&mut structure, FDT_END_NODE);
+        push_u32(&mut structure, FDT_END);
+
+        let mut reservations = Vec::new();
+        push_u64(&mut reservations, 0);
+        push_u64(&mut reservations, 0);
+        let reservations_offset = 40_usize;
+        let structure_offset = reservations_offset + reservations.len();
+        let strings_offset = structure_offset + structure.len();
+        let total_size = strings_offset + strings.len();
+        let mut blob = Vec::new();
+        for field in [
+            FDT_MAGIC,
+            total_size as u32,
+            structure_offset as u32,
+            strings_offset as u32,
+            reservations_offset as u32,
+            17,
+            16,
+            0,
+            strings.len() as u32,
+            structure.len() as u32,
+        ] {
+            push_u32(&mut blob, field);
+        }
+        blob.extend_from_slice(&reservations);
+        blob.extend_from_slice(&structure);
+        blob.extend_from_slice(strings);
+        blob
+    }
+
     fn two_cell_reg(entries: &[(u64, u64)]) -> Vec<u8> {
         let mut value = Vec::new();
         for (address, size) in entries {
@@ -468,6 +660,48 @@ mod tests {
         assert_eq!(
             memory_map_from_boot_info::<2>(info, kernel, PhysAddr::new(0x5000_0000)),
             Err(BootMemoryError::NoUsableFrames)
+        );
+    }
+
+    #[test]
+    fn extracts_and_reserves_static_reserved_memory_children() {
+        use crate::memory::{PAGE_SIZE, PageFrame};
+
+        let reserved = two_cell_reg(&[(0x4100_0000, 0x20_000)]);
+        let blob = reserved_memory_fixture(Some(&reserved), false);
+        let info = DeviceTree::from_bytes(&blob).unwrap().boot_info().unwrap();
+        assert_eq!(
+            info.reserved_memory_regions()
+                .collect::<Result<Vec<_>, _>>(),
+            Ok(vec![
+                AddressRange::new(PhysAddr::new(0x4100_0000), PhysAddr::new(0x4102_0000)).unwrap()
+            ])
+        );
+
+        let kernel =
+            AddressRange::new(PhysAddr::new(0x4008_0000), PhysAddr::new(0x4009_0000)).unwrap();
+        let map = memory_map_from_boot_info::<5>(info, kernel, PhysAddr::new(0x4010_0000)).unwrap();
+        let reserved_frame = PageFrame::from_start(PhysAddr::new(0x4100_0000 + PAGE_SIZE)).unwrap();
+        assert!(
+            !map.free_ranges()
+                .iter()
+                .any(|range| range.contains(reserved_frame))
+        );
+    }
+
+    #[test]
+    fn rejects_translated_or_dynamically_allocated_reserved_memory() {
+        let blob = reserved_memory_fixture(None, false);
+        assert_eq!(
+            DeviceTree::from_bytes(&blob).unwrap().boot_info(),
+            Err(Error::UnsupportedDynamicReservedMemory)
+        );
+
+        let reserved = two_cell_reg(&[(0x4100_0000, 0x20_000)]);
+        let blob = reserved_memory_fixture(Some(&reserved), true);
+        assert_eq!(
+            DeviceTree::from_bytes(&blob).unwrap().boot_info(),
+            Err(Error::UnsupportedReservedMemoryRanges)
         );
     }
 
