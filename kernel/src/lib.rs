@@ -8,6 +8,7 @@
 
 pub mod build_info;
 pub mod console;
+pub mod memory;
 
 #[cfg(target_arch = "aarch64")]
 pub mod arch;

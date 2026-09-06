@@ -69,6 +69,7 @@ _No unclassified entries._
 | MM-007 | Huge pages and block mappings | Captured | Unscheduled | Revisit after basic paging |
 | MM-008 | DMA, cache coherence, and IOMMU policy | Deferred | Unscheduled | Required for robust device support |
 | MM-009 | OOM and resource exhaustion behavior | Deferred | Unscheduled | Must not be postponed to final hardening |
+| MM-010 | Checked physical/virtual addresses, pages, frames, and ranges | Implemented | 0.1.0 | Host Tested and Cross Compiled |
 
 ## Concurrency, time, and SMP
 

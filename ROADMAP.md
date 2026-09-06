@@ -50,11 +50,11 @@ protocol remain deliberately open until emulator validation is available.
 Build the pure and statically inspectable foundations needed by later runtime integration, in
 this order:
 
-1. checked physical/virtual addresses, pages, frames, and ranges;
-2. strict read-only DTB parsing and boot-information extraction;
-3. physical-memory region normalization, reservation, and frame allocation;
-4. AArch64 translation indices and page-table descriptor construction;
-5. exception-frame layout, vector-table layout, and syndrome decoding.
+- [x] checked physical/virtual addresses, pages, frames, and ranges;
+- [ ] strict read-only DTB parsing and boot-information extraction;
+- [ ] physical-memory region normalization, reservation, and frame allocation;
+- [ ] AArch64 translation indices and page-table descriptor construction;
+- [ ] exception-frame layout, vector-table layout, and syndrome decoding.
 
 Each mechanism must be Host Tested where behavior is pure, Cross Compiled for AArch64, and kept
 independent of unverified MMIO or system-register effects. This section does not install final
