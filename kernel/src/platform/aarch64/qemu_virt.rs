@@ -135,6 +135,27 @@ impl BootstrapPhysicalMemory {
         DeviceTree::from_bytes(blob).map_err(BootstrapMemoryError::DeviceTree)
     }
 
+    /// Copy bytes from one privately owned frame into a caller buffer.
+    pub fn read_frame(
+        &self,
+        frame: PageFrame,
+        offset: usize,
+        output: &mut [u8],
+    ) -> Result<(), BootstrapMemoryError> {
+        let source = Self::translated_address(frame, offset, output.len())? as *const u8;
+        if output.is_empty() {
+            return Ok(());
+        }
+        // SAFETY: construction guarantees that the complete source frame is
+        // readable normal memory and the checked range stays within it. The
+        // caller's mutable slice is valid and cannot overlap a higher-half
+        // bootstrap mapping in safe code.
+        unsafe {
+            ptr::copy_nonoverlapping(source, output.as_mut_ptr(), output.len());
+        }
+        Ok(())
+    }
+
     fn translated_address(
         frame: PageFrame,
         offset: usize,

@@ -11,7 +11,8 @@ range beginning at `0xffffff8040000000`. `BootstrapPhysicalMemory` converts a ch
 range inside that window to its high alias and implements both loader backends:
 
 - `ProcessImageMemory` clears a private frame and copies a checked byte range into it;
-- `TranslationTableMemory` clears all table entries and writes one aligned 64-bit descriptor.
+- `TranslationTableMemory` clears all table entries and writes one aligned 64-bit descriptor;
+- a checked read method copies bytes from a private frame for boot-probe verification.
 
 It can also borrow the firmware DTB from the physical address in `x0`. The implementation first
 checks and reads only the 40-byte header, then validates the declared total size before creating
@@ -59,7 +60,6 @@ and descriptors are observed by the CPU.
 
 - construct the backend only after a runtime assertion of the expected bootstrap translation
   regime;
-- invoke the DTB and linker helpers in a bounded early-boot integration probe;
 - feed loader writes exclusively with frames owned through the DTB-derived allocator;
 - add explicit cache maintenance before enabling caches or executing copied instructions;
 - replace it with a final permission-separated physical direct map or bounded temporary mapper;

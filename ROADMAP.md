@@ -96,8 +96,9 @@ Observable result: allocator and mapping self-tests exercise success and failure
 corrupting the bootstrap, DTB, image, or device mappings.
 
 The Host Tested boot-map builder now normalizes DTB memory and removes firmware reservations, the
-loaded kernel, and the borrowed DTB before freezing the allocator. Real boot-argument and linker
-symbol integration remains Runtime Pending.
+loaded kernel, and the borrowed DTB before freezing the allocator. A separate Cross Compiled probe
+connects the real boot argument and linker symbols, allocates and round-trips one private frame,
+and restores ownership; its target execution remains Runtime Pending.
 
 ## 5. Interrupts and time
 

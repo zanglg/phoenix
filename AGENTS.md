@@ -30,6 +30,7 @@ not create speculative implementations for them.
 - `docs/AARCH64_USER_PAGE_TABLES.md`: user-table topology, ownership, materialization, and activation boundary.
 - `docs/QEMU_VIRT_BOOTSTRAP_MEMORY.md`: checked target access to private RAM under the temporary TTBR1 alias.
 - `docs/BOOT_MEMORY_MAP.md`: DTB-to-allocator construction and mandatory boot reservations.
+- `docs/BOOT_MEMORY_PROBE.md`: opt-in end-to-end boot memory integration and runtime boundary.
 - `docs/AARCH64_EXCEPTIONS.md`: vector, frame, syndrome, and remaining runtime-handler contract.
 - `docs/USER_ADDRESS_SPACE.md`: EL0 virtual region, permissions, mapping plan, and guarded stack.
 - `docs/ELF_LOADER.md`: strict initial executable subset and transactional loading requirements.
@@ -74,13 +75,15 @@ cargo xtask inspect
 cargo xtask qemu-command
 cargo xtask run
 cargo xtask test-boot
+cargo xtask test-memory
 cargo xtask test-el0
 cargo xtask ci
 ```
 
 Run `cargo xtask ci` before reporting completion. Never state that an unexecuted check passed.
-QEMU is optional in 0.0.0. Static artifact inspection is required. `run` and `test-boot` are
-runtime-only commands; do not install or invoke QEMU in an environment where it is unavailable.
+QEMU is optional in 0.0.0. Static artifact inspection is required. `run`, `test-boot`,
+`test-memory`, and `test-el0` are runtime-only commands; do not install or invoke QEMU in an
+environment where it is unavailable.
 
 Use these validation states consistently:
 

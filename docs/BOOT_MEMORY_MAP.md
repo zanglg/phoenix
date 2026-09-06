@@ -53,7 +53,7 @@ rounding, sorting, merging, splitting, and allocator behavior.
 
 ## TODO
 
-- run the DTB/linker/allocator path in a bounded opt-in early-boot integration probe;
+- execute the implemented bounded boot-memory probe on QEMU and record its map evidence;
 - define policy for dynamically allocated `/reserved-memory` children when a real consumer appears;
 - add child-address translation if a supported platform supplies non-empty `ranges`;
 - constrain allocations to memory reachable through the active physical-memory backend;

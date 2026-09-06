@@ -37,4 +37,6 @@ under `Unreleased` and the Cargo version remains 0.0.0 until the 0.1.0 release g
 - Conservative `/reserved-memory` parsing that reserves static child ranges and rejects unsupported dynamic or translated reservation forms.
 - Checked target-side DTB borrowing and linker-symbol conversion for the physical boot image
   reservation under the temporary QEMU `virt` high-memory alias.
+- Opt-in boot-memory integration image and bounded `test-memory` protocol covering real DTB
+  parsing, reservations, frame allocation, higher-half byte readback, scrub, and release.
 - Project, Agent, Roadmap, and kernel capability documentation.

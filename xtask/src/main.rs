@@ -35,6 +35,7 @@ fn main() -> ExitCode {
         "qemu-command" => print_qemu_command(),
         "run" => run_kernel(),
         "test-boot" => test_boot(),
+        "test-memory" => test_memory(),
         "test-el0" => test_el0(),
         "ci" => ci(),
         "help" | "--help" | "-h" => {
@@ -71,6 +72,7 @@ fn print_help() {
     println!("  qemu-command  Print the pinned QEMU command without running it");
     println!("  run      Build and run Phoenix interactively on QEMU");
     println!("  test-boot  Run the bounded QEMU boot integration test");
+    println!("  test-memory  Run the bounded QEMU boot-memory integration probe");
     println!("  test-el0  Run the bounded QEMU EL0 conformance probe");
     println!("  ci       Run every validation available without an emulator");
 }
@@ -355,12 +357,14 @@ struct Artifacts {
     image: PathBuf,
     map: PathBuf,
     qemu_log: PathBuf,
+    qemu_memory_log: PathBuf,
     qemu_el0_log: PathBuf,
 }
 
 #[derive(Clone, Copy)]
 enum KernelVariant {
     Default,
+    BootMemoryProbe,
     El0Probe,
 }
 
@@ -368,6 +372,7 @@ impl KernelVariant {
     const fn name(self) -> &'static str {
         match self {
             Self::Default => "default",
+            Self::BootMemoryProbe => "boot-memory-probe",
             Self::El0Probe => "el0-probe",
         }
     }
@@ -375,12 +380,21 @@ impl KernelVariant {
     const fn features(self) -> &'static [&'static str] {
         match self {
             Self::Default => &[],
+            Self::BootMemoryProbe => &["boot-memory-probe"],
             Self::El0Probe => &["el0-probe"],
         }
     }
 
     const fn expects_el0_probe(self) -> bool {
         matches!(self, Self::El0Probe)
+    }
+
+    const fn expected_sentinel(self) -> &'static str {
+        match self {
+            Self::Default => qemu::BOOT_SUCCESS_SENTINEL,
+            Self::BootMemoryProbe => qemu::MEMORY_SUCCESS_SENTINEL,
+            Self::El0Probe => qemu::EL0_SUCCESS_SENTINEL,
+        }
     }
 }
 
@@ -390,6 +404,7 @@ fn kernel_artifacts(target: &str, variant: KernelVariant) -> Artifacts {
     let cargo_target_dir = root.join("target/phoenix/build").join(variant.name());
     let artifact_stem = match variant {
         KernelVariant::Default => "phoenix-kernel",
+        KernelVariant::BootMemoryProbe => "phoenix-kernel-memory",
         KernelVariant::El0Probe => "phoenix-kernel-el0",
     };
     Artifacts {
@@ -397,6 +412,7 @@ fn kernel_artifacts(target: &str, variant: KernelVariant) -> Artifacts {
         image: output.join(format!("{artifact_stem}.bin")),
         map: output.join(format!("{artifact_stem}.map")),
         qemu_log: output.join("qemu-boot.log"),
+        qemu_memory_log: output.join("qemu-memory.log"),
         qemu_el0_log: output.join("qemu-el0.log"),
         cargo_target_dir,
     }
@@ -676,6 +692,24 @@ fn inspect_kernel_variant(variant: KernelVariant) -> bool {
         }
     }
 
+    let sentinel = variant.expected_sentinel();
+    match fs::read(&artifacts.elf) {
+        Ok(bytes)
+            if bytes
+                .windows(sentinel.len())
+                .any(|window| window == sentinel.as_bytes()) =>
+        {
+            println!("ok: expected terminal sentinel is embedded: {sentinel}");
+        }
+        Ok(_) => errors.push(format!(
+            "ELF does not contain expected terminal sentinel: {sentinel}"
+        )),
+        Err(error) => errors.push(format!(
+            "could not read ELF {} for sentinel inspection: {error}",
+            artifacts.elf.display()
+        )),
+    }
+
     if errors.is_empty() {
         println!("ok: AArch64 ELF machine, entry, load addresses, and symbols");
         println!("ok: bootstrap page table, exception vectors, BSS, stack, image, and map");
@@ -731,12 +765,28 @@ fn test_el0() -> bool {
         && qemu::test_el0(&artifacts.image, &artifacts.qemu_el0_log, &workspace_root())
 }
 
+fn test_memory() -> bool {
+    let Some(target) = require_aarch64_target() else {
+        return false;
+    };
+    let artifacts = kernel_artifacts(&target, KernelVariant::BootMemoryProbe);
+    build_kernel_variant(KernelVariant::BootMemoryProbe)
+        && inspect_kernel_variant(KernelVariant::BootMemoryProbe)
+        && qemu::test_memory(
+            &artifacts.image,
+            &artifacts.qemu_memory_log,
+            &workspace_root(),
+        )
+}
+
 fn ci() -> bool {
     doctor()
         && format()
         && check()
         && lint()
         && test()
+        && build_kernel_variant(KernelVariant::BootMemoryProbe)
+        && inspect_kernel_variant(KernelVariant::BootMemoryProbe)
         && build_kernel_variant(KernelVariant::El0Probe)
         && inspect_kernel_variant(KernelVariant::El0Probe)
         && build_kernel()

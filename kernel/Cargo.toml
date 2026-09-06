@@ -9,6 +9,7 @@ build = "build.rs"
 
 [features]
 default = []
+boot-memory-probe = []
 el0-probe = []
 
 [lib]

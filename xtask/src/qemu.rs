@@ -20,6 +20,7 @@ const OUTPUT_LIMIT: usize = 1024 * 1024;
 pub const BOOT_SUCCESS_SENTINEL: &str = "PHOENIX_BOOT_OK";
 pub const PANIC_SENTINEL: &str = "PHOENIX_PANIC";
 pub const EXCEPTION_SENTINEL: &str = "PHOENIX_EXCEPTION";
+pub const MEMORY_SUCCESS_SENTINEL: &str = "PHOENIX_MEMORY_OK";
 pub const EL0_SUCCESS_SENTINEL: &str = "PHOENIX_EL0_OK";
 pub const EL0_FAILURE_SENTINEL: &str = "PHOENIX_EL0_FAIL";
 
@@ -80,6 +81,7 @@ enum TerminalOutput {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ExpectedOutput {
     Boot,
+    Memory,
     El0,
 }
 
@@ -87,6 +89,7 @@ impl ExpectedOutput {
     const fn sentinel(self) -> &'static str {
         match self {
             Self::Boot => BOOT_SUCCESS_SENTINEL,
+            Self::Memory => MEMORY_SUCCESS_SENTINEL,
             Self::El0 => EL0_SUCCESS_SENTINEL,
         }
     }
@@ -94,6 +97,7 @@ impl ExpectedOutput {
     const fn label(self) -> &'static str {
         match self {
             Self::Boot => "AArch64 boot",
+            Self::Memory => "AArch64 boot-memory probe",
             Self::El0 => "AArch64 EL0 probe",
         }
     }
@@ -148,6 +152,10 @@ pub fn test_boot(image: &Path, log: &Path, workspace_root: &Path) -> bool {
 
 pub fn test_el0(image: &Path, log: &Path, workspace_root: &Path) -> bool {
     test_kernel(image, log, workspace_root, ExpectedOutput::El0)
+}
+
+pub fn test_memory(image: &Path, log: &Path, workspace_root: &Path) -> bool {
+    test_kernel(image, log, workspace_root, ExpectedOutput::Memory)
 }
 
 fn test_kernel(image: &Path, log: &Path, workspace_root: &Path, expected: ExpectedOutput) -> bool {
@@ -447,8 +455,8 @@ mod tests {
 
     use super::{
         BOOT_SUCCESS_SENTINEL, CPU, EL0_FAILURE_SENTINEL, EL0_SUCCESS_SENTINEL, EXCEPTION_SENTINEL,
-        ExpectedOutput, MACHINE, PANIC_SENTINEL, QemuCommand, TerminalOutput, classify_output,
-        has_named_item, shell_quote,
+        ExpectedOutput, MACHINE, MEMORY_SUCCESS_SENTINEL, PANIC_SENTINEL, QemuCommand,
+        TerminalOutput, classify_output, has_named_item, shell_quote,
     };
 
     #[test]
@@ -521,6 +529,31 @@ mod tests {
                 ExpectedOutput::El0
             ),
             Some(TerminalOutput::Failure)
+        );
+    }
+
+    #[test]
+    fn memory_classifier_ignores_boot_progress_and_requires_memory_result() {
+        assert_eq!(
+            classify_output(
+                format!("{BOOT_SUCCESS_SENTINEL}\nmemory: free-frames=42\n").as_bytes(),
+                ExpectedOutput::Memory
+            ),
+            None
+        );
+        assert_eq!(
+            classify_output(
+                format!("{BOOT_SUCCESS_SENTINEL}\n{MEMORY_SUCCESS_SENTINEL}\n").as_bytes(),
+                ExpectedOutput::Memory
+            ),
+            Some(TerminalOutput::Success)
+        );
+        assert_eq!(
+            classify_output(
+                format!("{PANIC_SENTINEL}\n{MEMORY_SUCCESS_SENTINEL}\n").as_bytes(),
+                ExpectedOutput::Memory
+            ),
+            Some(TerminalOutput::Panic)
         );
     }
 

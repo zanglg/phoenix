@@ -13,6 +13,15 @@ use phoenix_kernel::build_info::BuildInfo;
 use phoenix_kernel::console::Console;
 use phoenix_kernel::platform::aarch64::qemu_virt::EarlyPl011;
 
+#[cfg(feature = "boot-memory-probe")]
+use phoenix_kernel::memory::{PhysAddr, memory_map_from_boot_info};
+#[cfg(feature = "boot-memory-probe")]
+use phoenix_kernel::platform::aarch64::qemu_virt::{
+    BootstrapPhysicalMemory, kernel_physical_range,
+};
+#[cfg(feature = "boot-memory-probe")]
+use phoenix_kernel::process_image::ProcessImageMemory;
+
 #[cfg(feature = "el0-probe")]
 use phoenix_kernel::abi::{Errno, NATIVE_SVC_IMMEDIATE, NativeSyscall, SyscallReturn};
 #[cfg(feature = "el0-probe")]
@@ -30,6 +39,8 @@ core::arch::global_asm!(include_str!("arch/aarch64/user_probe.S"));
 const BOOT_SUCCESS_SENTINEL: &str = "PHOENIX_BOOT_OK";
 const PANIC_SENTINEL: &str = "PHOENIX_PANIC";
 const EXCEPTION_SENTINEL: &str = "PHOENIX_EXCEPTION";
+#[cfg(feature = "boot-memory-probe")]
+const MEMORY_SUCCESS_SENTINEL: &str = "PHOENIX_MEMORY_OK";
 #[cfg(feature = "el0-probe")]
 const EL0_ENTER_SENTINEL: &str = "PHOENIX_EL0_ENTER";
 #[cfg(feature = "el0-probe")]
@@ -51,6 +62,9 @@ pub extern "C" fn kernel_main(boot_argument: usize) -> ! {
     let _ = writeln!(console, "{BOOT_SUCCESS_SENTINEL}");
     console.sink_mut().flush();
 
+    #[cfg(feature = "boot-memory-probe")]
+    run_boot_memory_probe(boot_argument, &mut console);
+
     #[cfg(feature = "el0-probe")]
     {
         // SAFETY: this is the single-core boot path and no root has been
@@ -68,6 +82,73 @@ pub extern "C" fn kernel_main(boot_argument: usize) -> ! {
 
     #[cfg(not(feature = "el0-probe"))]
     halt()
+}
+
+#[cfg(feature = "boot-memory-probe")]
+fn run_boot_memory_probe(boot_argument: usize, console: &mut Console<EarlyPl011>) {
+    const MEMORY_MAP_CAPACITY: usize = 16;
+    const PROBE_BYTES: &[u8] = b"Phoenix bootstrap memory probe";
+
+    // SAFETY: this function is called directly from the single-CPU bootstrap
+    // while its documented TTBR1 RAM alias is active. The allocated probe
+    // frame remains private until it is returned below.
+    let mut physical_memory = unsafe { BootstrapPhysicalMemory::assume_bootstrap_mapping() };
+    let device_tree_start = PhysAddr::new(boot_argument);
+    let map = {
+        let tree = physical_memory
+            .device_tree(device_tree_start)
+            .unwrap_or_else(|error| panic!("could not borrow boot DTB: {error:?}"));
+        let info = tree
+            .boot_info()
+            .unwrap_or_else(|error| panic!("could not extract boot information: {error:?}"));
+        let kernel_image = kernel_physical_range()
+            .unwrap_or_else(|error| panic!("could not derive kernel image range: {error:?}"));
+        let _ = writeln!(
+            console,
+            "DTB: size={} boot-cpu={}",
+            info.device_tree_size(),
+            info.boot_cpu_id()
+        );
+        memory_map_from_boot_info::<MEMORY_MAP_CAPACITY>(info, kernel_image, device_tree_start)
+            .unwrap_or_else(|error| panic!("could not construct boot memory map: {error:?}"))
+    };
+
+    let expected_free_frames = map.total_free_frames();
+    let mut allocator = map.into_allocator();
+    let frame = allocator
+        .allocate()
+        .unwrap_or_else(|error| panic!("could not allocate memory-probe frame: {error:?}"))
+        .unwrap_or_else(|| panic!("boot memory map unexpectedly has no free frame"));
+
+    ProcessImageMemory::clear_frame(&mut physical_memory, frame)
+        .unwrap_or_else(|error| panic!("could not clear memory-probe frame: {error:?}"));
+    ProcessImageMemory::write_frame(&mut physical_memory, frame, 0, PROBE_BYTES)
+        .unwrap_or_else(|error| panic!("could not write memory-probe frame: {error:?}"));
+    let mut observed = [0_u8; PROBE_BYTES.len()];
+    physical_memory
+        .read_frame(frame, 0, &mut observed)
+        .unwrap_or_else(|error| panic!("could not read memory-probe frame: {error:?}"));
+    assert_eq!(observed, PROBE_BYTES, "bootstrap RAM readback mismatch");
+
+    ProcessImageMemory::clear_frame(&mut physical_memory, frame)
+        .unwrap_or_else(|error| panic!("could not scrub memory-probe frame: {error:?}"));
+    allocator
+        .deallocate(frame)
+        .unwrap_or_else(|error| panic!("could not release memory-probe frame: {error:?}"));
+    assert_eq!(
+        allocator.total_free_frames(),
+        expected_free_frames,
+        "memory-probe frame was not restored"
+    );
+
+    let _ = writeln!(
+        console,
+        "memory: free-frames={} probe-frame={:#018x}",
+        expected_free_frames,
+        frame.start_address().as_usize()
+    );
+    let _ = writeln!(console, "{MEMORY_SUCCESS_SENTINEL}");
+    console.sink_mut().flush();
 }
 
 /// Common target of the assembly exception vectors.
