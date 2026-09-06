@@ -630,6 +630,27 @@ impl<const MAPPINGS: usize, const PAGES: usize, const TABLES: usize, const LEAVE
         self.image.pages().len()
     }
 
+    /// Consume the complete owner, install its root in TTBR0, and enter EL0t.
+    ///
+    /// # Safety
+    ///
+    /// Call only on the single boot CPU while ASID zero is private. The
+    /// bootstrap physical-memory mapping used to construct the tables must
+    /// remain coherent, `VBAR_EL1` and an EL1 stack must be active, and no
+    /// caller may retain aliases to owned data or table frames.
+    #[cfg(target_arch = "aarch64")]
+    pub unsafe fn activate_and_enter(self) -> ! {
+        let root = self.root_frame();
+        let entry = self.entry();
+        let stack_pointer = self.stack_pointer();
+        // SAFETY: consuming `self` retains exclusive ownership of the complete
+        // table hierarchy and all leaf frames forever because this call cannot
+        // return. The caller supplies the remaining CPU-state requirements.
+        unsafe {
+            super::user_entry::activate_and_enter(root, entry, stack_pointer);
+        }
+    }
+
     /// Release every unpublished data and table frame as one allocator transaction.
     pub fn release_unpublished<const MEMORY_RANGES: usize>(
         self,

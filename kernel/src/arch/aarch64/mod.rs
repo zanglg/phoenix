@@ -8,6 +8,9 @@ pub mod paging;
 pub mod syscall;
 pub mod user_page_table;
 
+#[cfg(target_arch = "aarch64")]
+mod user_entry;
+
 #[cfg(all(target_arch = "aarch64", feature = "el0-probe"))]
 pub mod el0;
 

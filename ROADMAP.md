@@ -129,9 +129,9 @@ links an EL0 entry, replaces TTBR0, verifies one returning unknown syscall, and 
 process lifecycle remain.
 
 Allocator-owned user-table topology, retry-safe descriptor materialization, and an exact combined
-owner retaining populated leaf frames plus table frames are now Host Tested. A target
-bootstrap-memory backend is now Cross Compiled; ASID policy, ownership-consuming activation, and
-runtime evidence still remain.
+owner retaining populated leaf frames plus table frames are now Host Tested. The target
+bootstrap-memory backend and ownership-consuming ASID-zero activation are Cross Compiled; process
+ownership, ASID allocation, retirement, safe user copy, and runtime evidence still remain.
 
 Observable result: an EL0 program invokes syscalls, exits, and cannot directly access kernel
 memory.

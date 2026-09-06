@@ -3,7 +3,7 @@
 This document describes the architecture-neutral bridge from a validated executable to owned
 physical pages. The implementation is Host Tested and Cross Compiled. Physical access is
 expressed through a backend contract with a Runtime Pending AArch64 bootstrap implementation;
-production address-space activation and EL0 entry do not exist yet.
+ownership-gated AArch64 activation is Cross Compiled but has not executed with this dynamic image.
 
 ## Current implementation
 

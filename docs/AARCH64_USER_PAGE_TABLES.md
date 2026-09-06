@@ -1,8 +1,9 @@
 # AArch64 User Translation Tables
 
-This document describes the Host Tested ownership and materialization layer for lower-half AArch64
-user page tables. It builds the same 39-bit, 4 KiB, three-level format configured by the bootstrap,
-but it does not install a root in `TTBR0_EL1` or claim runtime validation.
+This document describes the ownership, materialization, and activation layer for lower-half
+AArch64 user page tables. It builds the same 39-bit, 4 KiB, three-level format configured by the
+bootstrap. Planning and ownership are Host Tested; target activation is Cross Compiled and Runtime
+Pending.
 
 ## Current implementation
 
@@ -57,9 +58,16 @@ mismatch returns both original owners. Success is the first type state that hold
 by the inactive address space; its unpublished release reclaims data and table frames together as
 one allocator transaction.
 
-This restriction is intentional. A root physical address is useful for static inspection, but a
-future `TTBR0_EL1` activation API must consume this combined address-space owner, never a bare table
-root or a page plan.
+This restriction is intentional. A root physical address is useful for static inspection, but the
+target activation API consumes the combined address-space owner, never a bare table root or page
+plan. It publishes table writes with `DSB ISHST`, replaces `TTBR0_EL1`, completes an ASID-zero
+stage-1 invalidation with `ISB`, `TLBI VMALLE1`, `DSB ISH`, and `ISB`, loads `SP_EL0`, `ELR_EL1`, and
+masked EL0t state, then executes `eret`. The register primitive is crate-private so other modules
+cannot bypass the ownership gate.
+
+Because the transition never returns, the consumed owner remains logically live for the entire
+active address-space lifetime. The current terminal `exit` path halts rather than reclaiming it.
+Retirement and reclamation require a process owner and ASID-aware switch path.
 
 ## Invariants
 
@@ -73,6 +81,7 @@ root or a page plan.
 - leaves use populated frames and final W^X-safe user permissions;
 - backend failure never converts partial table bytes into the materialized type state;
 - combined ownership requires an exact page-for-leaf identity match;
+- only the combined owner can invoke the target TTBR0/EL0 transition;
 - table release is allowed only before publication to a live translation regime.
 
 ## Validation
@@ -81,13 +90,14 @@ Host tests cover table reuse across adjacent pages, distinct L2 and L1 regions, 
 ordering, unaligned and unreadable pages, duplicates, table and leaf capacity, transactional
 out-of-memory behavior, exact descriptor links and outputs, injected materialization failure,
 clean retry, leaf-identity mismatch, combined ownership, and atomic complete release. The module is
-Cross Compiled for the AArch64 bare-metal target.
+Cross Compiled for the AArch64 bare-metal target, including the ownership-consuming activation
+path. Runtime register, barrier, invalidation, permission, and `eret` effects remain unverified.
 
 ## TODO
 
 - replace the bootstrap implementation with the final physical direct map;
 - assign and recycle nonzero ASIDs with generation handling;
-- add an activation/retirement API with precise `DSB`, `ISB`, and TLB invalidation rules;
+- add ASID-aware retirement and reclamation after process ownership exists;
 - define break-before-make for changes to published descriptors;
 - retain page-table accounting in the future process object;
 - add safe user-copy fault recovery before implementing `write`;

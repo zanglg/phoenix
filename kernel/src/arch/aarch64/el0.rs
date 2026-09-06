@@ -1,6 +1,5 @@
 //! Static address-space setup for the opt-in first-EL0 conformance probe.
 
-use core::arch::asm;
 use core::ptr;
 
 use crate::arch::aarch64::paging::{
@@ -13,7 +12,6 @@ const KERNEL_VIRTUAL_OFFSET: usize = 0xffff_ff80_0000_0000;
 const USER_CODE_BASE: usize = 0x0040_0000;
 const USER_STACK_BASE: usize = 0x0080_1000;
 const USER_STACK_TOP: usize = USER_STACK_BASE + PAGE_SIZE;
-const USER_PSTATE: usize = 0x3c0;
 
 #[repr(C, align(4096))]
 struct PageTable([u64; 512]);
@@ -174,30 +172,10 @@ pub unsafe fn prepare_probe() -> Result<PreparedEl0Probe, El0ProbeError> {
 /// memory, `VBAR_EL1` and a valid EL1 stack must already be installed, and no
 /// concurrent CPU may use ASID zero.
 pub unsafe fn activate_and_enter(probe: PreparedEl0Probe) -> ! {
-    let root = probe.root().start_address().as_usize();
-    let entry = probe.entry().as_usize();
-    let stack = probe.stack_pointer().as_usize();
-    // SAFETY: the caller guarantees ownership, mapping, exception-vector, and
-    // single-ASID conditions. Barriers publish table writes before the root
-    // switch and complete invalidation before EL0 instruction fetch.
+    // SAFETY: the caller establishes the static probe's ownership, mappings,
+    // exception-vector, and single-ASID requirements.
     unsafe {
-        asm!(
-            "dsb ishst",
-            "msr TTBR0_EL1, {root}",
-            "isb",
-            "tlbi vmalle1",
-            "dsb ish",
-            "isb",
-            "msr SP_EL0, {stack}",
-            "msr ELR_EL1, {entry}",
-            "msr SPSR_EL1, {pstate}",
-            "eret",
-            root = in(reg) root,
-            stack = in(reg) stack,
-            entry = in(reg) entry,
-            pstate = in(reg) USER_PSTATE,
-            options(noreturn)
-        );
+        super::user_entry::activate_and_enter(probe.root(), probe.entry(), probe.stack_pointer());
     }
 }
 

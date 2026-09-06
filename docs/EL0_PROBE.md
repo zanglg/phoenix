@@ -30,11 +30,12 @@ uses the checked descriptor constructors and converts linked higher-half resourc
 addresses using the documented kernel offset. The tables and stack are cleared under exclusive
 single-CPU ownership before publication.
 
-Table writes are followed by `DSB ISHST`, replacement of `TTBR0_EL1`, `ISB`, `TLBI VMALLE1`, `DSB
-ISH`, and `ISB`. The transition sets `SP_EL0`, `ELR_EL1`, and `SPSR_EL1` for EL0t with asynchronous
-exceptions masked, then executes `eret`. The installed TTBR1 higher-half mapping remains the kernel
-address space. The early console now uses its higher-half PL011 alias, so removing the bootstrap
-TTBR0 identity/device table does not strand diagnostics.
+Table writes are followed by the same crate-private activation primitive used by allocator-backed
+address spaces: `DSB ISHST`, replacement of `TTBR0_EL1`, `ISB`, `TLBI VMALLE1`, `DSB ISH`, and
+`ISB`. The transition sets `SP_EL0`, `ELR_EL1`, and `SPSR_EL1` for EL0t with asynchronous exceptions
+masked, then executes `eret`. The installed TTBR1 higher-half mapping remains the kernel address
+space. The early console now uses its higher-half PL011 alias, so removing the bootstrap TTBR0
+identity/device table does not strand diagnostics.
 
 ## Probe protocol
 

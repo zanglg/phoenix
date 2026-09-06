@@ -64,7 +64,7 @@ _No unclassified entries._
 | MM-002 | Virtual memory and kernel address space | In Progress | 0.1.0 | Descriptors, plans, and checked bootstrap private-frame access are built; final TTBR1 and runtime validation remain |
 | MM-003 | Kernel heap and fallible allocation policy | Planned | 0.1.0 | Define allocation-failure behavior |
 | MM-004 | Kernel stacks and guard pages | Planned | 0.1.0 | Include exception-context requirements |
-| MM-005 | User address spaces and safe user copies | In Progress | 0.1.0 | Lower-39-bit plans, table materialization, and combined leaf/table ownership are Host Tested; target backend, activation, and user copies remain |
+| MM-005 | User address spaces and safe user copies | In Progress | 0.1.0 | Plans/materialization/ownership are Host Tested; ownership-gated ASID-zero activation is Cross Compiled; user copies and runtime evidence remain |
 | MM-006 | Shared memory and copy-on-write | Deferred | Unscheduled | Requires process VM |
 | MM-007 | Huge pages and block mappings | Captured | Unscheduled | Revisit after basic paging |
 | MM-008 | DMA, cache coherence, and IOMMU policy | Deferred | Unscheduled | Required for robust device support |
