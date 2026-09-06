@@ -1,8 +1,8 @@
 # User Address Space
 
 This document defines the architecture-neutral validation and planning layer for Phoenix's first
-EL0 address spaces. The separate process-image layer can now assign frames transactionally; neither
-layer creates translation tables or copies user memory.
+EL0 address spaces. The separate process-image layer assigns and populates frames transactionally,
+and the AArch64 layer materializes unpublished translation tables. Activation remains separate.
 
 ## Current implementation
 
@@ -27,6 +27,10 @@ purpose tag. It does not own backing frames or page-table entries.
 `UserStackLayout` places a downward-growing stack below a chosen aligned top and requires one or
 more unmapped guard pages. The default top leaves the highest user page unused, so the initial
 stack pointer itself remains canonical and can be 16-byte aligned.
+
+The native initial-stack builder can move that pointer downward while constructing argc, argv,
+envp, and auxiliary-vector bytes. Process-image population clears and initializes those stack pages
+before any translation root is publishable. The exact ABI is in `docs/INITIAL_USER_STACK.md`.
 
 ## Permission policy
 
@@ -61,10 +65,8 @@ bad page counts, and stack underflow. The same module is Cross Compiled for AArc
 
 ## TODO
 
-- populate the transactionally assigned frames and materialize user page tables;
 - add ASID allocation and TTBR0 installation;
 - define checked `copy_from_user` and `copy_to_user` with recoverable faults;
-- build the initial argc/argv/envp/auxv stack with 16-byte alignment;
 - define stack growth limits and resource accounting;
 - validate kernel isolation and guard-page faults on QEMU.
 

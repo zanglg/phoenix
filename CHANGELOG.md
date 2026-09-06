@@ -39,4 +39,6 @@ under `Unreleased` and the Cargo version remains 0.0.0 until the 0.1.0 release g
   reservation under the temporary QEMU `virt` high-memory alias.
 - Opt-in boot-memory integration image and bounded `test-memory` protocol covering real DTB
   parsing, reservations, frame allocation, higher-half byte readback, scrub, and release.
+- Allocation-free native initial user stack with argc, argv, envp, minimal auxiliary vector,
+  16-byte alignment, checked capacity, and page-offset-aware process-image population.
 - Project, Agent, Roadmap, and kernel capability documentation.

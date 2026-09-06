@@ -1,11 +1,14 @@
 //! Transactional planning and frame ownership for an initial user process image.
 
+use core::cmp::{max, min};
+
 use crate::elf::{ElfError, ElfImage};
 use crate::memory::{AllocationError, FrameAllocator, PAGE_SIZE, PageFrame};
 use crate::user::{
     UserAddr, UserAddressError, UserAddressSpacePlan, UserMappingKind, UserPermissions,
     UserStackLayout,
 };
+use crate::user_stack::InitialStackImage;
 
 /// Failure while combining a validated ELF image and guarded stack.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -16,6 +19,8 @@ pub enum ProcessImageError {
     Address(UserAddressError),
     /// A program segment occupies part of the required unmapped stack guard.
     StackGuardOverlap,
+    /// Initial stack bytes do not end at the declared stack top or enter the guard.
+    InitialStackOutOfRange,
     /// The fixed page-metadata capacity cannot describe the entire image.
     PageCapacityExceeded,
     /// Page-count arithmetic overflowed.
@@ -98,6 +103,7 @@ impl<'a, E, const MAPPINGS: usize, const PAGES: usize>
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PlannedUserPage<'a> {
     virtual_start: UserAddr,
+    initial_offset: usize,
     initial_bytes: &'a [u8],
     permissions: UserPermissions,
     kind: UserMappingKind,
@@ -109,9 +115,14 @@ impl<'a> PlannedUserPage<'a> {
         self.virtual_start
     }
 
-    /// Return bytes copied at offset zero after the whole destination page is cleared.
+    /// Return bytes copied at `initial_offset` after the destination page is cleared.
     pub const fn initial_bytes(self) -> &'a [u8] {
         self.initial_bytes
+    }
+
+    /// Return the destination offset of initialized bytes within this page.
+    pub const fn initial_offset(self) -> usize {
+        self.initial_offset
     }
 
     /// Return the final EL0 permissions installed after population.
@@ -126,7 +137,12 @@ impl<'a> PlannedUserPage<'a> {
 
     /// Return the zero-filled suffix length after initialized bytes.
     pub const fn zero_suffix_size(self) -> usize {
-        PAGE_SIZE - self.initial_bytes.len()
+        PAGE_SIZE - self.initial_offset - self.initial_bytes.len()
+    }
+
+    /// Return the zero-filled prefix before initialized bytes.
+    pub const fn zero_prefix_size(self) -> usize {
+        self.initial_offset
     }
 }
 
@@ -138,6 +154,7 @@ pub struct ProcessImagePlan<'a, const MAPPINGS: usize, const PAGES: usize> {
     page_count: usize,
     entry: UserAddr,
     stack: UserStackLayout,
+    initial_stack_pointer: UserAddr,
 }
 
 impl<'a, const MAPPINGS: usize, const PAGES: usize> ProcessImagePlan<'a, MAPPINGS, PAGES> {
@@ -146,12 +163,35 @@ impl<'a, const MAPPINGS: usize, const PAGES: usize> ProcessImagePlan<'a, MAPPING
     /// Construction mutates only local metadata. No caller-owned frame or page
     /// table can be left behind when an error is returned.
     pub fn new(image: ElfImage<'a>, stack: UserStackLayout) -> Result<Self, ProcessImageError> {
+        Self::build(image, stack, stack.initial_stack_pointer(), &[])
+    }
+
+    /// Combine an ELF image with a fully constructed native initial stack.
+    pub fn with_initial_stack<const STACK_BYTES: usize>(
+        image: ElfImage<'a>,
+        initial_stack: &'a InitialStackImage<STACK_BYTES>,
+    ) -> Result<Self, ProcessImageError> {
+        Self::build(
+            image,
+            initial_stack.layout(),
+            initial_stack.stack_pointer(),
+            initial_stack.bytes(),
+        )
+    }
+
+    fn build(
+        image: ElfImage<'a>,
+        stack: UserStackLayout,
+        initial_stack_pointer: UserAddr,
+        initial_stack_bytes: &'a [u8],
+    ) -> Result<Self, ProcessImageError> {
         let mut result = Self {
             address_space: UserAddressSpacePlan::new(),
             pages: [None; PAGES],
             page_count: 0,
             entry: image.entry(),
             stack,
+            initial_stack_pointer,
         };
 
         for segment in image.load_segments() {
@@ -189,6 +229,7 @@ impl<'a, const MAPPINGS: usize, const PAGES: usize> ProcessImagePlan<'a, MAPPING
                 };
                 result.insert_page(PlannedUserPage {
                     virtual_start,
+                    initial_offset: 0,
                     initial_bytes: initialized,
                     permissions: segment.permissions(),
                     kind: UserMappingKind::Program,
@@ -214,6 +255,15 @@ impl<'a, const MAPPINGS: usize, const PAGES: usize> ProcessImagePlan<'a, MAPPING
             .map_err(ProcessImageError::Address)?;
 
         let stack_pages = stack.usable_range().byte_len() / PAGE_SIZE;
+        let stack_data_start = initial_stack_pointer.as_usize();
+        let stack_data_end = stack_data_start
+            .checked_add(initial_stack_bytes.len())
+            .ok_or(ProcessImageError::PageCountOverflow)?;
+        if stack_data_start < stack.usable_range().start().as_usize()
+            || stack_data_end != stack.initial_stack_pointer().as_usize()
+        {
+            return Err(ProcessImageError::InitialStackOutOfRange);
+        }
         for page_index in 0..stack_pages {
             let page_offset = page_index
                 .checked_mul(PAGE_SIZE)
@@ -223,9 +273,26 @@ impl<'a, const MAPPINGS: usize, const PAGES: usize> ProcessImagePlan<'a, MAPPING
                 .start()
                 .checked_add(page_offset)
                 .map_err(ProcessImageError::Address)?;
+            let page_start = virtual_start.as_usize();
+            let page_end = page_start
+                .checked_add(PAGE_SIZE)
+                .ok_or(ProcessImageError::PageCountOverflow)?;
+            let initialized_start = max(page_start, stack_data_start);
+            let initialized_end = min(page_end, stack_data_end);
+            let (initial_offset, initial_bytes) = if initialized_start < initialized_end {
+                let source_start = initialized_start - stack_data_start;
+                let source_end = initialized_end - stack_data_start;
+                (
+                    initialized_start - page_start,
+                    &initial_stack_bytes[source_start..source_end],
+                )
+            } else {
+                (0, &[][..])
+            };
             result.insert_page(PlannedUserPage {
                 virtual_start,
-                initial_bytes: &[],
+                initial_offset,
+                initial_bytes,
                 permissions: UserPermissions::read_write(),
                 kind: UserMappingKind::Stack,
             })?;
@@ -242,6 +309,11 @@ impl<'a, const MAPPINGS: usize, const PAGES: usize> ProcessImagePlan<'a, MAPPING
     /// Return the guarded stack layout and initial stack pointer.
     pub const fn stack(&self) -> UserStackLayout {
         self.stack
+    }
+
+    /// Return the stack pointer corresponding to the planned initial bytes.
+    pub const fn stack_pointer(&self) -> UserAddr {
+        self.initial_stack_pointer
     }
 
     /// Return the sorted virtual mapping plan.
@@ -369,7 +441,8 @@ impl<'a, const MAPPINGS: usize, const PAGES: usize> AllocatedProcessImage<'a, MA
                 });
             }
             if !planned.initial_bytes().is_empty()
-                && let Err(error) = memory.write_frame(frame, 0, planned.initial_bytes())
+                && let Err(error) =
+                    memory.write_frame(frame, planned.initial_offset(), planned.initial_bytes())
             {
                 return Err(ProcessImagePopulationError {
                     image: self,
@@ -395,6 +468,7 @@ impl<'a, const MAPPINGS: usize, const PAGES: usize> AllocatedProcessImage<'a, MA
             page_count: self.plan.page_count,
             entry: self.plan.entry,
             stack: self.plan.stack,
+            initial_stack_pointer: self.plan.initial_stack_pointer,
         })
     }
 
@@ -459,6 +533,7 @@ pub struct PopulatedProcessImage<const MAPPINGS: usize, const PAGES: usize> {
     page_count: usize,
     entry: UserAddr,
     stack: UserStackLayout,
+    initial_stack_pointer: UserAddr,
 }
 
 impl<const MAPPINGS: usize, const PAGES: usize> PopulatedProcessImage<MAPPINGS, PAGES> {
@@ -470,6 +545,11 @@ impl<const MAPPINGS: usize, const PAGES: usize> PopulatedProcessImage<MAPPINGS, 
     /// Return the guarded stack layout and initial stack pointer.
     pub const fn stack(&self) -> UserStackLayout {
         self.stack
+    }
+
+    /// Return the final initial stack pointer after stack-byte construction.
+    pub const fn stack_pointer(&self) -> UserAddr {
+        self.initial_stack_pointer
     }
 
     /// Return the immutable user virtual mapping plan.
@@ -524,6 +604,7 @@ mod tests {
     use crate::user::{
         UserAddr, UserAddressError, UserMappingKind, UserPermissions, UserStackLayout,
     };
+    use crate::user_stack::InitialStackImage;
 
     const TEXT_HEADER: usize = 64;
     const DATA_HEADER: usize = 64 + 56;
@@ -681,6 +762,54 @@ mod tests {
         assert_eq!(memory.pages[2][0], 0x5a);
         assert!(memory.pages[2][1..].iter().all(|byte| *byte == 0));
         assert!(memory.pages[3].iter().all(|byte| *byte == 0));
+        populated.release(&mut allocator).unwrap();
+    }
+
+    #[test]
+    fn initial_native_stack_is_split_across_pages_at_the_correct_offsets() {
+        let bytes = fixture(0x40_0000, 0x50_0000, 1, 1);
+        let image = ElfImage::parse(&bytes).unwrap();
+        let stack = UserStackLayout::new(UserAddr::new(0x80_0000).unwrap(), 2, 1).unwrap();
+        let large_argument = "x".repeat(PAGE_SIZE);
+        let initial_stack =
+            InitialStackImage::<8192>::new(stack, image.entry(), &[large_argument.as_str()], &[])
+                .unwrap();
+        let plan = ProcessImagePlan::<3, 4>::with_initial_stack(image, &initial_stack).unwrap();
+        assert_eq!(plan.stack_pointer(), initial_stack.stack_pointer());
+        let stack_pages: Vec<_> = plan
+            .pages()
+            .filter(|page| page.kind() == UserMappingKind::Stack)
+            .collect();
+        assert_eq!(stack_pages.len(), 2);
+        assert!(stack_pages[0].initial_offset() > 0);
+        assert_eq!(stack_pages[1].initial_offset(), 0);
+        assert_eq!(
+            stack_pages
+                .iter()
+                .map(|page| page.initial_bytes().len())
+                .sum::<usize>(),
+            initial_stack.bytes().len()
+        );
+
+        let mut map = MemoryMap::<1>::new();
+        map.add_usable(physical_bytes(0x30_0000, 0x30_4000))
+            .unwrap();
+        let mut allocator = map.into_allocator();
+        let allocated = plan.allocate(&mut allocator).unwrap();
+        let mut memory = TestMemory::new(0x30_0000, 4);
+        let populated = allocated.populate(&mut memory).unwrap();
+        assert_eq!(populated.stack_pointer(), initial_stack.stack_pointer());
+
+        let first_offset = stack_pages[0].initial_offset();
+        let mut actual = Vec::new();
+        actual.extend_from_slice(&memory.pages[2][first_offset..]);
+        actual.extend_from_slice(&memory.pages[3]);
+        assert_eq!(actual, initial_stack.bytes());
+        assert!(
+            memory.pages[2][..first_offset]
+                .iter()
+                .all(|byte| *byte == 0)
+        );
         populated.release(&mut allocator).unwrap();
     }
 

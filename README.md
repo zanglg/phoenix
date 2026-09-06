@@ -17,6 +17,7 @@ narrow support claim:
 - a bounded QEMU runner and boot-test harness are implemented and host tested;
 - an opt-in first-EL0 probe is cross-linked and statically inspected, but not runtime verified;
 - validated ELF segments and a guarded stack can be planned and assigned frames transactionally;
+- native argc/argv/envp and minimal auxiliary-vector stack bytes are host tested;
 - lower-half AArch64 user-table topology and descriptor materialization are host tested;
 - a checked QEMU `virt` bootstrap physical-memory backend is cross-compiled but runtime pending;
 - DTB memory plus firmware/kernel/DTB reservations form a transactional boot allocator map;

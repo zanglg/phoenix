@@ -14,6 +14,7 @@ pub mod elf;
 pub mod memory;
 pub mod process_image;
 pub mod user;
+pub mod user_stack;
 
 pub mod arch;
 

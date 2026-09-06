@@ -622,7 +622,7 @@ impl<const MAPPINGS: usize, const PAGES: usize, const TABLES: usize, const LEAVE
 
     /// Return the initial user stack pointer.
     pub const fn stack_pointer(&self) -> UserAddr {
-        self.image.stack().initial_stack_pointer()
+        self.image.stack_pointer()
     }
 
     /// Return the exact number of resident user pages.

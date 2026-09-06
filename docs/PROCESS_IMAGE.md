@@ -2,8 +2,8 @@
 
 This document describes the architecture-neutral bridge from a validated executable to owned
 physical pages. The implementation is Host Tested and Cross Compiled. Physical access is
-expressed through a backend contract, but no AArch64 direct-map backend, hardware page tables, or
-production EL0 entry exists yet.
+expressed through a backend contract with a Runtime Pending AArch64 bootstrap implementation;
+production address-space activation and EL0 entry do not exist yet.
 
 ## Current implementation
 
@@ -14,13 +14,15 @@ Construction is allocation-free and produces:
   stack;
 - no mapping for the required stack guard;
 - one sorted page operation for every program and stack page;
-- the executable entry and initial stack pointer;
+- the executable entry and either the empty-stack top or a constructed native initial stack
+  pointer;
 - an exact count of required physical frames.
 
 Every page operation requires the destination page to be cleared first, then copies at most one
-page of borrowed ELF bytes at offset zero. This single rule covers full file pages, a partial final
-file page, BSS-only pages, bytes from `p_filesz` through `p_memsz`, and padding through the rounded
-page boundary. Stack pages have no initialized bytes and therefore remain entirely zero.
+page of borrowed bytes at a checked page offset. ELF segment bytes begin at offset zero; an
+optional native initial stack may begin partway through a page and cross page boundaries. This
+single rule covers full file pages, a partial final file page, BSS-only pages, ELF padding, a
+zero-only stack, and the complete argc/argv/envp/auxv stack image.
 
 The ELF subset requires page-aligned segment starts and file offsets, so the initial implementation
 does not need cross-page source offsets. The plan preserves each segment's final permissions and
@@ -55,9 +57,10 @@ frame ownership object. A retry starts by clearing all pages again, so bytes fro
 cannot survive unnoticed.
 
 The successful populated type retains only resident virtual address, physical frame, permission,
-and purpose metadata. It no longer borrows initialized byte slices, so the source ELF storage may
-be released immediately after population. The AArch64 layer can consume this resident owner with
-matching materialized tables to create one prepared address-space owner.
+purpose metadata, entry address, and final initial stack pointer. It no longer borrows initialized
+byte slices, so the source ELF and stack-image storage may be released immediately after
+population. The AArch64 layer can consume this resident owner with matching materialized tables to
+create one prepared address-space owner.
 
 ## Invariants
 
@@ -66,18 +69,19 @@ matching materialized tables to create one prepared address-space owner.
 - page operations and address-space mappings are sorted by user virtual address;
 - every planned page is aligned, has final W^X-safe permissions, and requires exactly one frame;
 - all destination pages must be cleared before initialized bytes are copied;
-- no initialized-byte slice exceeds a page;
+- every initialized-byte slice and its destination offset fit one page;
 - fixed-capacity exhaustion occurs before any external state changes;
 - assigning or releasing frames is all-or-nothing with respect to the supplied allocator;
 - only a successful complete clear-and-copy pass creates the populated type state;
 - successful population ends every borrow of source ELF bytes;
 - ownership moves linearly from allocated, to populated, to the prepared architecture address
   space; none of these resource owners is copyable;
-- the source ELF bytes must outlive planning and population.
+- the source ELF and optional initial-stack bytes must outlive planning and population.
 
 ## Validation
 
-Host tests cover multi-page text and data, partial final pages, zero-only stack pages, virtual
+Host tests cover multi-page text and data, partial final pages, zero-only stack pages, a native
+initial stack crossing two pages at a nonzero first-page offset, virtual
 ordering independent of program-header order, guard collision, mapping and page metadata limits,
 deterministic frame pairing, exact release, out-of-memory rollback, a failed release against a
 wrong allocator snapshot, complete zeroing, partial final pages, injected write failure, clean
@@ -89,7 +93,6 @@ checks compile the same ownership model for bare-metal AArch64.
 - replace the bootstrap memory backend with a final documented physical direct map;
 - make instruction-cache maintenance explicit before newly copied executable bytes can run;
 - define when a complete address space becomes visible through an ASID and `TTBR0_EL1`;
-- construct `argc`, `argv`, `envp`, and the minimal auxiliary vector on the guarded stack;
 - load a reproducibly built embedded ELF fixture through this path and validate it in QEMU;
 - integrate resource accounting and a process owner before supporting teardown outside tests.
 

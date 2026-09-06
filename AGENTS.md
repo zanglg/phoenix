@@ -35,6 +35,7 @@ not create speculative implementations for them.
 - `docs/USER_ADDRESS_SPACE.md`: EL0 virtual region, permissions, mapping plan, and guarded stack.
 - `docs/ELF_LOADER.md`: strict initial executable subset and transactional loading requirements.
 - `docs/PROCESS_IMAGE.md`: executable/stack page planning and transactional frame ownership.
+- `docs/INITIAL_USER_STACK.md`: native argc/argv/envp/auxv layout and process-image integration.
 - `docs/NATIVE_ABI.md`: unstable native syscall numbers, AArch64 registers, and return encoding.
 - `docs/EL0_PROBE.md`: opt-in static first-user-mode bridge and exact validation boundary.
 - `docs/QEMU.md`: pinned virtual board, runtime commands, timeout, sentinels, and evidence policy.

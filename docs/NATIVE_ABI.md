@@ -28,6 +28,13 @@ vector with exception class `SupervisorCallAArch64` and immediate zero.
 Unknown numbers are preserved and the opt-in probe returns `NotImplemented`; they are not parser errors. These
 assignments may change while the revision and project version remain zero.
 
+## Process entry stack
+
+The first native process receives a 16-byte-aligned `SP_EL0` pointing to `argc`, followed by
+`argv`, `envp`, and a terminated auxiliary vector. Revision 0 currently supplies page size, ELF
+entry, and Phoenix ABI revision entries. Exact word and string layout, limits, and validation are
+defined in `docs/INITIAL_USER_STACK.md`.
+
 ## Return convention
 
 Success is a non-negative value from zero through `i64::MAX`. Errors are encoded in `x0` as the
@@ -60,7 +67,6 @@ window. The types and adapter are Cross Compiled for AArch64.
 - implement bounded console `write` using fault-safe user copies;
 - define short writes, interruption, and maximum transfer sizes;
 - decide file-descriptor values and stderr/stdout initialization;
-- add ABI metadata to the initial auxiliary vector;
 - separate ABI revisioning from the project version when revision 1 is proposed;
 - add an EL0 conformance program and QEMU transcript.
 
