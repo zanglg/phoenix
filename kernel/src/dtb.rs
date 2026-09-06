@@ -2,6 +2,10 @@
 
 use core::str;
 
+mod boot;
+
+pub use boot::{BootInfo, MemoryRegions};
+
 const FDT_MAGIC: u32 = 0xd00d_feed;
 const FDT_HEADER_SIZE: usize = 40;
 const FDT_BEGIN_NODE: u32 = 1;
@@ -128,6 +132,34 @@ pub enum Error {
     },
     /// Node nesting exceeded the representable depth.
     DepthOverflow,
+    /// A scalar property has a malformed byte representation.
+    MalformedProperty {
+        /// Property being decoded.
+        name: &'static str,
+    },
+    /// A cell count cannot be represented by the current physical-address model.
+    UnsupportedCellCount {
+        /// Cell-count property being decoded.
+        name: &'static str,
+        /// Unsupported number of 32-bit cells.
+        count: u32,
+    },
+    /// A memory `reg` property is not a whole number of address/size pairs.
+    MalformedReg {
+        /// Property length in bytes.
+        length: usize,
+        /// Required bytes per entry.
+        entry_size: usize,
+    },
+    /// A physical range from the tree overflows or cannot fit the target address width.
+    InvalidPhysicalRange {
+        /// Physical start supplied by firmware.
+        address: u64,
+        /// Range length supplied by firmware.
+        size: u64,
+    },
+    /// The tree contains no non-empty usable memory range.
+    MissingMemory,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -190,6 +222,11 @@ impl<'a> DeviceTree<'a> {
             offset: 0,
             finished: false,
         }
+    }
+
+    /// Extract the validated boot information consumed by early Phoenix startup.
+    pub fn boot_info(self) -> Result<BootInfo<'a>, Error> {
+        BootInfo::from_tree(self)
     }
 
     fn validate_structure(self) -> Result<(), Error> {

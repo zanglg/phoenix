@@ -24,6 +24,7 @@ valuable evidence but cannot close an entry in this ledger.
 | RUN-CONSOLE-001 | QEMU `virt` PL011 output and flush | Runtime Pending | Complete build identity and success sentinel are observed |
 | RUN-PANIC-001 | Early panic reporting | Runtime Pending | Deliberate panic emits `PHOENIX_PANIC` before timeout |
 | RUN-SMOKE-001 | Bounded automated boot smoke test | Runtime Pending | Verified command exits or is terminated predictably after sentinel |
+| RUN-DTB-001 | Parse the QEMU-provided DTB in early boot | Runtime Pending | Real blob validates and yields expected CPU, memory, chosen, and reservation data |
 
 ## Validation procedure template
 

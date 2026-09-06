@@ -51,7 +51,7 @@ Build the pure and statically inspectable foundations needed by later runtime in
 this order:
 
 - [x] checked physical/virtual addresses, pages, frames, and ranges;
-- [ ] strict read-only DTB parsing and boot-information extraction;
+- [x] strict read-only DTB parsing and boot-information extraction;
 - [ ] physical-memory region normalization, reservation, and frame allocation;
 - [ ] AArch64 translation indices and page-table descriptor construction;
 - [ ] exception-frame layout, vector-table layout, and syndrome decoding.
