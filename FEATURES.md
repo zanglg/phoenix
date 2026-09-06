@@ -60,7 +60,7 @@ _No unclassified entries._
 
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
-| MM-001 | Physical page allocator | Planned | 0.1.0 | Includes reserved-range handling |
+| MM-001 | Physical page allocator | In Progress | 0.1.0 | Fixed-capacity model is Host Tested; DTB/runtime integration remains |
 | MM-002 | Virtual memory and kernel address space | Planned | 0.1.0 | Define mapping and invalidation invariants |
 | MM-003 | Kernel heap and fallible allocation policy | Planned | 0.1.0 | Define allocation-failure behavior |
 | MM-004 | Kernel stacks and guard pages | Planned | 0.1.0 | Include exception-context requirements |

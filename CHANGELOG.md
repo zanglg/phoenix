@@ -19,4 +19,5 @@ under `Unreleased` and the Cargo version remains 0.0.0 until the 0.1.0 release g
 - Explicit Host Tested, Cross Compiled, ELF Inspected, Runtime Pending, and Runtime Verified states.
 - Checked architecture-neutral physical/virtual addresses, pages, frames, and half-open ranges.
 - Strict allocation-free DTB parsing with boot CPU, bootargs, memory-region, and reservation extraction.
+- Fixed-capacity physical memory normalization, conservative reservation, and first-fit frame allocation.
 - Project, Agent, Roadmap, and kernel capability documentation.

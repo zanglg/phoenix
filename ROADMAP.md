@@ -52,7 +52,7 @@ this order:
 
 - [x] checked physical/virtual addresses, pages, frames, and ranges;
 - [x] strict read-only DTB parsing and boot-information extraction;
-- [ ] physical-memory region normalization, reservation, and frame allocation;
+- [x] physical-memory region normalization, reservation, and frame allocation;
 - [ ] AArch64 translation indices and page-table descriptor construction;
 - [ ] exception-frame layout, vector-table layout, and syndrome decoding.
 
