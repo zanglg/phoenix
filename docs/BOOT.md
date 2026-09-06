@@ -29,15 +29,20 @@ translation regime:
 - `0xffffff8040000000..0xffffff807fffffff` maps physical
   `0x40000000..0x7fffffff` as normal memory.
 
-The MMU is enabled before entering Rust. Instruction and data caches, FP/SIMD, interrupts, and
-final permission-separated page tables remain disabled or deferred. This coarse mapping exists
-only for early boot. Rust installs the linked EL1 exception vector table before emitting its first
-console line, but keeps asynchronous exceptions masked.
+The MMU is enabled before entering Rust. Instruction and data caches, FP/SIMD, and interrupts
+remain disabled or deferred. The default image retains the coarse mapping; the opt-in
+`kernel-map-probe` replaces TTBR1 with the final permission-separated hierarchy. Rust installs the
+linked EL1 exception vector table before emitting its first console line, but keeps asynchronous
+exceptions masked.
 
 The linker reserves a zeroed BSS followed by a 64 KiB, 16-byte-aligned boot stack. Rust receives
 the higher-half stack address. QEMU `virt` PL011 is physically at `0x09000000`, but Rust accesses
 its temporary higher-half device alias at `0xffffff8009000000`; diagnostics therefore survive an
 opt-in replacement of TTBR0.
+
+The linker additionally exposes page-aligned text, rodata, and writable-data boundaries and
+rejects an image extending beyond physical `0x40200000`. The final address-space contract is in
+`docs/FINAL_KERNEL_ADDRESS_SPACE.md`.
 
 ## Observable output
 
@@ -61,6 +66,7 @@ size/alignment, raw image, and linker map. `cargo xtask ci` includes both comman
 
 The bounded `cargo xtask test-boot` runner is documented in `docs/QEMU.md`. It is implemented and
 Host Tested at the command-construction and output-classification level, but has not been executed.
+The focused `cargo xtask test-kernel-map` runner similarly remains Runtime Pending.
 
 ## Open runtime decisions
 
@@ -70,4 +76,4 @@ Host Tested at the command-construction and output-classification level, but has
 - observed EL1 and EL2 entry behavior;
 - confirmation that direct boot supplies every assumed register and cache state.
 
-Resolve these from real emulator evidence before adding `run`, `debug`, or a boot-test command.
+Resolve these from real emulator evidence before treating any runtime command as support evidence.

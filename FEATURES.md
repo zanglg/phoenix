@@ -61,7 +61,7 @@ _No unclassified entries._
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
 | MM-001 | Physical page allocator | In Progress | 0.1.0 | Allocator/map logic is Host Tested; target DTB borrowing and linker-bound derivation are Cross Compiled and Runtime Pending |
-| MM-002 | Virtual memory and kernel address space | In Progress | 0.1.0 | Descriptors, plans, and checked bootstrap private-frame access are built; final TTBR1 and runtime validation remain |
+| MM-002 | Virtual memory and kernel address space | In Progress | 0.1.0 | Final mixed-level TTBR1 planning, allocation, materialization, permission separation, and publication are built; QEMU evidence, low-alias retirement, heap, and guarded stacks remain |
 | MM-003 | Kernel heap and fallible allocation policy | Planned | 0.1.0 | Define allocation-failure behavior |
 | MM-004 | Kernel stacks and guard pages | Planned | 0.1.0 | Include exception-context requirements |
 | MM-005 | User address spaces and safe user copies | In Progress | 0.1.0 | Plans/materialization/ownership and bidirectional physical-frame user copies are Host Tested; retained ASID-zero activation is Cross Compiled; general fault recovery and runtime evidence remain |
@@ -139,7 +139,7 @@ _No unclassified entries._
 | OBS-001 | Structured logging and runtime ring buffer | Planned | 0.1.0 | Builds on early console |
 | OBS-002 | Panic register dump, symbols, and stack traces | In Progress | 0.1.0 | Fatal exception path reports vector, PC, status, ESR, and FAR; symbolization and stack traces remain |
 | OBS-003 | Tracing and profiling | Captured | Unscheduled | Avoid committing to a format early |
-| TEST-001 | QEMU boot smoke and focused probes with timeout and sentinels | In Progress | 0.1.0 | Boot, memory, static EL0, and loaded init/file-I/O harnesses are implemented; init success requires exact ordered user output; QEMU execution remains Runtime Pending |
+| TEST-001 | QEMU boot smoke and focused probes with timeout and sentinels | In Progress | 0.1.0 | Boot, memory, final TTBR1, static EL0, and loaded init/file-I/O harnesses are implemented; QEMU execution remains Runtime Pending |
 | TEST-002 | Host-side unit and property tests | Implemented | 0.1.0 | Console, build identity, config, and ELF-layout logic |
 | TEST-003 | Fuzzing and fault injection | Deferred | Unscheduled | Add with parsers and failure paths |
 | HARD-001 | Unsafe-code review and invariant audit | Deferred | Continuous | Applies as unsafe code appears |

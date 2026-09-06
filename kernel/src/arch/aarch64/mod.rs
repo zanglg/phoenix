@@ -4,6 +4,7 @@
 use core::arch::asm;
 
 pub mod exception;
+pub mod kernel_page_table;
 pub mod paging;
 pub mod syscall;
 pub mod user_page_table;

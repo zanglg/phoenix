@@ -89,9 +89,11 @@ instead of silently hanging QEMU.
 
 Discover and reserve physical memory, add a page-frame allocator, establish the kernel virtual
 address space, install final page tables, and provide a guarded kernel heap and stacks. The
-descriptor and offline mapping model is Host Tested; target work still needs to allocate table
-frames, materialize the permission-separated layout, install it, retire temporary aliases, and
-validate the barrier and TLB-maintenance sequence.
+descriptor and mixed-level kernel-table model is Host Tested. A focused Cross Compiled image now
+uses the real DTB allocator to create a direct map, separates text/rodata/data permissions, maps
+PL011 at page granularity, permanently retains the tables, and publishes TTBR1 with barriers and
+TLB invalidation. Target execution remains Runtime Pending. Temporary TTBR0 aliases, the heap, and
+guarded kernel stacks still remain.
 
 Observable result: allocator and mapping self-tests exercise success and failure paths without
 corrupting the bootstrap, DTB, image, or device mappings.
@@ -99,7 +101,8 @@ corrupting the bootstrap, DTB, image, or device mappings.
 The Host Tested boot-map builder now normalizes DTB memory and removes firmware reservations, the
 loaded kernel, and the borrowed DTB before freezing the allocator. A separate Cross Compiled probe
 connects the real boot argument and linker symbols, allocates and round-trips one private frame,
-and restores ownership; its target execution remains Runtime Pending.
+and restores ownership; its target execution remains Runtime Pending. The final layout and its
+explicit deferrals are documented in `docs/FINAL_KERNEL_ADDRESS_SPACE.md`.
 
 ## 5. Interrupts and time
 

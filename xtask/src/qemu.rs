@@ -21,6 +21,8 @@ pub const BOOT_SUCCESS_SENTINEL: &str = "PHOENIX_BOOT_OK";
 pub const PANIC_SENTINEL: &str = "PHOENIX_PANIC";
 pub const EXCEPTION_SENTINEL: &str = "PHOENIX_EXCEPTION";
 pub const MEMORY_SUCCESS_SENTINEL: &str = "PHOENIX_MEMORY_OK";
+pub const KERNEL_MAP_ENTER_SENTINEL: &str = "PHOENIX_KERNEL_MAP_ENTER";
+pub const KERNEL_MAP_SUCCESS_SENTINEL: &str = "PHOENIX_KERNEL_MAP_OK";
 pub const EL0_SUCCESS_SENTINEL: &str = "PHOENIX_EL0_OK";
 pub const EL0_FAILURE_SENTINEL: &str = "PHOENIX_EL0_FAIL";
 pub const INIT_SUCCESS_SENTINEL: &str = "PHOENIX_INIT_OK";
@@ -87,6 +89,7 @@ enum TerminalOutput {
 enum ExpectedOutput {
     Boot,
     Memory,
+    KernelMap,
     El0,
     Init,
 }
@@ -96,6 +99,7 @@ impl ExpectedOutput {
         match self {
             Self::Boot => BOOT_SUCCESS_SENTINEL,
             Self::Memory => MEMORY_SUCCESS_SENTINEL,
+            Self::KernelMap => KERNEL_MAP_SUCCESS_SENTINEL,
             Self::El0 => EL0_SUCCESS_SENTINEL,
             Self::Init => INIT_SUCCESS_SENTINEL,
         }
@@ -105,6 +109,7 @@ impl ExpectedOutput {
         match self {
             Self::Boot => "AArch64 boot",
             Self::Memory => "AArch64 boot-memory probe",
+            Self::KernelMap => "AArch64 final-kernel-map probe",
             Self::El0 => "AArch64 EL0 probe",
             Self::Init => "dynamically loaded AArch64 init probe",
         }
@@ -114,13 +119,14 @@ impl ExpectedOutput {
         match self {
             Self::El0 => Some(EL0_FAILURE_SENTINEL),
             Self::Init => Some(INIT_FAILURE_SENTINEL),
-            Self::Boot | Self::Memory => None,
+            Self::Boot | Self::Memory | Self::KernelMap => None,
         }
     }
 
     const fn required_output(self) -> Option<&'static str> {
         match self {
             Self::Init => Some(INIT_USER_OUTPUT),
+            Self::KernelMap => Some(KERNEL_MAP_ENTER_SENTINEL),
             Self::Boot | Self::Memory | Self::El0 => None,
         }
     }
@@ -180,6 +186,10 @@ pub fn test_el0(image: &Path, log: &Path, workspace_root: &Path) -> bool {
 
 pub fn test_memory(image: &Path, log: &Path, workspace_root: &Path) -> bool {
     test_kernel(image, log, workspace_root, ExpectedOutput::Memory)
+}
+
+pub fn test_kernel_map(image: &Path, log: &Path, workspace_root: &Path) -> bool {
+    test_kernel(image, log, workspace_root, ExpectedOutput::KernelMap)
 }
 
 pub fn test_init(image: &Path, log: &Path, workspace_root: &Path) -> bool {
@@ -506,9 +516,9 @@ mod tests {
 
     use super::{
         BOOT_SUCCESS_SENTINEL, CPU, EL0_FAILURE_SENTINEL, EL0_SUCCESS_SENTINEL, EXCEPTION_SENTINEL,
-        ExpectedOutput, INIT_FAILURE_SENTINEL, INIT_SUCCESS_SENTINEL, INIT_USER_OUTPUT, MACHINE,
-        MEMORY_SUCCESS_SENTINEL, PANIC_SENTINEL, QemuCommand, TerminalOutput, classify_output,
-        has_named_item, shell_quote,
+        ExpectedOutput, INIT_FAILURE_SENTINEL, INIT_SUCCESS_SENTINEL, INIT_USER_OUTPUT,
+        KERNEL_MAP_ENTER_SENTINEL, KERNEL_MAP_SUCCESS_SENTINEL, MACHINE, MEMORY_SUCCESS_SENTINEL,
+        PANIC_SENTINEL, QemuCommand, TerminalOutput, classify_output, has_named_item, shell_quote,
     };
 
     #[test]
@@ -604,6 +614,41 @@ mod tests {
             classify_output(
                 format!("{PANIC_SENTINEL}\n{MEMORY_SUCCESS_SENTINEL}\n").as_bytes(),
                 ExpectedOutput::Memory
+            ),
+            Some(TerminalOutput::Panic)
+        );
+    }
+
+    #[test]
+    fn kernel_map_classifier_requires_post_switch_success() {
+        assert_eq!(
+            classify_output(
+                format!("{BOOT_SUCCESS_SENTINEL}\nPHOENIX_KERNEL_MAP_ENTER\n").as_bytes(),
+                ExpectedOutput::KernelMap
+            ),
+            None
+        );
+        assert_eq!(
+            classify_output(
+                format!("PHOENIX_KERNEL_MAP_ENTER\n{KERNEL_MAP_SUCCESS_SENTINEL}\n").as_bytes(),
+                ExpectedOutput::KernelMap
+            ),
+            Some(TerminalOutput::Success)
+        );
+        assert_eq!(
+            classify_output(
+                KERNEL_MAP_SUCCESS_SENTINEL.as_bytes(),
+                ExpectedOutput::KernelMap
+            ),
+            Some(TerminalOutput::ProtocolFailure)
+        );
+        assert_eq!(
+            classify_output(
+                format!(
+                    "{PANIC_SENTINEL}\n{KERNEL_MAP_ENTER_SENTINEL}\n{KERNEL_MAP_SUCCESS_SENTINEL}\n"
+                )
+                .as_bytes(),
+                ExpectedOutput::KernelMap
             ),
             Some(TerminalOutput::Panic)
         );

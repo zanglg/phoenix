@@ -63,6 +63,12 @@ Build the opt-in DTB, allocator, and RAM-access integration image and require it
 cargo xtask test-memory
 ```
 
+Build the final permission-separated TTBR1 image and require output after the live table switch:
+
+```bash
+cargo xtask test-kernel-map
+```
+
 Build the standalone init, embed it in the dynamic loader path, and require its stack/file-I/O
 validated terminal marker:
 
@@ -70,7 +76,7 @@ validated terminal marker:
 cargo xtask test-init
 ```
 
-`run`, `test-boot`, `test-memory`, `test-el0`, and `test-init` first verify that
+`run`, `test-boot`, `test-memory`, `test-kernel-map`, `test-el0`, and `test-init` first verify that
 `qemu-system-aarch64`, the pinned machine, and the CPU model exist. They refuse to substitute
 another machine silently. The normal emulator-free `cargo xtask ci` command never launches QEMU.
 
@@ -87,6 +93,8 @@ terminal sentinel determines the result:
 - `PHOENIX_PANIC`: fail immediately;
 - `PHOENIX_EXCEPTION`: fail immediately and retain the register report;
 - `PHOENIX_MEMORY_OK`: pass for `test-memory` only;
+- `PHOENIX_KERNEL_MAP_OK`: pass for `test-kernel-map` only, after TTBR1 publication;
+- `PHOENIX_KERNEL_MAP_OK` without the earlier `PHOENIX_KERNEL_MAP_ENTER`: protocol fail;
 - `PHOENIX_EL0_OK`: pass for `test-el0` only;
 - `PHOENIX_EL0_FAIL`: fail `test-el0` immediately;
 - `PHOENIX_INIT_OK`: pass for `test-init` only;
@@ -100,11 +108,12 @@ terminal sentinel determines the result:
 Because the kernel currently halts after output, the harness terminates QEMU after observing a
 terminal sentinel. It writes boot output to
 `target/phoenix/aarch64-unknown-none-softfloat/debug/qemu-boot.log`, memory-probe output to the
-adjacent `qemu-memory.log`, and EL0 output to `qemu-el0.log`. It emits one stable summary such as
-`QEMU_TEST_RESULT=pass`, `probe-failure`, `protocol-failure`, `panic`, `timeout`, or `early-exit`. Loaded-init output is
-written to `qemu-init.log`. A missing emulator is an error for runtime commands, never a skipped or
-passing test. `test-memory`, `test-el0`, and `test-init` ignore the intermediate
-`PHOENIX_BOOT_OK` marker, so none can pass before its own path completes.
+adjacent `qemu-memory.log`, final-map output to `qemu-kernel-map.log`, and EL0 output to
+`qemu-el0.log`. It emits one stable summary such as `QEMU_TEST_RESULT=pass`, `probe-failure`,
+`protocol-failure`, `panic`, `timeout`, or `early-exit`. Loaded-init output is written to
+`qemu-init.log`. A missing emulator is an error for runtime commands, never a skipped or passing
+test. Focused probes ignore the intermediate `PHOENIX_BOOT_OK` marker, so none can pass before its
+own path completes.
 
 ## How to report the first run
 
@@ -113,7 +122,8 @@ dependency order, ending with `cargo xtask test-init`. Preserve:
 
 1. the Phoenix commit hash;
 2. the complete `QEMU_TEST_*` lines;
-3. the corresponding `qemu-boot.log`, `qemu-memory.log`, `qemu-el0.log`, or `qemu-init.log`;
+3. the corresponding `qemu-boot.log`, `qemu-memory.log`, `qemu-kernel-map.log`, `qemu-el0.log`, or
+   `qemu-init.log`;
 4. whether the host is x86_64 or AArch64;
 5. any local command changes.
 
@@ -136,7 +146,8 @@ executed locally.
 - add a deterministic guest-driven exit device after platform discovery is available;
 - dump and retain the generated DTB for compatibility fixtures;
 - add GDB attach support using the same pinned board configuration;
-- add tests for exceptions, final page-table replacement, and production process entry;
+- run and reconcile the implemented final page-table replacement probe;
+- add tests for exceptions and production process entry;
 - decide when a QEMU-enabled CI runner becomes required.
 
 ## Skipped work

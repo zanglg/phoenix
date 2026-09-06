@@ -54,4 +54,7 @@ under `Unreleased` and the Cargo version remains 0.0.0 until the 0.1.0 release g
   stdout syscall handling, and a userspace message/return-value conformance check.
 - Fully prevalidated `copy_to_user`, a generation-safe fixed-capacity read-only initramfs file
   table, bounded `open`/`read`/`close` probes, and end-to-end initramfs file-I/O conformance logic.
+- Allocator-owned mixed-level AArch64 kernel tables, page-granular text/rodata/data permission
+  overrides, a QEMU `virt` RAM direct map and PL011 device page, one-time TTBR1 publication with
+  barriers/TLB invalidation, and a bounded Runtime Pending final-map probe.
 - Project, Agent, Roadmap, and kernel capability documentation.

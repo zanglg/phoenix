@@ -28,6 +28,9 @@ narrow support claim:
 - a checked QEMU `virt` bootstrap physical-memory backend is cross-compiled but runtime pending;
 - DTB memory plus firmware/kernel/DTB reservations form a transactional boot allocator map;
 - an opt-in boot-memory probe cross-links the real DTB-to-allocation-to-readback path;
+- an opt-in final-kernel-map image builds allocator-owned TTBR1 tables with RX text, RO/NX
+  rodata, RW/NX RAM, and a page-granular PL011 mapping, then publishes them with barriers and TLB
+  invalidation; target execution is pending;
 - runtime boot and serial output have **not** been validated because the current development
   environment has no QEMU.
 
@@ -74,6 +77,7 @@ cargo xtask qemu-command
 cargo xtask run
 cargo xtask test-boot
 cargo xtask test-memory
+cargo xtask test-kernel-map
 cargo xtask test-el0
 cargo xtask test-init
 cargo xtask ci
@@ -84,10 +88,12 @@ artifacts without executing them. `build-init` and `inspect-init` do the same fo
 standalone native user ELF and deterministic initramfs. `qemu-command` prints the pinned command
 without starting an emulator. `run` is interactive and `test-boot` is bounded; neither is part of
 emulator-free `ci`.
-`test-memory` builds the opt-in boot-memory integration image; `test-el0` builds the opt-in
-statically linked user-mode conformance image; `test-init` builds the full dynamically loaded
-standalone-init path. Each requires its own final marker. See
-[`docs/QEMU.md`](docs/QEMU.md), [`docs/BOOT_MEMORY_PROBE.md`](docs/BOOT_MEMORY_PROBE.md), and
+`test-memory` builds the opt-in boot-memory integration image; `test-kernel-map` replaces TTBR1
+with the final permission-separated layout; `test-el0` builds the opt-in statically linked
+user-mode conformance image; `test-init` builds the full dynamically loaded standalone-init path.
+Each requires its own final marker. See [`docs/QEMU.md`](docs/QEMU.md),
+[`docs/BOOT_MEMORY_PROBE.md`](docs/BOOT_MEMORY_PROBE.md),
+[`docs/FINAL_KERNEL_ADDRESS_SPACE.md`](docs/FINAL_KERNEL_ADDRESS_SPACE.md), and
 [`docs/EL0_PROBE.md`](docs/EL0_PROBE.md) for their exact validation boundaries. The separately
 linked program is documented in [`docs/FIRST_USER_PROGRAM.md`](docs/FIRST_USER_PROGRAM.md), and
 the archive and end-to-end integration in [`docs/INITRAMFS.md`](docs/INITRAMFS.md) and

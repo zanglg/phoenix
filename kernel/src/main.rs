@@ -5,7 +5,13 @@
 compile_error!("the Phoenix kernel binary currently supports only AArch64");
 
 use core::fmt::Write;
-#[cfg(feature = "loaded-init-probe")]
+#[cfg(any(
+    feature = "loaded-init-probe",
+    all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    )
+))]
 use core::mem::MaybeUninit;
 use core::panic::PanicInfo;
 #[cfg(feature = "loaded-init-probe")]
@@ -19,16 +25,40 @@ use phoenix_kernel::console::ByteSink;
 use phoenix_kernel::console::Console;
 use phoenix_kernel::platform::aarch64::qemu_virt::EarlyPl011;
 
-#[cfg(feature = "loaded-init-probe")]
+#[cfg(any(
+    feature = "loaded-init-probe",
+    all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    )
+))]
 use phoenix_kernel::memory::FrameAllocator;
-#[cfg(any(feature = "boot-memory-probe", feature = "loaded-init-probe"))]
+#[cfg(any(
+    feature = "boot-memory-probe",
+    feature = "kernel-map-probe",
+    feature = "loaded-init-probe"
+))]
 use phoenix_kernel::memory::{PhysAddr, memory_map_from_boot_info};
-#[cfg(any(feature = "boot-memory-probe", feature = "loaded-init-probe"))]
+#[cfg(any(
+    feature = "boot-memory-probe",
+    feature = "kernel-map-probe",
+    feature = "loaded-init-probe"
+))]
 use phoenix_kernel::platform::aarch64::qemu_virt::{
     BootstrapPhysicalMemory, kernel_physical_range,
 };
 #[cfg(feature = "boot-memory-probe")]
 use phoenix_kernel::process_image::ProcessImageMemory;
+#[cfg(all(
+    feature = "kernel-map-probe",
+    not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+))]
+use phoenix_kernel::{
+    arch::aarch64::kernel_page_table::MaterializedKernelPageTables,
+    platform::aarch64::qemu_virt::{
+        FINAL_KERNEL_MAPPING_CAPACITY, FINAL_KERNEL_TABLE_CAPACITY, final_kernel_page_table_plan,
+    },
+};
 
 #[cfg(feature = "loaded-init-probe")]
 use phoenix_kernel::abi::{
@@ -67,6 +97,16 @@ const PANIC_SENTINEL: &str = "PHOENIX_PANIC";
 const EXCEPTION_SENTINEL: &str = "PHOENIX_EXCEPTION";
 #[cfg(feature = "boot-memory-probe")]
 const MEMORY_SUCCESS_SENTINEL: &str = "PHOENIX_MEMORY_OK";
+#[cfg(all(
+    feature = "kernel-map-probe",
+    not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+))]
+const KERNEL_MAP_ENTER_SENTINEL: &str = "PHOENIX_KERNEL_MAP_ENTER";
+#[cfg(all(
+    feature = "kernel-map-probe",
+    not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+))]
+const KERNEL_MAP_SUCCESS_SENTINEL: &str = "PHOENIX_KERNEL_MAP_OK";
 #[cfg(all(feature = "el0-probe", not(feature = "loaded-init-probe")))]
 const EL0_ENTER_SENTINEL: &str = "PHOENIX_EL0_ENTER";
 #[cfg(all(feature = "el0-probe", not(feature = "loaded-init-probe")))]
@@ -121,6 +161,31 @@ static mut INIT_RUNTIME: MaybeUninit<InitRuntime> = MaybeUninit::uninit();
 #[cfg(feature = "loaded-init-probe")]
 static INIT_WROTE_OUTPUT: AtomicBool = AtomicBool::new(false);
 
+#[cfg(all(
+    feature = "kernel-map-probe",
+    not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+))]
+const KERNEL_MAP_MEMORY_RANGES: usize = 16;
+#[cfg(all(
+    feature = "kernel-map-probe",
+    not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+))]
+type FinalKernelTables =
+    MaterializedKernelPageTables<FINAL_KERNEL_TABLE_CAPACITY, FINAL_KERNEL_MAPPING_CAPACITY>;
+#[cfg(all(
+    feature = "kernel-map-probe",
+    not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+))]
+struct KernelMapRuntime {
+    tables: FinalKernelTables,
+    _allocator: FrameAllocator<KERNEL_MAP_MEMORY_RANGES>,
+}
+#[cfg(all(
+    feature = "kernel-map-probe",
+    not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+))]
+static mut KERNEL_MAP_RUNTIME: MaybeUninit<KernelMapRuntime> = MaybeUninit::uninit();
+
 /// Rust entry point reached by the AArch64 bootstrap.
 #[unsafe(no_mangle)]
 pub extern "C" fn kernel_main(boot_argument: usize) -> ! {
@@ -137,6 +202,12 @@ pub extern "C" fn kernel_main(boot_argument: usize) -> ! {
 
     #[cfg(feature = "boot-memory-probe")]
     run_boot_memory_probe(boot_argument, &mut console);
+
+    #[cfg(all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    ))]
+    run_kernel_map_probe(boot_argument, &mut console);
 
     #[cfg(feature = "loaded-init-probe")]
     run_loaded_init_probe(boot_argument, &mut console);
@@ -156,7 +227,11 @@ pub extern "C" fn kernel_main(boot_argument: usize) -> ! {
         }
     }
 
-    #[cfg(not(any(feature = "el0-probe", feature = "loaded-init-probe")))]
+    #[cfg(not(any(
+        feature = "el0-probe",
+        feature = "kernel-map-probe",
+        feature = "loaded-init-probe"
+    )))]
     halt()
 }
 
@@ -225,6 +300,98 @@ fn run_boot_memory_probe(boot_argument: usize, console: &mut Console<EarlyPl011>
     );
     let _ = writeln!(console, "{MEMORY_SUCCESS_SENTINEL}");
     console.sink_mut().flush();
+}
+
+#[cfg(all(
+    feature = "kernel-map-probe",
+    not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+))]
+fn run_kernel_map_probe(boot_argument: usize, console: &mut Console<EarlyPl011>) -> ! {
+    // SAFETY: the single boot CPU still uses the documented coarse higher-half
+    // RAM alias. Allocated table frames remain private until publication.
+    let mut physical_memory = unsafe { BootstrapPhysicalMemory::assume_bootstrap_mapping() };
+    let device_tree_start = PhysAddr::new(boot_argument);
+    let (plan, map) = {
+        let tree = physical_memory
+            .device_tree(device_tree_start)
+            .unwrap_or_else(|error| panic!("could not borrow boot DTB: {error:?}"));
+        let info = tree
+            .boot_info()
+            .unwrap_or_else(|error| panic!("could not extract boot information: {error:?}"));
+        let kernel_image = kernel_physical_range()
+            .unwrap_or_else(|error| panic!("could not derive kernel image range: {error:?}"));
+        let plan = final_kernel_page_table_plan(info)
+            .unwrap_or_else(|error| panic!("could not plan final kernel page tables: {error:?}"));
+        let map = memory_map_from_boot_info::<KERNEL_MAP_MEMORY_RANGES>(
+            info,
+            kernel_image,
+            device_tree_start,
+        )
+        .unwrap_or_else(|error| panic!("could not construct boot memory map: {error:?}"));
+        (plan, map)
+    };
+
+    let mapping_count = plan.mappings().len();
+    let table_count = plan.required_table_frames();
+    let mut allocator = map.into_allocator();
+    let allocated = plan
+        .allocate(&mut allocator)
+        .unwrap_or_else(|error| panic!("could not allocate final kernel tables: {error:?}"));
+    let materialized = allocated
+        .materialize(&mut physical_memory)
+        .unwrap_or_else(|error| {
+            panic!(
+                "could not materialize final kernel table {:?} entry {:?} at {:?}: {:?}",
+                error.table(),
+                error.index(),
+                error.stage(),
+                error.error()
+            )
+        });
+    drop(physical_memory);
+    let root = materialized.root_frame().start_address().as_usize();
+    // SAFETY: the probe initializes this single global owner exactly once on
+    // the boot CPU and never replaces or frees it afterward.
+    let tables = unsafe {
+        install_kernel_map_runtime(KernelMapRuntime {
+            tables: materialized,
+            _allocator: allocator,
+        })
+    };
+
+    let _ = writeln!(
+        console,
+        "kernel-map: root={root:#018x} tables={table_count} leaves={mapping_count}"
+    );
+    let _ = writeln!(console, "{KERNEL_MAP_ENTER_SENTINEL}");
+    console.sink_mut().flush();
+
+    // SAFETY: the validated plan maps the running kernel image with exact
+    // text/rodata/data permissions, preserves the live boot stack and vector
+    // table, maps all pinned QEMU RAM, and provides the PL011 device page. The
+    // static runtime permanently retains the hierarchy on the single boot CPU.
+    unsafe {
+        tables.activate();
+    }
+
+    let _ = writeln!(console, "{KERNEL_MAP_SUCCESS_SENTINEL}");
+    console.sink_mut().flush();
+    halt()
+}
+
+#[cfg(all(
+    feature = "kernel-map-probe",
+    not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+))]
+unsafe fn install_kernel_map_runtime(runtime: KernelMapRuntime) -> &'static FinalKernelTables {
+    let slot = &raw mut KERNEL_MAP_RUNTIME;
+    // SAFETY: the caller guarantees one-time initialization and permanent
+    // retention. The raw pointer avoids a reference to uninitialized storage.
+    unsafe {
+        (*slot).write(runtime);
+        let runtime = (*slot).as_ptr();
+        &*core::ptr::addr_of!((*runtime).tables)
+    }
 }
 
 #[cfg(feature = "loaded-init-probe")]

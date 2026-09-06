@@ -23,6 +23,9 @@ while this borrow exists.
 `kernel_physical_range` converts the linked higher-half `__kernel_start..__kernel_end` symbols into
 one physical range and rejects an empty, reversed, untranslated, or out-of-window image. This is
 the single target-side source of the kernel reservation supplied to boot memory-map construction.
+The final-map probe also derives page-aligned text, rodata, and data frame ranges from dedicated
+linker symbols, uses this backend to populate allocator-owned TTBR1 tables, and explicitly drops
+the bootstrap handle before publishing the replacement hierarchy.
 
 Every operation validates that the complete physical frame is inside the temporary RAM block and
 that offset plus length stays within one page. Address arithmetic is checked. Empty writes are
@@ -60,15 +63,15 @@ and descriptors are observed by the CPU.
 
 - construct the backend only after a runtime assertion of the expected bootstrap translation
   regime;
-- feed loader writes exclusively with frames owned through the DTB-derived allocator;
 - add explicit cache maintenance before enabling caches or executing copied instructions;
-- replace it with a final permission-separated physical direct map or bounded temporary mapper;
-- prevent the final TTBR1 switch while any bootstrap-memory handle can still exist;
+- replace it with a named final-direct-map handle after the focused TTBR1 probe is runtime verified;
+- encode the final TTBR1 switch exclusion in a stronger type-state API rather than relying only on
+  the current lexical drop and single-call boot flow;
 - record target faults and address translations in the runtime validation ledger.
 
 ## Skipped work
 
-This backend does not discover RAM, allocate frames, map memory above the first 1 GiB QEMU RAM
-window, provide DMA coherency, synchronize CPUs, modify live page tables, or define the permanent
-kernel direct map. It is a narrow bridge from the existing bootstrap to the production ownership
-model, not a general physical-memory API.
+This backend does not itself discover RAM, allocate frames, map memory above the first 1 GiB QEMU
+RAM window, provide DMA coherency, synchronize CPUs, or modify live page tables. The platform now
+defines a final kernel direct map separately; this handle remains only the bridge used to construct
+it, not the long-lived physical-memory API.

@@ -9,6 +9,7 @@ mod qemu;
 const AARCH64_TARGET: &str = "aarch64-unknown-none-softfloat";
 const KERNEL_PHYS_BASE: u64 = 0x0000_0000_4008_0000;
 const KERNEL_VIRT_BASE: u64 = 0xffff_ff80_4008_0000;
+const FINAL_KERNEL_PERMISSION_WINDOW_END: u64 = 0xffff_ff80_4020_0000;
 const BOOT_STACK_SIZE: u64 = 64 * 1024;
 const EXCEPTION_VECTOR_TABLE_SIZE: u64 = 2048;
 const INIT_ENTRY: usize = 0x0040_0000;
@@ -42,6 +43,7 @@ fn main() -> ExitCode {
         "run" => run_kernel(),
         "test-boot" => test_boot(),
         "test-memory" => test_memory(),
+        "test-kernel-map" => test_kernel_map(),
         "test-el0" => test_el0(),
         "test-init" => test_init(),
         "ci" => ci(),
@@ -82,6 +84,7 @@ fn print_help() {
     println!("  run      Build and run Phoenix interactively on QEMU");
     println!("  test-boot  Run the bounded QEMU boot integration test");
     println!("  test-memory  Run the bounded QEMU boot-memory integration probe");
+    println!("  test-kernel-map  Run the bounded QEMU final-kernel-map probe");
     println!("  test-el0  Run the bounded QEMU EL0 conformance probe");
     println!("  test-init  Run the bounded dynamically loaded init probe");
     println!("  ci       Run every validation available without an emulator");
@@ -394,6 +397,7 @@ struct Artifacts {
     map: PathBuf,
     qemu_log: PathBuf,
     qemu_memory_log: PathBuf,
+    qemu_kernel_map_log: PathBuf,
     qemu_el0_log: PathBuf,
     qemu_init_log: PathBuf,
 }
@@ -410,6 +414,7 @@ struct InitArtifacts {
 enum KernelVariant {
     Default,
     BootMemoryProbe,
+    KernelMapProbe,
     El0Probe,
     LoadedInitProbe,
 }
@@ -419,6 +424,7 @@ impl KernelVariant {
         match self {
             Self::Default => "default",
             Self::BootMemoryProbe => "boot-memory-probe",
+            Self::KernelMapProbe => "kernel-map-probe",
             Self::El0Probe => "el0-probe",
             Self::LoadedInitProbe => "loaded-init-probe",
         }
@@ -428,6 +434,7 @@ impl KernelVariant {
         match self {
             Self::Default => &[],
             Self::BootMemoryProbe => &["boot-memory-probe"],
+            Self::KernelMapProbe => &["kernel-map-probe"],
             Self::El0Probe => &["el0-probe"],
             Self::LoadedInitProbe => &["loaded-init-probe"],
         }
@@ -445,6 +452,7 @@ impl KernelVariant {
         match self {
             Self::Default => qemu::BOOT_SUCCESS_SENTINEL,
             Self::BootMemoryProbe => qemu::MEMORY_SUCCESS_SENTINEL,
+            Self::KernelMapProbe => qemu::KERNEL_MAP_SUCCESS_SENTINEL,
             Self::El0Probe => qemu::EL0_SUCCESS_SENTINEL,
             Self::LoadedInitProbe => qemu::INIT_SUCCESS_SENTINEL,
         }
@@ -458,6 +466,7 @@ fn kernel_artifacts(target: &str, variant: KernelVariant) -> Artifacts {
     let artifact_stem = match variant {
         KernelVariant::Default => "phoenix-kernel",
         KernelVariant::BootMemoryProbe => "phoenix-kernel-memory",
+        KernelVariant::KernelMapProbe => "phoenix-kernel-map",
         KernelVariant::El0Probe => "phoenix-kernel-el0",
         KernelVariant::LoadedInitProbe => "phoenix-kernel-init",
     };
@@ -467,6 +476,7 @@ fn kernel_artifacts(target: &str, variant: KernelVariant) -> Artifacts {
         map: output.join(format!("{artifact_stem}.map")),
         qemu_log: output.join("qemu-boot.log"),
         qemu_memory_log: output.join("qemu-memory.log"),
+        qemu_kernel_map_log: output.join("qemu-kernel-map.log"),
         qemu_el0_log: output.join("qemu-el0.log"),
         qemu_init_log: output.join("qemu-init.log"),
         cargo_target_dir,
@@ -944,6 +954,12 @@ fn validate_symbol_layout(symbols: &BTreeMap<String, u64>, expect_el0_probe: boo
         "kernel_main",
         "__kernel_start",
         "__kernel_end",
+        "__text_start",
+        "__text_end",
+        "__rodata_start",
+        "__rodata_end",
+        "__data_start",
+        "__data_end",
         "__bss_start",
         "__bss_end",
         "__boot_l1_page_table",
@@ -965,6 +981,12 @@ fn validate_symbol_layout(symbols: &BTreeMap<String, u64>, expect_el0_probe: boo
     let start = symbols["_start"];
     let kernel_start = symbols["__kernel_start"];
     let kernel_end = symbols["__kernel_end"];
+    let text_start = symbols["__text_start"];
+    let text_end = symbols["__text_end"];
+    let rodata_start = symbols["__rodata_start"];
+    let rodata_end = symbols["__rodata_end"];
+    let data_start = symbols["__data_start"];
+    let data_end = symbols["__data_end"];
     let bss_start = symbols["__bss_start"];
     let bss_end = symbols["__bss_end"];
     let table = symbols["__boot_l1_page_table"];
@@ -981,8 +1003,31 @@ fn validate_symbol_layout(symbols: &BTreeMap<String, u64>, expect_el0_probe: boo
     if kernel_start != start {
         errors.push("__kernel_start and _start differ".to_owned());
     }
-    if kernel_end <= kernel_start || kernel_end - kernel_start >= 1024 * 1024 * 1024 {
-        errors.push("kernel does not fit the temporary 1 GiB mapping".to_owned());
+    if kernel_end <= kernel_start || kernel_end > FINAL_KERNEL_PERMISSION_WINDOW_END {
+        errors.push("kernel does not fit the final first-2-MiB permission window".to_owned());
+    }
+    if text_start != kernel_start
+        || text_start >= text_end
+        || text_end > rodata_start
+        || rodata_start >= rodata_end
+        || rodata_end > data_start
+        || data_start >= data_end
+        || data_end != kernel_end
+    {
+        errors.push("kernel permission-domain symbols are empty or unordered".to_owned());
+    }
+    if [
+        text_start,
+        text_end,
+        rodata_start,
+        rodata_end,
+        data_start,
+        data_end,
+    ]
+    .iter()
+    .any(|address| address & 0xfff != 0)
+    {
+        errors.push("kernel permission-domain symbols are not page aligned".to_owned());
     }
     if table & 0xfff != 0 {
         errors.push("bootstrap L1 table is not 4 KiB aligned".to_owned());
@@ -1241,6 +1286,20 @@ fn test_memory() -> bool {
         )
 }
 
+fn test_kernel_map() -> bool {
+    let Some(target) = require_aarch64_target() else {
+        return false;
+    };
+    let artifacts = kernel_artifacts(&target, KernelVariant::KernelMapProbe);
+    build_kernel_variant(KernelVariant::KernelMapProbe)
+        && inspect_kernel_variant(KernelVariant::KernelMapProbe)
+        && qemu::test_kernel_map(
+            &artifacts.image,
+            &artifacts.qemu_kernel_map_log,
+            &workspace_root(),
+        )
+}
+
 fn test_init() -> bool {
     let Some(target) = require_aarch64_target() else {
         return false;
@@ -1265,6 +1324,8 @@ fn ci() -> bool {
         && inspect_init()
         && build_kernel_variant(KernelVariant::BootMemoryProbe)
         && inspect_kernel_variant(KernelVariant::BootMemoryProbe)
+        && build_kernel_variant(KernelVariant::KernelMapProbe)
+        && inspect_kernel_variant(KernelVariant::KernelMapProbe)
         && build_kernel_variant(KernelVariant::El0Probe)
         && inspect_kernel_variant(KernelVariant::El0Probe)
         && build_kernel_variant(KernelVariant::LoadedInitProbe)
@@ -1336,16 +1397,22 @@ mod tests {
     fn validates_expected_boot_symbol_layout() {
         let symbols = parse_nm_symbols(
             "ffffff8040080000 T __kernel_start\n\
+             ffffff8040080000 T __text_start\n\
              ffffff8040080000 T _start\n\
              ffffff8040080650 T kernel_main\n\
+             ffffff8040082000 T __exception_vectors\n\
+             ffffff8040082800 T __exception_vectors_end\n\
+             ffffff8040083000 T __text_end\n\
+             ffffff8040083000 R __rodata_start\n\
+             ffffff8040084000 R __rodata_end\n\
+             ffffff8040084000 D __data_start\n\
              ffffff8040084000 D __boot_l1_page_table\n\
-             ffffff8040084800 T __exception_vectors\n\
-             ffffff8040085000 T __exception_vectors_end\n\
              ffffff8040085000 D __bss_start\n\
              ffffff8040085000 B __bss_end\n\
              ffffff8040085000 B __boot_stack_bottom\n\
              ffffff8040095000 B __boot_stack_top\n\
-             ffffff8040095000 B __kernel_end",
+             ffffff8040095000 B __kernel_end\n\
+             ffffff8040095000 B __data_end",
         );
 
         assert_eq!(symbols["_start"], KERNEL_VIRT_BASE);
@@ -1356,21 +1423,27 @@ mod tests {
     fn validates_expected_el0_probe_symbol_layout() {
         let symbols = parse_nm_symbols(
             "ffffff8040080000 T __kernel_start\n\
+             ffffff8040080000 T __text_start\n\
              ffffff8040080000 T _start\n\
              ffffff8040080650 T kernel_main\n\
-             ffffff8040084000 D __boot_l1_page_table\n\
-             ffffff8040084800 T __exception_vectors\n\
-             ffffff8040085000 T __exception_vectors_end\n\
+             ffffff8040082000 T __exception_vectors\n\
+             ffffff8040082800 T __exception_vectors_end\n\
+             ffffff8040083000 T __user_probe_entry\n\
+             ffffff8040083000 T __user_probe_start\n\
+             ffffff8040084000 T __user_probe_end\n\
+             ffffff8040084000 T __text_end\n\
+             ffffff8040084000 R __rodata_start\n\
+             ffffff8040085000 R __rodata_end\n\
+             ffffff8040085000 D __data_start\n\
+             ffffff8040085000 D __boot_l1_page_table\n\
              ffffff8040085000 D __bss_start\n\
              ffffff8040085000 B __bss_end\n\
              ffffff8040085000 B __boot_stack_bottom\n\
              ffffff8040095000 B __boot_stack_top\n\
-             ffffff8040096000 T __user_probe_entry\n\
-             ffffff8040096000 T __user_probe_start\n\
-             ffffff8040097000 T __user_probe_end\n\
              ffffff8040098000 B __user_probe_stack_bottom\n\
              ffffff8040099000 B __user_probe_stack_top\n\
-             ffffff8040099000 B __kernel_end",
+             ffffff8040099000 B __kernel_end\n\
+             ffffff8040099000 B __data_end",
         );
 
         assert!(validate_symbol_layout(&symbols, true).is_empty());

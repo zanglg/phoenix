@@ -11,6 +11,7 @@ build = "build.rs"
 default = []
 boot-memory-probe = []
 el0-probe = []
+kernel-map-probe = []
 loaded-init-probe = []
 
 [lib]

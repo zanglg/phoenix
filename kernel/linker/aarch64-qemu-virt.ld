@@ -22,6 +22,7 @@ SECTIONS
 {
     . = KERNEL_VIRT_BASE;
     __kernel_start = .;
+    __text_start = .;
 
     .text : AT(ADDR(.text) - KERNEL_VIRT_OFFSET)
     {
@@ -37,14 +38,18 @@ SECTIONS
         . = ALIGN(4K);
         __user_probe_end = .;
     } :text
+    __text_end = .;
 
     . = ALIGN(4K);
+    __rodata_start = .;
     .rodata : AT(ADDR(.rodata) - KERNEL_VIRT_OFFSET)
     {
         *(.rodata .rodata.*)
     } :rodata
-
     . = ALIGN(4K);
+    __rodata_end = .;
+
+    __data_start = .;
     .data : AT(ADDR(.data) - KERNEL_VIRT_OFFSET)
     {
         KEEP(*(.data.boot))
@@ -80,6 +85,7 @@ SECTIONS
 
     . = ALIGN(4K);
     __kernel_end = .;
+    __data_end = .;
 
     /DISCARD/ :
     {
@@ -92,5 +98,17 @@ SECTIONS
 ASSERT(_start == KERNEL_VIRT_BASE, "bootstrap must be the first linked code")
 ASSERT((__boot_l1_page_table & 0xfff) == 0, "boot L1 table must be 4 KiB aligned")
 ASSERT((__boot_stack_top & 0xf) == 0, "boot stack must be 16-byte aligned")
-ASSERT(__kernel_end - __kernel_start < 0x3ff80000,
-       "bootstrap image must fit in the temporary 1 GiB mapping")
+ASSERT((__text_start & 0xfff) == 0 && (__text_end & 0xfff) == 0,
+       "final executable range must be page aligned")
+ASSERT((__rodata_start & 0xfff) == 0 && (__rodata_end & 0xfff) == 0,
+       "final read-only range must be page aligned")
+ASSERT((__data_start & 0xfff) == 0 && (__data_end & 0xfff) == 0,
+       "final writable range must be page aligned")
+ASSERT(__text_start < __text_end && __text_end <= __rodata_start,
+       "final executable range must precede rodata")
+ASSERT(__rodata_start < __rodata_end && __rodata_end <= __data_start,
+       "final rodata range must precede writable data")
+ASSERT(__data_start < __data_end,
+       "final writable range must be non-empty")
+ASSERT(__kernel_end <= KERNEL_VIRT_OFFSET + 0x40200000,
+       "kernel must fit in the first 2 MiB RAM window for final permission splitting")

@@ -28,6 +28,7 @@ not create speculative implementations for them.
 - `kernel/src/arch/aarch64/boot.S`: first AArch64 bootstrap implementation.
 - `docs/BOOT.md`: current boot contract and runtime-validation boundary.
 - `docs/AARCH64_PAGING.md`: temporary and final page-table model, permissions, and remaining work.
+- `docs/FINAL_KERNEL_ADDRESS_SPACE.md`: final QEMU `virt` TTBR1 layout, ownership, publication, and deferrals.
 - `docs/AARCH64_USER_PAGE_TABLES.md`: user-table topology, ownership, materialization, and activation boundary.
 - `docs/QEMU_VIRT_BOOTSTRAP_MEMORY.md`: checked target access to private RAM under the temporary TTBR1 alias.
 - `docs/BOOT_MEMORY_MAP.md`: DTB-to-allocator construction and mandatory boot reservations.
@@ -85,6 +86,7 @@ cargo xtask qemu-command
 cargo xtask run
 cargo xtask test-boot
 cargo xtask test-memory
+cargo xtask test-kernel-map
 cargo xtask test-el0
 cargo xtask test-init
 cargo xtask ci
@@ -92,8 +94,8 @@ cargo xtask ci
 
 Run `cargo xtask ci` before reporting completion. Never state that an unexecuted check passed.
 QEMU is optional in 0.0.0. Static artifact inspection is required. `run`, `test-boot`,
-`test-memory`, `test-el0`, and `test-init` are runtime-only commands; do not install or invoke QEMU
-in an environment where it is unavailable.
+`test-memory`, `test-kernel-map`, `test-el0`, and `test-init` are runtime-only commands; do not
+install or invoke QEMU in an environment where it is unavailable.
 
 Use these validation states consistently:
 

@@ -28,8 +28,8 @@ valuable evidence but cannot close an entry in this ledger.
 | RUN-MM-001 | Initialize the frame allocator from discovered memory | Runtime Pending | Allocations avoid the image, DTB, boot tables, stack, and firmware reservations |
 | RUN-MM-002 | Mutate private frames through the bootstrap high RAM alias | Runtime Pending | First/last valid pages clear and copy correctly; out-of-window frames are rejected without a target fault |
 | RUN-MM-003 | End-to-end boot memory integration probe | Runtime Pending | `cargo xtask test-memory` parses the real DTB, reserves image/DTB/firmware pages, round-trips a private frame, restores ownership, and reaches `PHOENIX_MEMORY_OK` |
-| RUN-MMU-001 | Install final permission-separated kernel tables | Runtime Pending | Text, rodata, data, stack, DTB, and MMIO mappings behave with documented permissions |
-| RUN-MMU-002 | Retire temporary aliases and maintain the TLB | Runtime Pending | Execution survives table switch, barriers, invalidation, and low-RAM alias removal |
+| RUN-MMU-001 | Install final permission-separated kernel tables | Runtime Pending | `cargo xtask test-kernel-map` survives allocation, materialization, `TTBR1_EL1` replacement, barriers, and `TLBI`, then reaches `PHOENIX_KERNEL_MAP_OK` through the final text/rodata/data/stack/PL011 mappings; later fault probes confirm permissions |
+| RUN-MMU-002 | Retire temporary TTBR0 aliases | Runtime Pending | No bootstrap handle or low pointer remains, TTBR0 is replaced, low RAM/MMIO addresses fault, and higher-half execution survives the maintenance sequence |
 | RUN-EXC-001 | Install and enter the EL1 exception vector table | Runtime Pending | Installed `VBAR_EL1` points at the linked 2 KiB table and a deliberate fault emits `PHOENIX_EXCEPTION` from the correct slot |
 | RUN-EXC-002 | Preserve and restore the exception frame | Runtime Pending | All `x0..x30`, SP, PC, status, syndrome, and fault-address values match controlled probes |
 | RUN-ELF-001 | Populate and map a validated AArch64 ELF image | Runtime Pending | File bytes, zero-fill, page permissions, entry address, and rollback behavior match the image contract |

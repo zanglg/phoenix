@@ -176,11 +176,13 @@ pub enum Access {
 }
 
 impl Access {
-    const fn writable(self) -> bool {
+    /// Return whether the descriptor grants write access.
+    pub const fn writable(self) -> bool {
         matches!(self, Self::KernelReadWrite | Self::UserReadWrite)
     }
 
-    const fn user_accessible(self) -> bool {
+    /// Return whether EL0 can access the descriptor.
+    pub const fn user_accessible(self) -> bool {
         matches!(self, Self::UserReadWrite | Self::UserReadOnly)
     }
 }

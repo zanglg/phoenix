@@ -1,8 +1,9 @@
 # AArch64 Paging
 
-This document describes both the temporary boot translation regime and the Host Tested model for
-the final EL1 stage-1 tables. It does not claim that final tables have been installed or exercised
-on an AArch64 CPU.
+This document describes both the temporary boot translation regime and the Host Tested stage-1
+mapping mechanisms. A focused image now constructs and publishes final `TTBR1_EL1` tables, but it
+has not been exercised on an AArch64 CPU. The platform layout and publication boundary are in
+`docs/FINAL_KERNEL_ADDRESS_SPACE.md`.
 
 ## Translation regime
 
@@ -31,8 +32,9 @@ identity alias, and the same RAM through the linked higher-half alias. These 1 G
 writable and too coarse for the final security boundary. Their only purpose is to enable the MMU,
 switch to the higher-half stack, and enter Rust.
 
-The low alias must remain until execution, the stack, the DTB pointer, and every live physical
-reference have been migrated to their final virtual form. Removing it requires a TLB maintenance
+The focused final-kernel-map image replaces the coarse TTBR1 hierarchy but intentionally keeps
+TTBR0 unchanged. The low alias must remain until the DTB pointer and every live physical reference
+have been migrated to their final virtual form. Removing it requires a distinct TLB maintenance
 sequence and runtime evidence; it is not implied by the current implementation.
 
 The opt-in EL0 conformance probe replaces TTBR0 with static three-level user tables after moving
@@ -56,8 +58,11 @@ live tables. This separates range and permission validation from system-register
 
 `kernel/src/arch/aarch64/user_page_table.rs` builds the lower-half user hierarchy on top of these
 descriptors. It reuses intermediate tables, atomically allocates their frames, and materializes all
-links and leaves through a private-table backend. See `docs/AARCH64_USER_PAGE_TABLES.md` for the
-ownership boundary; final TTBR1 work remains separate.
+links and leaves through a private-table backend. `kernel_page_table.rs` builds a separate
+mixed-level upper-half hierarchy, applies ordered page-granular permission overrides to a direct
+map, atomically owns its table frames, and exposes publication only through a permanent borrow.
+See `docs/AARCH64_USER_PAGE_TABLES.md` and `docs/FINAL_KERNEL_ADDRESS_SPACE.md` for their distinct
+ownership boundaries.
 
 ## Permission policy
 
@@ -81,15 +86,19 @@ non-executable convenience constructor.
 - planned virtual ranges do not overlap and remain sorted;
 - descriptor physical addresses fit their configured field;
 - an invalid descriptor is zero;
-- the generic offline mapping plan does not own memory; only the prepared user address-space type
-  combines materialized table frames with populated leaf-frame ownership.
+- the generic offline mapping plan does not own memory;
+- materialized kernel tables own every table frame, and target publication requires their
+  permanent retention;
+- user mappings additionally retain populated leaf-frame ownership because those pages are not a
+  permanent physical direct map.
 
 ## Validation
 
 Host tests cover canonical boundaries, table indices, mapping sizes, descriptor types and output
 addresses, privilege and execute bits, W^X rejection, alignment, physical width, deterministic
-ordering, overlap, capacity, translation, and unmapping. The module is also Cross Compiled with
-the configured AArch64 bare-metal target.
+ordering, overlap, capacity, translation, unmapping, mixed-level direct-map decomposition,
+permission overrides, table ownership, and retry-safe materialization. The focused final-map image
+is also Cross Compiled and ELF Inspected with the configured AArch64 bare-metal target.
 
 Runtime installation remains tracked as `RUN-MMU-001` and `RUN-MMU-002` in
 `docs/RUNTIME_VALIDATION.md`.
@@ -99,12 +108,11 @@ Runtime installation remains tracked as `RUN-MMU-001` and `RUN-MMU-002` in
 - derive supported physical-address size from `ID_AA64MMFR0_EL1.PARange`;
 - replace the bootstrap private-table backend and retained ASID-zero activation with process-owned
   address-space lifecycle support;
-- map kernel text, rodata, data, stack, heap, DTB, and MMIO with precise permissions;
-- define table-update locking, break-before-make, barriers, and TLB invalidation;
+- add a guarded heap and guarded kernel/exception stacks to the final address space;
+- define live table-update locking and break-before-make beyond the current one-time publication;
 - define ASID allocation and TTBR0 lifetime for processes;
-- install final `TTBR1_EL1`, then retire the temporary low RAM alias safely;
-- add guard pages around kernel stacks;
-- decide whether direct-map and recursive/self-map regions are needed.
+- runtime-validate final `TTBR1_EL1`, then retire the temporary low RAM alias safely;
+- decide whether a recursive/self-map region is needed alongside the implemented direct map.
 
 ## Skipped work
 
