@@ -1,8 +1,9 @@
 # Process Image Planning and Frame Ownership
 
 This document describes the architecture-neutral bridge from a validated executable to owned
-physical pages. The implementation is Host Tested and Cross Compiled. It does not yet write to
-physical memory, construct hardware page tables, or enter the resulting image at EL0.
+physical pages. The implementation is Host Tested and Cross Compiled. Physical access is
+expressed through a backend contract, but no AArch64 direct-map backend, hardware page tables, or
+production EL0 entry exists yet.
 
 ## Current implementation
 
@@ -41,6 +42,18 @@ the ownership object and commits all releases. On failure it returns both the un
 object and the error, while leaving the supplied allocator unchanged. This prevents a wrong or
 stale allocator from causing partial reclamation or an untracked leak.
 
+## Population type state
+
+`ProcessImageMemory` is the narrow backend needed to clear a private frame and copy a checked byte
+slice into it. A future kernel implementation may satisfy it through a physical direct map or a
+temporary mapping window; host tests use ordinary owned byte arrays.
+
+`AllocatedProcessImage::populate` clears every complete page before copying its initialized ELF
+prefix. It returns `PopulatedProcessImage` only after every operation succeeds. A backend failure
+reports the page index and whether clearing or initialization failed, and returns the original
+frame ownership object. A retry starts by clearing all pages again, so bytes from a partial attempt
+cannot survive unnoticed.
+
 ## Invariants
 
 - the complete ELF was validated before process-image planning begins;
@@ -51,6 +64,7 @@ stale allocator from causing partial reclamation or an untracked leak.
 - no initialized-byte slice exceeds a page;
 - fixed-capacity exhaustion occurs before any external state changes;
 - assigning or releasing frames is all-or-nothing with respect to the supplied allocator;
+- only a successful complete clear-and-copy pass creates the populated type state;
 - only the allocated ownership object may authorize population, mapping, or release of its frames;
 - the source ELF bytes must outlive planning and population.
 
@@ -58,17 +72,17 @@ stale allocator from causing partial reclamation or an untracked leak.
 
 Host tests cover multi-page text and data, partial final pages, zero-only stack pages, virtual
 ordering independent of program-header order, guard collision, mapping and page metadata limits,
-deterministic frame pairing, exact release, out-of-memory rollback, and a failed release against a
-wrong allocator snapshot. Target checks compile the same ownership model for bare-metal AArch64.
+deterministic frame pairing, exact release, out-of-memory rollback, a failed release against a
+wrong allocator snapshot, complete zeroing, partial final pages, injected write failure, and clean
+retry. Target checks compile the same ownership model for bare-metal AArch64.
 
 ## TODO
 
-- clear and populate frames through a documented temporary kernel mapping or physical direct map;
+- implement the `ProcessImageMemory` backend through a documented physical direct map;
 - make instruction-cache maintenance explicit before newly copied executable bytes can run;
 - translate generic user permissions into allocator-owned AArch64 L3 descriptors;
 - allocate and own all required intermediate translation-table frames transactionally;
 - define when a complete address space becomes visible through an ASID and `TTBR0_EL1`;
-- add a populated-state type so an uninitialized image cannot be activated;
 - construct `argc`, `argv`, `envp`, and the minimal auxiliary vector on the guarded stack;
 - load a reproducibly built embedded ELF fixture through this path and validate it in QEMU;
 - integrate resource accounting and a process owner before supporting teardown outside tests.

@@ -131,8 +131,9 @@ Load ELF programs from initramfs, define the initial user stack and auxiliary da
 VFS and file-descriptor model, and start an `init` program with console input and output.
 
 The strict ELF64/AArch64 validation layer and the combined program/guarded-stack page plan are Host
-Tested. Frame ownership is assigned and released transactionally. Physical page population,
-hardware table ownership, initial stack contents, initramfs ownership, and executable entry remain.
+Tested. Frame ownership is assigned and released transactionally, and complete page zero/copy is
+enforced through an explicit populated type state. A physical-memory backend, hardware table
+ownership, initial stack contents, initramfs ownership, and executable entry remain.
 
 Observable result: Phoenix boots from a clean checkout, starts `init`, runs at least one child
 program, performs console and in-memory file I/O, and shuts down or reports test completion.

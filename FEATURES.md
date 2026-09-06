@@ -90,7 +90,7 @@ _No unclassified entries._
 | --- | --- | --- | --- | --- |
 | PROC-001 | Process and thread lifecycle | Planned | 0.1.0 | Includes identifiers and teardown |
 | ABI-001 | Native Phoenix syscall ABI | In Progress | 0.1.0 | Revision-0 values and probe-only unknown/exit dispatch are built; production dispatch is Runtime Pending |
-| ABI-002 | ELF loader, user stack, TLS, and auxiliary vector | In Progress | 0.1.0 | Strict ELF validation, combined page plan, guarded stack, and transactional frame ownership are Host Tested; population, TLS, and auxv remain |
+| ABI-002 | ELF loader, user stack, TLS, and auxiliary vector | In Progress | 0.1.0 | Validation, combined page plan, transactional frame ownership, and abstract clear/copy type state are Host Tested; target memory backend, TLS, and auxv remain |
 | PROC-002 | Signals and exception delivery | Deferred | Unscheduled | Requires process lifecycle |
 | IPC-001 | Pipes, message passing, and shared memory IPC | Deferred | Unscheduled | Split when designs become concrete |
 | IPC-002 | Wait, poll, and event readiness | Captured | Unscheduled | Coordinate with file descriptors |

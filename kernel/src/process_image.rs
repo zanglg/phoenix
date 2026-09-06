@@ -31,6 +31,69 @@ pub enum ProcessImageAllocationError {
     Allocator(AllocationError),
 }
 
+/// Destination-memory operation required while populating an image page.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PopulationStage {
+    /// Clear the entire physical page before exposing any source bytes.
+    Clear,
+    /// Copy the initialized ELF prefix into an already-cleared page.
+    Initialize,
+}
+
+/// Abstract access to physical frames while they are private to the loader.
+///
+/// Implementations may use a permanent physical direct map, a temporary
+/// mapping window, or host-owned test storage. The trait itself neither
+/// creates mappings nor publishes frames to EL0.
+pub trait ProcessImageMemory {
+    /// Backend-specific failure.
+    type Error;
+
+    /// Set all `PAGE_SIZE` bytes in `frame` to zero.
+    fn clear_frame(&mut self, frame: PageFrame) -> Result<(), Self::Error>;
+
+    /// Copy `bytes` into a private frame at `offset`.
+    fn write_frame(
+        &mut self,
+        frame: PageFrame,
+        offset: usize,
+        bytes: &[u8],
+    ) -> Result<(), Self::Error>;
+}
+
+/// Population failure retaining ownership of every process-image frame.
+#[derive(Debug, Eq, PartialEq)]
+pub struct ProcessImagePopulationError<'a, E, const MAPPINGS: usize, const PAGES: usize> {
+    image: AllocatedProcessImage<'a, MAPPINGS, PAGES>,
+    page_index: usize,
+    stage: PopulationStage,
+    error: E,
+}
+
+impl<'a, E, const MAPPINGS: usize, const PAGES: usize>
+    ProcessImagePopulationError<'a, E, MAPPINGS, PAGES>
+{
+    /// Return the zero-based virtual-order page index that failed.
+    pub const fn page_index(&self) -> usize {
+        self.page_index
+    }
+
+    /// Return whether clearing or initialized-byte copying failed.
+    pub const fn stage(&self) -> PopulationStage {
+        self.stage
+    }
+
+    /// Return the backend-specific error by reference.
+    pub const fn error(&self) -> &E {
+        &self.error
+    }
+
+    /// Recover frame ownership and the backend error for retry or rollback.
+    pub fn into_parts(self) -> (AllocatedProcessImage<'a, MAPPINGS, PAGES>, E) {
+        (self.image, self.error)
+    }
+}
+
 /// One page that must be cleared and optionally initialized before mapping.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PlannedUserPage<'a> {
@@ -282,6 +345,43 @@ impl<'a, const MAPPINGS: usize, const PAGES: usize> AllocatedProcessImage<'a, MA
             })
     }
 
+    /// Clear and initialize every owned frame without publishing any mapping.
+    ///
+    /// Pages are always cleared before source bytes are written. A failure
+    /// returns this ownership object inside the error. Retrying is safe because
+    /// a retry starts again by clearing every page.
+    pub fn populate<M: ProcessImageMemory>(
+        self,
+        memory: &mut M,
+    ) -> Result<
+        PopulatedProcessImage<'a, MAPPINGS, PAGES>,
+        ProcessImagePopulationError<'a, M::Error, MAPPINGS, PAGES>,
+    > {
+        for index in 0..self.plan.page_count {
+            let planned = self.plan.pages[index].expect("active process-image page slot");
+            let frame = self.frames[index].expect("allocated process-image frame slot");
+            if let Err(error) = memory.clear_frame(frame) {
+                return Err(ProcessImagePopulationError {
+                    image: self,
+                    page_index: index,
+                    stage: PopulationStage::Clear,
+                    error,
+                });
+            }
+            if !planned.initial_bytes().is_empty()
+                && let Err(error) = memory.write_frame(frame, 0, planned.initial_bytes())
+            {
+                return Err(ProcessImagePopulationError {
+                    image: self,
+                    page_index: index,
+                    stage: PopulationStage::Initialize,
+                    error,
+                });
+            }
+        }
+        Ok(PopulatedProcessImage { image: self })
+    }
+
     /// Return every owned frame to the allocator as one transaction.
     ///
     /// On error, the allocator is unchanged and ownership is returned with the
@@ -301,6 +401,38 @@ impl<'a, const MAPPINGS: usize, const PAGES: usize> AllocatedProcessImage<'a, MA
     }
 }
 
+/// Process-image frames whose complete clear-and-copy plan has succeeded.
+#[derive(Debug, Eq, PartialEq)]
+pub struct PopulatedProcessImage<'a, const MAPPINGS: usize, const PAGES: usize> {
+    image: AllocatedProcessImage<'a, MAPPINGS, PAGES>,
+}
+
+impl<'a, const MAPPINGS: usize, const PAGES: usize> PopulatedProcessImage<'a, MAPPINGS, PAGES> {
+    /// Return the immutable executable and virtual mapping plan.
+    pub const fn plan(&self) -> &ProcessImagePlan<'a, MAPPINGS, PAGES> {
+        self.image.plan()
+    }
+
+    /// Iterate over populated frames in user virtual-address order.
+    pub fn pages(&self) -> impl ExactSizeIterator<Item = AllocatedUserPage<'a>> + '_ {
+        self.image.pages()
+    }
+
+    /// Return all frames to their allocator when the image was never published.
+    ///
+    /// A caller that has installed mappings to these frames must first retire
+    /// those mappings and complete the architecture's TLB invalidation rules.
+    pub fn release<const MEMORY_RANGES: usize>(
+        self,
+        allocator: &mut FrameAllocator<MEMORY_RANGES>,
+    ) -> Result<(), (Self, AllocationError)> {
+        match self.image.release(allocator) {
+            Ok(()) => Ok(()),
+            Err((image, error)) => Err((Self { image }, error)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     extern crate std;
@@ -308,7 +440,10 @@ mod tests {
     use std::vec;
     use std::vec::Vec;
 
-    use super::{ProcessImageAllocationError, ProcessImageError, ProcessImagePlan};
+    use super::{
+        PopulationStage, ProcessImageAllocationError, ProcessImageError, ProcessImageMemory,
+        ProcessImagePlan,
+    };
     use crate::elf::ElfImage;
     use crate::memory::{AddressRange, MemoryMap, PAGE_SIZE, PhysAddr};
     use crate::user::{
@@ -449,8 +584,135 @@ mod tests {
             .expect("ownership remains available after failed release");
     }
 
+    #[test]
+    fn population_clears_every_page_before_copying_initial_bytes() {
+        let bytes = fixture(0x40_0000, 0x50_0000, PAGE_SIZE + 3, 1);
+        let image = ElfImage::parse(&bytes).unwrap();
+        let stack = UserStackLayout::new(UserAddr::new(0x80_0000).unwrap(), 1, 1).unwrap();
+        let plan = ProcessImagePlan::<3, 4>::new(image, stack).unwrap();
+        let mut map = MemoryMap::<1>::new();
+        map.add_usable(physical_bytes(0x30_0000, 0x30_4000))
+            .unwrap();
+        let mut allocator = map.into_allocator();
+        let allocated = plan.allocate(&mut allocator).unwrap();
+        let mut memory = TestMemory::new(0x30_0000, 4);
+
+        let populated = allocated
+            .populate(&mut memory)
+            .expect("population succeeds");
+        assert!(memory.pages[0].iter().all(|byte| *byte == 0xa5));
+        assert_eq!(&memory.pages[1][..3], &[0xa5; 3]);
+        assert!(memory.pages[1][3..].iter().all(|byte| *byte == 0));
+        assert_eq!(memory.pages[2][0], 0x5a);
+        assert!(memory.pages[2][1..].iter().all(|byte| *byte == 0));
+        assert!(memory.pages[3].iter().all(|byte| *byte == 0));
+        populated.release(&mut allocator).unwrap();
+    }
+
+    #[test]
+    fn population_failure_reports_stage_and_returns_retryable_ownership() {
+        let bytes = fixture(0x40_0000, 0x50_0000, 1, 1);
+        let image = ElfImage::parse(&bytes).unwrap();
+        let stack = UserStackLayout::new(UserAddr::new(0x80_0000).unwrap(), 1, 1).unwrap();
+        let plan = ProcessImagePlan::<3, 3>::new(image, stack).unwrap();
+        let mut map = MemoryMap::<1>::new();
+        map.add_usable(physical_bytes(0x40_0000, 0x40_3000))
+            .unwrap();
+        let mut allocator = map.into_allocator();
+        let allocated = plan.allocate(&mut allocator).unwrap();
+        let mut failing = TestMemory::new(0x40_0000, 3);
+        failing.fail_write_for = Some(1);
+
+        let error = allocated
+            .populate(&mut failing)
+            .expect_err("second page write fails");
+        assert_eq!(error.page_index(), 1);
+        assert_eq!(error.stage(), PopulationStage::Initialize);
+        assert_eq!(error.error(), &TestMemoryError::Injected);
+        let (allocated, backend_error) = error.into_parts();
+        assert_eq!(backend_error, TestMemoryError::Injected);
+
+        let mut retry = TestMemory::new(0x40_0000, 3);
+        let populated = allocated
+            .populate(&mut retry)
+            .expect("retry clears all pages");
+        assert_eq!(retry.clear_count, 3);
+        populated.release(&mut allocator).unwrap();
+    }
+
     fn physical_bytes(start: usize, end: usize) -> AddressRange<PhysAddr> {
         AddressRange::new(PhysAddr::new(start), PhysAddr::new(end)).unwrap()
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum TestMemoryError {
+        UnknownFrame,
+        InvalidWrite,
+        Injected,
+    }
+
+    struct TestMemory {
+        physical_base: usize,
+        pages: Vec<Vec<u8>>,
+        clear_count: usize,
+        fail_write_for: Option<usize>,
+    }
+
+    impl TestMemory {
+        fn new(physical_base: usize, page_count: usize) -> Self {
+            Self {
+                physical_base,
+                pages: vec![vec![0xcc; PAGE_SIZE]; page_count],
+                clear_count: 0,
+                fail_write_for: None,
+            }
+        }
+
+        fn index(&self, frame: crate::memory::PageFrame) -> Result<usize, TestMemoryError> {
+            let offset = frame
+                .start_address()
+                .as_usize()
+                .checked_sub(self.physical_base)
+                .ok_or(TestMemoryError::UnknownFrame)?;
+            if !offset.is_multiple_of(PAGE_SIZE) {
+                return Err(TestMemoryError::UnknownFrame);
+            }
+            let index = offset / PAGE_SIZE;
+            if index < self.pages.len() {
+                Ok(index)
+            } else {
+                Err(TestMemoryError::UnknownFrame)
+            }
+        }
+    }
+
+    impl ProcessImageMemory for TestMemory {
+        type Error = TestMemoryError;
+
+        fn clear_frame(&mut self, frame: crate::memory::PageFrame) -> Result<(), Self::Error> {
+            let index = self.index(frame)?;
+            self.pages[index].fill(0);
+            self.clear_count += 1;
+            Ok(())
+        }
+
+        fn write_frame(
+            &mut self,
+            frame: crate::memory::PageFrame,
+            offset: usize,
+            bytes: &[u8],
+        ) -> Result<(), Self::Error> {
+            let index = self.index(frame)?;
+            if self.fail_write_for == Some(index) {
+                return Err(TestMemoryError::Injected);
+            }
+            let end = offset
+                .checked_add(bytes.len())
+                .filter(|end| *end <= PAGE_SIZE)
+                .ok_or(TestMemoryError::InvalidWrite)?;
+            self.pages[index][offset..end].copy_from_slice(bytes);
+            Ok(())
+        }
     }
 
     fn fixture(

@@ -39,9 +39,10 @@ from the earliest loader.
 4. create one clear-and-copy operation per mapped page;
 5. assign all physical frames atomically against an allocator snapshot.
 
-The future materializer must continue by clearing every frame, copying exactly the planned source
-bytes, retaining zeroes through the rounded page end, installing final W^X permissions, and rolling
-back every frame and table on any failure. See `docs/PROCESS_IMAGE.md` for the ownership boundary.
+The generic population type state now clears every frame and copies exactly the planned source
+bytes through an abstract private-frame backend. The target-specific materializer must provide that
+backend, maintain instruction-cache coherency, install final W^X permissions, and roll back every
+frame and table on any failure. See `docs/PROCESS_IMAGE.md` for the ownership boundary.
 
 Executable bytes must never be writable at EL0. The source image may be released only after every
 borrow and copy completes.
