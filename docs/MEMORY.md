@@ -1,7 +1,8 @@
 # Memory Foundations
 
-This document describes the Host Tested physical-memory foundations. Final AArch64 page tables,
-heap allocation, and runtime integration are not part of the current implementation.
+This document describes the Host Tested physical-memory foundations. Final AArch64 page tables
+and the fallible heap core are documented separately; general runtime memory integration remains
+incomplete.
 
 ## Address model
 
@@ -33,8 +34,8 @@ supplied full linker-image range.
 
 Freezing a memory map creates a deterministic first-fit allocator. It supports one-frame and
 contiguous allocations with power-of-two frame alignment. It records the complete managed set so
-that release can reject foreign frames and double frees. Released neighboring frames are
-coalesced.
+that single-frame and transactional contiguous-range release can reject foreign frames and double
+frees. Released neighboring frames are coalesced.
 
 The fixed range capacity is an explicit early-boot resource. Metadata exhaustion is distinct from
 physical memory exhaustion. This makes failure testable without requiring a heap before the frame
@@ -66,5 +67,7 @@ AArch64 by `cargo xtask ci`.
 - define synchronization before sharing an allocator between CPUs.
 
 Buddy allocation, NUMA, memory hotplug, DMA constraints, IOMMU integration, huge-page promotion,
-heap allocation, and OOM policy are deliberately skipped. None is required to validate the early
-single-core physical-memory ownership model.
+dynamic kernel mappings, general OOM policy, and reclaim are deliberately skipped. The first
+fallible heap and its physical-backing relationship are specified in `docs/KERNEL_HEAP.md`; it is
+not yet boot-integrated. None of those later policies is required to validate the early single-core
+physical-memory ownership model.

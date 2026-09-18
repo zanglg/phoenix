@@ -21,6 +21,9 @@ numbers and remains explicitly unstable before 1.0.0. During construction, chang
 - Checked architecture-neutral physical/virtual addresses, pages, frames, and half-open ranges.
 - Strict allocation-free DTB parsing with boot CPU, bootargs, memory-region, and reservation extraction.
 - Fixed-capacity physical memory normalization, conservative reservation, and first-fit frame allocation.
+- Fixed-metadata fallible kernel heap core with transactionally acquired and cleared contiguous
+  backing frames, exact alignment, explicit physical/byte/metadata exhaustion, implicit free-space
+  coalescing, lifecycle-checked tokens, and transactional backing release.
 - Host-tested AArch64 translation indices, stage-1 descriptors, mapping attributes, and fixed-capacity offline mapping plans.
 - Pinned QEMU `virt` command generation and a bounded boot integration harness with sentinel, timeout, output-limit, and log handling.
 - Host-tested AArch64 vector-slot model, stable exception-frame ABI, ESR decoding, SVC immediate extraction, and data-abort classification.

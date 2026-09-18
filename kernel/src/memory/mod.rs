@@ -3,9 +3,14 @@
 use core::cmp::{max, min};
 
 mod boot;
+mod heap;
 mod physical;
 
 pub use boot::{BootMemoryError, memory_map_from_boot_info};
+pub use heap::{
+    HeapAllocation, HeapAllocationError, HeapBackingMemory, HeapDeallocationError,
+    HeapInitializationError, HeapReleaseError, KernelHeap,
+};
 pub use physical::{AllocationError, FrameAllocator, FrameRange, MemoryMap, MemoryMapError};
 
 /// Phoenix's base page size in bytes.

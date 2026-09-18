@@ -120,6 +120,21 @@ impl<const CAPACITY: usize> RegionSet<CAPACITY> {
         self.as_slice().iter().any(|range| range.contains(frame))
     }
 
+    fn contains_range(&self, range: FrameRange) -> bool {
+        !range.is_empty()
+            && self
+                .as_slice()
+                .iter()
+                .any(|managed| managed.start <= range.start && range.end <= managed.end)
+    }
+
+    fn overlaps(&self, range: FrameRange) -> bool {
+        self.as_slice()
+            .iter()
+            .copied()
+            .any(|current| current.overlaps(range))
+    }
+
     fn insert(&mut self, range: FrameRange) -> Result<(), MemoryMapError> {
         if range.is_empty() {
             return Ok(());
@@ -327,6 +342,22 @@ impl<const CAPACITY: usize> FrameAllocator<CAPACITY> {
             .map_err(|_| AllocationError::MetadataExhausted)
     }
 
+    /// Release one nonempty contiguous range as a single transactional update.
+    pub fn deallocate_contiguous(&mut self, frames: FrameRange) -> Result<(), AllocationError> {
+        if frames.is_empty() {
+            return Err(AllocationError::InvalidRequest);
+        }
+        if !self.managed.contains_range(frames) {
+            return Err(AllocationError::NotManaged);
+        }
+        if self.free.overlaps(frames) {
+            return Err(AllocationError::DoubleFree);
+        }
+        self.free
+            .insert(frames)
+            .map_err(|_| AllocationError::MetadataExhausted)
+    }
+
     /// Return currently free normalized frame ranges.
     pub fn free_ranges(&self) -> &[FrameRange] {
         self.free.as_slice()
@@ -508,5 +539,42 @@ mod tests {
 
         assert_eq!(allocator.free_ranges(), &[FrameRange { start: 0, end: 3 }]);
         assert_eq!(allocator.total_free_frames(), 3);
+    }
+
+    #[test]
+    fn contiguous_release_is_transactional_and_coalesces() {
+        let mut map = MemoryMap::<3>::new();
+        map.add_usable(bytes(0, 8 * PAGE_SIZE))
+            .expect("usable region");
+        let mut allocator = map.into_allocator();
+        let allocated = allocator
+            .allocate_contiguous(3, 1)
+            .expect("allocation result")
+            .expect("frames");
+
+        allocator
+            .deallocate_contiguous(allocated)
+            .expect("release range");
+        assert_eq!(allocator.free_ranges(), &[FrameRange { start: 0, end: 8 }]);
+        assert_eq!(
+            allocator.deallocate_contiguous(allocated),
+            Err(AllocationError::DoubleFree)
+        );
+    }
+
+    #[test]
+    fn contiguous_release_rejects_partly_foreign_ranges_without_mutation() {
+        let mut map = MemoryMap::<2>::new();
+        map.add_usable(bytes(2 * PAGE_SIZE, 5 * PAGE_SIZE))
+            .expect("usable region");
+        let mut allocator = map.into_allocator();
+        let before = allocator;
+        let partly_foreign = FrameRange::new(frame(1), 2).expect("representable range");
+
+        assert_eq!(
+            allocator.deallocate_contiguous(partly_foreign),
+            Err(AllocationError::NotManaged)
+        );
+        assert_eq!(allocator, before);
     }
 }

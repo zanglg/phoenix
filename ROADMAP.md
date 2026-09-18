@@ -102,7 +102,10 @@ descriptor and mixed-level kernel-table model is Host Tested. A focused Cross Co
 uses the real DTB allocator to create a direct map, separates text/rodata/data permissions, maps
 PL011 at page granularity, omits a linker-reserved guard below the boot-construction stack,
 permanently retains the tables, and publishes TTBR1 with barriers and TLB invalidation. The focused
-QEMU probe has passed. The heap and owned per-thread/exception stacks still remain;
+QEMU probe has passed. A fixed-metadata fallible heap core now transactionally owns, clears, and
+returns contiguous physical backing; alignment, overflow, byte and metadata exhaustion, release,
+coalescing, stale tokens, and injected backing failures are Host Tested. Final-direct-map boot
+integration and owned per-thread/exception stacks still remain;
 the loaded-init path retires temporary TTBR0 aliases when it installs its user hierarchy.
 
 Observable result: allocator and mapping self-tests exercise success and failure paths without

@@ -64,13 +64,13 @@ _No unclassified entries._
 | --- | --- | --- | --- | --- |
 | MM-001 | Physical page allocator | In Progress | 0.1.0 | QEMU boot-memory probe validated DTB derivation and one allocate/readback/scrub/release cycle; boundary-negative probes remain |
 | MM-002 | Virtual memory and kernel address space | In Progress | 0.1.0 | Final TTBR1 publication passed on QEMU (five tables, 767 leaves); guard/permission-negative probes, low-alias retirement, and dynamic mappings remain |
-| MM-003 | Kernel heap and fallible allocation policy | Planned | 0.1.0 | Define allocation-failure behavior |
+| MM-003 | Kernel heap and fallible allocation policy | In Progress | 0.1.0 | Fixed-metadata allocator core, transactional backing ownership, clearing, alignment, OOM, coalescing, and invalid-release behavior are Host Tested; final-map boot integration remains |
 | MM-004 | Kernel stacks and guard pages | In Progress | 0.1.0 | Final TTBR1 omits one linker-reserved page below the temporary boot stack; owned thread and exception stacks remain |
 | MM-005 | User address spaces and safe user copies | In Progress | 0.1.0 | Plans/materialization/ownership and bidirectional copies are Host Tested; loaded init uses an ownership-checked final-direct-map adapter; general fault recovery, lifecycle, and runtime evidence remain |
 | MM-006 | Shared memory and copy-on-write | Deferred | Unscheduled | Requires process VM |
 | MM-007 | Huge pages and block mappings | Captured | Unscheduled | Revisit after basic paging |
 | MM-008 | DMA, cache coherence, and IOMMU policy | Deferred | Unscheduled | Required for robust device support |
-| MM-009 | OOM and resource exhaustion behavior | Deferred | Unscheduled | Must not be postponed to final hardening |
+| MM-009 | OOM and resource exhaustion behavior | In Progress | Unscheduled | Heap byte, metadata, physical-frame, and initialization failures are explicit and injected in host tests; subsystem policy and target evidence remain |
 | MM-010 | Checked physical/virtual addresses, pages, frames, and ranges | Implemented | 0.1.0 | Host Tested and Cross Compiled |
 
 ## Concurrency, time, and SMP

@@ -116,6 +116,8 @@ the ordered enter/success markers after TTBR1 publication.
 
 - remove the temporary TTBR0 aliases when no low virtual pointer or bootstrap handle survives;
 - replace the bootstrap-only physical-memory handle with a final direct-map API and lifetime;
+- connect the Host Tested fallible heap only through that final direct-map API and retained frame
+  allocator ownership;
 - derive the physical-address size from `ID_AA64MMFR0_EL1.PARange` before accepting RAM above
   the current 32-bit IPS envelope;
 - enable caches only after cache-maintenance and memory-ordering requirements are designed and
@@ -126,8 +128,9 @@ the ordered enter/success markers after TTBR1 publication.
 
 ## Skipped work
 
-This implementation does not provide dynamic kernel mappings, a heap, per-CPU tables, recursive
-mapping, KASLR, copy-on-write, demand paging, swapping, transparent huge pages, 16/64 KiB granules,
+This implementation does not provide dynamic kernel mappings, boot-integrated heap backing,
+per-CPU tables, recursive mapping, KASLR, copy-on-write, demand paging, swapping, transparent huge
+pages, 16/64 KiB granules,
 52-bit addresses, MTE, stage-2 translation, DMA/IOMMU mappings, or SMP TLB shootdown. It maps all
 DTB-declared RAM into an EL1-only direct map; it does not use mapping permissions as an ownership
 substitute for firmware-reserved or allocator-owned frames.

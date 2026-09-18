@@ -37,6 +37,8 @@ narrow support claim:
 - the checked QEMU `virt` bootstrap physical-memory backend has performed one DTB-derived
   allocation/readback/scrub/release cycle on the pinned board;
 - DTB memory plus firmware/kernel/DTB reservations form a transactional boot allocator map;
+- a fixed-metadata fallible kernel heap core transactionally acquires and clears unique physical
+  backing, distinguishes OOM and metadata exhaustion, and detects invalid or duplicate releases;
 - an opt-in boot-memory probe cross-links the real DTB-to-allocation-to-readback path;
 - an opt-in final-kernel-map image builds allocator-owned TTBR1 tables with RX text, RO/NX
   rodata, RW/NX RAM, an unmapped boot-stack guard, and a page-granular PL011 mapping, then
@@ -114,7 +116,9 @@ and its explicit limits are recorded in [`docs/KERNEL_STACKS.md`](docs/KERNEL_ST
 Process identity, lifecycle, ownership, and teardown deferrals are documented in
 [`docs/PROCESS_LIFECYCLE.md`](docs/PROCESS_LIFECYCLE.md); the current nonzero/no-reuse ASID policy
 is in [`docs/AARCH64_ASIDS.md`](docs/AARCH64_ASIDS.md), and the current terminal EL0 fault boundary
-is in [`docs/USER_FAULTS.md`](docs/USER_FAULTS.md).
+is in [`docs/USER_FAULTS.md`](docs/USER_FAULTS.md). The heap's ownership, failure,
+synchronization, and Runtime Pending boot-integration boundary is defined in
+[`docs/KERNEL_HEAP.md`](docs/KERNEL_HEAP.md).
 
 ## LSP target
 
