@@ -2,7 +2,9 @@
 
 This document describes the target-side private-frame access backend available while the temporary
 QEMU `virt` TTBR1 mapping remains active. The implementation is Cross Compiled and Host Tested for
-address validation, but every memory access is Runtime Pending.
+address validation. The recorded boot-memory, final-map, and loaded-init probes Runtime Verified
+the positive DTB, frame, loader, and descriptor-write paths; boundary-negative target probes remain
+pending.
 
 ## Current implementation
 
@@ -55,16 +57,17 @@ checked.
 Host tests cover the first and last valid frames, physical byte-range boundaries, the last valid
 byte, a cross-page request, arithmetic overflow, and high-link-to-physical kernel conversion.
 Bare-metal AArch64 checks compile DTB borrowing, linker symbol access, the actual pointer operations,
-and their safety comments. QEMU must still prove that the high alias is readable and writable
-normal memory, that the generated DTB can be parsed through it, and that populated instructions
-and descriptors are observed by the CPU.
+and their safety comments. The recorded QEMU probes parsed the generated DTB through the high
+alias, round-tripped one allocator-owned frame, populated the init image and translation tables,
+and executed through the published descriptors. First/last-page and invalid-window fault behavior
+has not yet been exercised on target.
 
 ## TODO
 
 - construct the backend only after a runtime assertion of the expected bootstrap translation
   regime;
 - add explicit cache maintenance before enabling caches or executing copied instructions;
-- replace it with a named final-direct-map handle after the focused TTBR1 probe is runtime verified;
+- replace remaining bootstrap-only uses with a named process/VM-owned final-direct-map handle;
 - encode the final TTBR1 switch exclusion in a stronger type-state API rather than relying only on
   the current lexical drop and single-call boot flow;
 - record target faults and address translations in the runtime validation ledger.

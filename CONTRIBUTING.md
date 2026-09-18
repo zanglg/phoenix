@@ -18,5 +18,6 @@ This is appropriate for Phoenix's early, mostly single-maintainer phase. If subs
 maintainers or patch series later make individual commit authorship important, record and adopt
 a rebase or maintainer-merge policy instead of silently changing history rules.
 
-Do not tag construction snapshots. The first tag will be the annotated `v0.1.0` tag after the
-release boundary in `ROADMAP.md` is complete.
+Do not tag construction snapshots. After the technical release boundary is complete, reviewed
+candidates use annotated `v0.1.0-pre.N` tags. The annotated `v0.1.0` tag is created only after
+explicit owner acceptance of a candidate and any requested corrections.

@@ -3,8 +3,9 @@
 This document describes the accepted executable format and current parser. Phoenix can validate a
 strict ELF image, transactionally plan and assign its pages, and drive abstract population plus
 AArch64 table materialization. A focused Cross Compiled kernel variant connects the target
-physical-memory backend and ownership-gated activation to the separately linked init image. Target
-execution remains Runtime Pending.
+physical-memory backend and ownership-gated activation to the separately linked init image. That
+positive archive-to-EL0 path is Runtime Verified on the recorded QEMU 9.1.3 environment; malformed
+images and rollback paths remain host-only evidence.
 
 ## Current implementation
 
@@ -71,12 +72,17 @@ inspected for one bounded RX load page, fixed entry, and linker symbols, stored 
 path `init` in a validated initramfs, and selected from that archive by the loaded-init kernel during
 every emulator-free CI run.
 
+The recorded `cargo xtask test-init` run selected that inspected ELF, populated and mapped it,
+entered its fixed entry point, and reached `PHOENIX_INIT_OK` after the program's stack and I/O
+self-checks.
+
 ## TODO
 
 - decide whether program headers must themselves be available through `AT_PHDR`;
 - add property/fuzz tests with a bounded malformed-input corpus;
 - validate instruction-cache maintenance before executing freshly copied code;
-- execute the loaded image under QEMU and retain its ELF metadata as test evidence.
+- add target-side negative probes for rejected images and population rollback before broadening the
+  accepted ELF subset.
 
 ## Skipped work
 

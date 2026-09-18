@@ -2,7 +2,8 @@
 
 This document describes Phoenix's first initramfs parser, deterministic package builder, and
 loaded-init lookup boundary. Parsing, packaging, and exact-content checks are Host Tested and Cross
-Compiled. The archive has not been consumed on QEMU and is therefore Runtime Pending.
+Compiled. The recorded QEMU 9.1.3 loaded-init probe consumed the exact inspected archive and is
+Runtime Verified for the positive lookup and read path.
 
 The representation follows the Linux kernel's documented `newc` record sizes and four-byte
 alignment rules, but Phoenix deliberately accepts a much smaller subset. The format reference is
@@ -77,7 +78,7 @@ Runtime execution is covered by `RUN-INIT-001`.
 
 ## TODO
 
-- run the archive-to-init path through `cargo xtask test-init` and retain evidence;
+- add target-side malformed-archive and lookup-failure probes before accepting external archives;
 - replace direct archive lookup with VFS inode/dentry ownership when another backend exists;
 - define extraction, memory accounting, and lifetime rules for a writable in-memory root;
 - add a second executable after process creation and general `exec` ownership exist;

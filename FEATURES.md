@@ -33,15 +33,15 @@ _No unclassified entries._
 | BUILD-004 | Kernel artifact and image packaging | Implemented | 0.1.0 | ELF, raw image, linker map, and static inspection |
 | BUILD-005 | Reproducible release artifacts and provenance | Deferred | Unscheduled | Revisit before public releases |
 | BUILD-006 | Explicit host/static/runtime validation states | Implemented | 0.1.0 | Runtime debt is recorded separately, never implied by compilation |
-| BUILD-007 | Early-stack footprint regression check | Captured | Unscheduled | The loaded-init debug frame is currently inspected manually; automate a build-time bound before shrinking the temporary 512 KiB stack |
+| BUILD-007 | Early-stack footprint regression check | Captured | Unscheduled | A first final-map QEMU run exceeded the former 512 KiB stack; automate a build-time bound before shrinking the current 1 MiB temporary stack |
 
 ## Boot and firmware
 
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
-| BOOT-001 | AArch64 QEMU `virt` direct boot | In Progress | 0.1.0 | Image builds; emulator execution is unverified |
-| BOOT-002 | Early stack, BSS initialization, panic, and halt | In Progress | 0.1.0 | Implemented and statically checked; runtime unverified |
-| BOOT-003 | Device Tree discovery and ownership | In Progress | 0.1.0 | Parsing is Host Tested; checked target borrowing through the bootstrap mapping is Cross Compiled and Runtime Pending |
+| BOOT-001 | AArch64 QEMU `virt` direct boot | Implemented | 0.1.0 | QEMU 9.1.3 `virt-9.1` boot probe reached `PHOENIX_BOOT_OK` |
+| BOOT-002 | Early stack, BSS initialization, panic, and halt | In Progress | 0.1.0 | Positive boot and 1 MiB construction-stack use are runtime exercised; BSS-boundary and panic probes remain |
+| BOOT-003 | Device Tree discovery and ownership | In Progress | 0.1.0 | QEMU boot-memory probe validated target DTB borrowing; broader ownership and negative cases remain |
 | BOOT-004 | UEFI boot | Deferred | Unscheduled | Future firmware path |
 | BOOT-005 | Multiboot-compatible x86_64 boot path | Deferred | Unscheduled | Decide with x86_64 port |
 | BOOT-006 | Shutdown and reboot | Deferred | Unscheduled | Platform-specific mechanisms |
@@ -51,7 +51,7 @@ _No unclassified entries._
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
 | ARCH-001 | AArch64 execution and exception-level normalization | Planned | 0.1.0 | Primary architecture |
-| ARCH-002 | Exception vectors and register context | In Progress | 0.1.0 | Vector/frame ABI, assembly entry, and ESR decoding are built; runtime handling remains unverified |
+| ARCH-002 | Exception vectors and register context | In Progress | 0.1.0 | EL0 SVC entry/return passed on QEMU; deliberate faults and full register preservation remain |
 | ARCH-003 | CPU feature discovery | Deferred | Unscheduled | Avoid assuming emulator-only features |
 | ARCH-004 | FP/SIMD ownership and context policy | Deferred | Unscheduled | Kernel starts without FP/SIMD use |
 | ARCH-005 | AArch64 ASID allocation and TTBR0 encoding | In Progress | 0.1.0 | Nonzero 8-bit values, monotonic no-reuse allocation, and exact encoding are Host Tested; both EL0 paths use ASID 1, while retirement and reuse remain |
@@ -62,8 +62,8 @@ _No unclassified entries._
 
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
-| MM-001 | Physical page allocator | In Progress | 0.1.0 | Allocator/map logic is Host Tested; target DTB borrowing and linker-bound derivation are Cross Compiled and Runtime Pending |
-| MM-002 | Virtual memory and kernel address space | In Progress | 0.1.0 | Final mixed-level TTBR1 planning, allocation, materialization, permission separation, boot-stack guard, and publication are built; QEMU evidence, general low-alias retirement, and dynamic mappings remain |
+| MM-001 | Physical page allocator | In Progress | 0.1.0 | QEMU boot-memory probe validated DTB derivation and one allocate/readback/scrub/release cycle; boundary-negative probes remain |
+| MM-002 | Virtual memory and kernel address space | In Progress | 0.1.0 | Final TTBR1 publication passed on QEMU (five tables, 767 leaves); guard/permission-negative probes, low-alias retirement, and dynamic mappings remain |
 | MM-003 | Kernel heap and fallible allocation policy | Planned | 0.1.0 | Define allocation-failure behavior |
 | MM-004 | Kernel stacks and guard pages | In Progress | 0.1.0 | Final TTBR1 omits one linker-reserved page below the temporary boot stack; owned thread and exception stacks remain |
 | MM-005 | User address spaces and safe user copies | In Progress | 0.1.0 | Plans/materialization/ownership and bidirectional copies are Host Tested; loaded init uses an ownership-checked final-direct-map adapter; general fault recovery, lifecycle, and runtime evidence remain |
@@ -90,11 +90,11 @@ _No unclassified entries._
 
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
-| PROC-001 | Process and thread lifecycle | In Progress | 0.1.0 | Generation-checked IDs, strict process phases, retained exit status, and bounded ownership table are Host Tested; loaded init uses lifecycle transitions, while threads and teardown remain |
-| ABI-001 | Native Phoenix syscall ABI | In Progress | 0.1.0 | Revision-0 values plus probe-only bounded open/read/write/close and exit dispatch are built; production dispatch is Runtime Pending |
+| PROC-001 | Process and thread lifecycle | In Progress | 0.1.0 | Generation-checked IDs, strict process phases, retained exit/fault outcomes, and bounded ownership table are Host Tested; loaded init uses lifecycle transitions, while threads and teardown remain |
+| ABI-001 | Native Phoenix syscall ABI | In Progress | 0.1.0 | Positive EL0 unknown-call/exit and init open/read/write/close paths passed on QEMU; production dispatch and negative cases remain |
 | ABI-002 | ELF loader, user stack, TLS, and auxiliary vector | In Progress | 0.1.0 | ELF planning/population and native argc/argv/envp/minimal-auxv stack construction are Host Tested and connected in a Cross Compiled loaded-init path; target execution and TLS remain |
-| ABI-003 | Separately linked first native user program | In Progress | 0.1.0 | One-page RX AArch64 init validates stack, reads initramfs data into its stack, checks EOF/close, writes exact output, and exits; runtime is pending |
-| PROC-002 | Signals and exception delivery | Deferred | Unscheduled | Requires process lifecycle |
+| ABI-003 | Separately linked first native user program | In Progress | 0.1.0 | QEMU loaded-init probe validated the one-page RX init, stack checks, file I/O, and exit path; fault cases remain |
+| PROC-002 | Signals and exception delivery | In Progress | Unscheduled | Terminal lower-AArch64 user faults are classified, retained, and reported; recovery, signals, parent notification, and scheduler handoff remain |
 | IPC-001 | Pipes, message passing, and shared memory IPC | Deferred | Unscheduled | Split when designs become concrete |
 | IPC-002 | Wait, poll, and event readiness | Captured | Unscheduled | Coordinate with file descriptors |
 | SYNC-001 | Futex-like userspace synchronization | Captured | Unscheduled | Requires stable user-memory semantics |
@@ -115,7 +115,7 @@ _No unclassified entries._
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
 | DEV-001 | Minimal device and driver lifecycle | Deferred | Unscheduled | Do not build a framework before two users exist |
-| DEV-002 | Early and runtime console | In Progress | 0.1.0 | Polled PL011 implemented; runtime unverified |
+| DEV-002 | Early and runtime console | In Progress | 0.1.0 | Polled PL011 positive output/flush passed on QEMU; panic and interrupt-era behavior remain |
 | IRQ-001 | Interrupt controller abstraction and GIC | Planned | 0.1.0 | Initial AArch64 controller |
 | FW-001 | PSCI integration | Deferred | Unscheduled | Power and SMP services |
 | VIRTIO-001 | VirtIO transport and device discovery | Deferred | Unscheduled | MMIO first; PCI may follow |
@@ -141,11 +141,11 @@ _No unclassified entries._
 | OBS-001 | Structured logging and runtime ring buffer | Planned | 0.1.0 | Builds on early console |
 | OBS-002 | Panic register dump, symbols, and stack traces | In Progress | 0.1.0 | Fatal exception path reports vector, PC, status, ESR, and FAR; symbolization and stack traces remain |
 | OBS-003 | Tracing and profiling | Captured | Unscheduled | Avoid committing to a format early |
-| TEST-001 | QEMU boot smoke and focused probes with timeout and sentinels | In Progress | 0.1.0 | Boot, memory, final TTBR1, static EL0, and loaded-init/file-I/O harnesses are implemented; loaded init requires ordered final-map, EL0, output, and exit evidence; QEMU execution remains Runtime Pending |
+| TEST-001 | QEMU boot smoke and focused probes with timeout and sentinels | Implemented | 0.1.0 | QEMU 9.1.3 passed boot, memory, final TTBR1, EL0, and loaded-init/file-I/O positive probes; deliberate fault coverage remains separately tracked |
 | TEST-002 | Host-side unit and property tests | Implemented | 0.1.0 | Console, build identity, config, and ELF-layout logic |
 | TEST-003 | Fuzzing and fault injection | Deferred | Unscheduled | Add with parsers and failure paths |
 | HARD-001 | Unsafe-code review and invariant audit | Deferred | Continuous | Applies as unsafe code appears |
-| HARD-002 | Resource limits and fault isolation | Deferred | Unscheduled | Design with processes and drivers |
+| HARD-002 | Resource limits and fault isolation | In Progress | Unscheduled | Terminal EL0 faults are separated from kernel exceptions; scheduler isolation, recovery, accounting, and limits remain |
 | HARD-003 | Secure boot and image verification | Captured | Unscheduled | Firmware-policy dependency |
 | POWER-001 | Idle states and power management | Captured | Unscheduled | Beyond the initial halt path |
 

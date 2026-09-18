@@ -2,7 +2,8 @@
 
 This document describes Phoenix's implemented final `TTBR1_EL1` hierarchy for the pinned
 AArch64 QEMU `virt` platform. Planning, allocation, materialization, cross-compilation, and ELF
-inspection are complete. Publication on a real AArch64 CPU remains Runtime Pending.
+inspection are complete. Publication on the recorded QEMU 9.1.3 AArch64 CPU path is Runtime
+Verified; negative permission and guard-fault probes remain Runtime Pending.
 
 ## Current implementation
 
@@ -44,9 +45,9 @@ the exact topology to five table frames and 767 leaf mappings. The configured li
 table frames and 1024 leaves,
 so an unexpected DTB topology fails explicitly rather than truncating the address space.
 
-The platform builder consumes its unpublished plan as it appends each range, avoiding a second
-roughly 32 KiB rollback copy on the bounded early stack. Public incremental mutation remains
-transactional for general callers. After descriptor materialization, the permanent owner discards
+The platform builder mutates its unpublished plan with the planner's transactional operations,
+avoiding repeated ownership moves of the large fixed-capacity value on the bounded early stack.
+After descriptor materialization, the permanent owner discards
 all leaf-planning metadata and retains only the compact table-role/frame array; a host test keeps
 that owner below 512 bytes.
 
@@ -98,7 +99,7 @@ kernel and user tables before publication, switches TTBR1 first, then installs t
 user hierarchy and enters EL0. Its syscall-side direct-map adapter accepts only frames proven to
 belong to the retained init address space.
 
-## Validation completed without QEMU
+## Validation
 
 Host tests cover range decomposition, exact translation, permission replacement, deterministic
 topology, table-capacity and overlap failures, atomic allocation, descriptor materialization,
@@ -107,11 +108,12 @@ topology, critical mappings, linker-layout rejection, and RAM-window rejection.
 
 The focused kernel image is Cross Compiled and ELF Inspected. Static checks require every
 permission-domain symbol, page alignment and ordering, the first-2-MiB image bound, the expected
-load addresses, and the final success sentinel. None of this is runtime evidence.
+load addresses, and the final success sentinel. On the recorded QEMU 9.1.3 `virt-9.1` run,
+`cargo xtask test-kernel-map` reported root `0x0000000040000000`, five tables, 767 leaves, and
+the ordered enter/success markers after TTBR1 publication.
 
 ## TODO
 
-- run the focused probe on the pinned QEMU version and record the complete evidence;
 - remove the temporary TTBR0 aliases when no low virtual pointer or bootstrap handle survives;
 - replace the bootstrap-only physical-memory handle with a final direct-map API and lifetime;
 - derive the physical-address size from `ID_AA64MMFR0_EL1.PARange` before accepting RAM above
@@ -132,6 +134,5 @@ substitute for firmware-reserved or allocator-owned frames.
 
 ## Runtime status
 
-`RUN-MMU-001` covers the permission-separated TTBR1 switch. `RUN-MMU-002` remains open for final
-TTBR0 alias retirement. The new probe narrows the first check but does not close either entry until
-its output and environment are recorded in `docs/RUNTIME_VALIDATION.md`.
+`RUN-MMU-001` is Runtime Verified by the recorded focused probe. `RUN-MMU-002` remains open for
+final TTBR0 alias retirement, and controlled permission/guard faults remain separate Pending work.

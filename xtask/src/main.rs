@@ -10,7 +10,7 @@ const AARCH64_TARGET: &str = "aarch64-unknown-none-softfloat";
 const KERNEL_PHYS_BASE: u64 = 0x0000_0000_4008_0000;
 const KERNEL_VIRT_BASE: u64 = 0xffff_ff80_4008_0000;
 const FINAL_KERNEL_PERMISSION_WINDOW_END: u64 = 0xffff_ff80_4020_0000;
-const BOOT_STACK_SIZE: u64 = 512 * 1024;
+const BOOT_STACK_SIZE: u64 = 1024 * 1024;
 const BOOT_STACK_GUARD_SIZE: u64 = 4 * 1024;
 const EXCEPTION_VECTOR_TABLE_SIZE: u64 = 2048;
 const INIT_ENTRY: usize = 0x0040_0000;
@@ -447,6 +447,14 @@ impl KernelVariant {
 
     const fn expects_loaded_init(self) -> bool {
         matches!(self, Self::LoadedInitProbe)
+    }
+
+    const fn expected_user_fault_sentinel(self) -> Option<(&'static str, &'static str)> {
+        match self {
+            Self::El0Probe => Some((qemu::USER_FAULT_SENTINEL, qemu::EL0_FAILURE_SENTINEL)),
+            Self::LoadedInitProbe => Some((qemu::USER_FAULT_SENTINEL, qemu::INIT_FAILURE_SENTINEL)),
+            Self::Default | Self::BootMemoryProbe | Self::KernelMapProbe => None,
+        }
     }
 
     const fn expected_sentinel(self) -> &'static str {
@@ -1205,6 +1213,22 @@ fn inspect_kernel_variant(variant: KernelVariant) -> bool {
         ));
     }
 
+    if let (Some(bytes), Some((fault, failure))) = (
+        kernel_bytes.as_deref(),
+        variant.expected_user_fault_sentinel(),
+    ) {
+        for sentinel in [fault, failure] {
+            if !bytes
+                .windows(sentinel.len())
+                .any(|window| window == sentinel.as_bytes())
+            {
+                errors.push(format!(
+                    "ELF does not contain required user-fault sentinel: {sentinel}"
+                ));
+            }
+        }
+    }
+
     if variant.expects_loaded_init() {
         if let Some(bytes) = kernel_bytes.as_deref() {
             for sentinel in [
@@ -1440,9 +1464,9 @@ mod tests {
              ffffff8040085000 B __boot_stack_guard_start\n\
              ffffff8040086000 B __boot_stack_guard_end\n\
              ffffff8040086000 B __boot_stack_bottom\n\
-             ffffff8040106000 B __boot_stack_top\n\
-             ffffff8040106000 B __kernel_end\n\
-             ffffff8040106000 B __data_end",
+             ffffff8040186000 B __boot_stack_top\n\
+             ffffff8040186000 B __kernel_end\n\
+             ffffff8040186000 B __data_end",
         );
 
         assert_eq!(symbols["_start"], KERNEL_VIRT_BASE);
@@ -1477,11 +1501,11 @@ mod tests {
              ffffff8040085000 B __boot_stack_guard_start\n\
              ffffff8040086000 B __boot_stack_guard_end\n\
              ffffff8040086000 B __boot_stack_bottom\n\
-             ffffff8040106000 B __boot_stack_top\n\
-             ffffff8040107000 B __user_probe_stack_bottom\n\
-             ffffff8040108000 B __user_probe_stack_top\n\
-             ffffff8040108000 B __kernel_end\n\
-             ffffff8040108000 B __data_end",
+             ffffff8040186000 B __boot_stack_top\n\
+             ffffff8040187000 B __user_probe_stack_bottom\n\
+             ffffff8040188000 B __user_probe_stack_top\n\
+             ffffff8040188000 B __kernel_end\n\
+             ffffff8040188000 B __data_end",
         );
 
         assert!(validate_symbol_layout(&symbols, true).is_empty());

@@ -13,7 +13,7 @@ kernel image:
 page-aligned BSS end
 optional alignment padding
 4 KiB boot-stack guard (unmapped by final TTBR1)
-512 KiB boot-construction stack (RW, PXN, UXN)
+1 MiB boot-construction stack (RW, PXN, UXN)
 optional statically linked probe storage
 kernel image end
 ```
@@ -29,9 +29,11 @@ executing on the higher-half boot stack across that switch. The loaded-init path
 replaces TTBR0 as well, so it retains no ordinary low-address alias to the guard frame.
 
 The stack is intentionally large because the current allocation-free debug path constructs fixed
-page-table and process-image plans on the stack. Static disassembly most recently showed a
-`0x4cd20`-byte loaded-init construction frame. The 512 KiB reservation leaves more than 200 KiB
-for callers, but this is an observed value rather than an automated compiler-enforced bound.
+page-table and process-image plans on the stack. The first real final-map run showed that the
+former 512 KiB reservation was insufficient: its outer construction frame and nested planner
+frame exceeded it. The linker now reserves 1 MiB, while the platform builder uses in-place
+transactional mapping to reduce the nested frame. This is an observed runtime correction, not an
+automated compiler-enforced bound.
 
 ## Invariants
 
@@ -44,13 +46,17 @@ for callers, but this is an observed value rather than an automated compiler-enf
 - static artifact inspection rejects missing, misaligned, reordered, or wrongly sized symbols;
 - no current code intentionally probes the guard until recoverable kernel-fault testing exists.
 
-## Validation completed without QEMU
+## Validation
 
 Host tests verify that direct-map overrides can leave an exact page hole without losing adjacent
 permissions or large mappings. Platform tests verify that the QEMU `virt` final plan leaves the
 declared guard absent while retaining text, rodata, data, and PL011 mappings. Every AArch64 kernel
 variant is cross-linked and inspected for the two guard symbols, their exact size and adjacency,
-the 512 KiB stack size, and the overall image bound.
+the 1 MiB stack size, and the overall image bound.
+
+The recorded final-map and loaded-init probes crossed final TTBR1 publication while using the
+1 MiB construction stack. This validates the positive live-stack mapping, but not an intentional
+underflow into the guard.
 
 This does not prove that an AArch64 translation fault occurs on stack underflow. That evidence is
 tracked as `RUN-KSTACK-001` in `docs/RUNTIME_VALIDATION.md`.

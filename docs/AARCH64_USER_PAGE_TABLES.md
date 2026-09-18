@@ -2,8 +2,8 @@
 
 This document describes the ownership, materialization, and activation layer for lower-half
 AArch64 user page tables. It builds the same 39-bit, 4 KiB, three-level format configured by the
-bootstrap. Planning and ownership are Host Tested; target activation is Cross Compiled and Runtime
-Pending.
+bootstrap. Planning and ownership are Host Tested; the positive loaded-init materialization and
+activation path is Runtime Verified on the recorded QEMU 9.1.3 environment.
 
 ## Current implementation
 
@@ -46,7 +46,7 @@ unpublished materialized hierarchy can be released transactionally.
 The QEMU `virt` bootstrap supplies one checked target implementation of this backend while the
 temporary TTBR1 RAM block remains active. The loaded-init path finishes all user-table writes,
 revokes that capability, and then installs a separately owned final direct map before EL0 entry.
-Both target phases remain Runtime Pending.
+The recorded loaded-init probe executed both phases and reached EL0 successfully.
 
 ## Combined ownership before activation
 
@@ -98,7 +98,8 @@ out-of-memory behavior, exact descriptor links and outputs, injected materializa
 clean retry, leaf-identity mismatch, combined ownership, and atomic complete release. The module is
 Cross Compiled for the AArch64 bare-metal target, including the ownership-retaining activation
 path. A focused loaded-init variant now reaches this API with allocator-owned program, stack, and
-table frames. Runtime register, barrier, invalidation, permission, and `eret` effects remain
+table frames. Its positive table publication and `eret` path are Runtime Verified by successful
+EL0 execution; exact register inspection, permission faults, and invalidation-negative cases remain
 unverified.
 
 ## TODO
@@ -108,7 +109,8 @@ unverified.
 - add ASID-aware retirement and reclamation after the address space moves under the process table;
 - define break-before-make for changes to published descriptors;
 - retain page-table accounting in the future process object;
-- add recoverable fault handling for mutable/concurrent address spaces;
+- resolve recoverable page faults for mutable/concurrent address spaces before selecting the
+  implemented terminal process-fault outcome;
 - validate descriptor walks, access permissions, guard faults, and switching under QEMU/GDB.
 
 ## Skipped work

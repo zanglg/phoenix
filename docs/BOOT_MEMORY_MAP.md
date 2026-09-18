@@ -3,7 +3,7 @@
 This document describes how validated firmware memory information becomes Phoenix's first frame
 allocator. The construction logic is Host Tested and Cross Compiled. Target helpers now borrow the
 real DTB through the bootstrap high mapping and derive physical kernel bounds from linker symbols;
-executing that complete path remains Runtime Pending.
+the recorded QEMU 9.1.3 boot-memory probe executed that positive path successfully.
 
 ## Current implementation
 
@@ -51,16 +51,19 @@ metadata exhaustion, an empty kernel image range, a map made empty by reservatio
 reservation rejection, and non-identity child-range rejection. Existing memory tests cover
 rounding, sorting, merging, splitting, and allocator behavior.
 
+The recorded `cargo xtask test-memory` run accepted the generated 1 MiB DTB, reported boot CPU 0
+and 130,530 free frames, then allocated, round-tripped, scrubbed, and restored one private frame
+before `PHOENIX_MEMORY_OK`.
+
 ## TODO
 
-- execute the implemented bounded boot-memory probe on QEMU and record its map evidence;
 - define policy for dynamically allocated `/reserved-memory` children when a real consumer appears;
 - add child-address translation if a supported platform supplies non-empty `ranges`;
 - constrain allocations to memory reachable through the active physical-memory backend;
 - select the production metadata capacity from captured QEMU DTBs and fail with diagnostics;
 - emit a bounded early allocation audit before the first user image consumes frames;
 - retain the DTB reservation until every borrowed property has been copied or released;
-- validate the exact map under QEMU/GDB and record it in `RUN-MM-001`.
+- inspect the complete reservation map under GDB and add first/last-boundary target probes.
 
 ## Skipped work
 

@@ -2,8 +2,8 @@
 
 This document describes both the temporary boot translation regime and the Host Tested stage-1
 mapping mechanisms. A focused image now constructs and publishes final `TTBR1_EL1` tables, but it
-has not been exercised on an AArch64 CPU. The platform layout and publication boundary are in
-`docs/FINAL_KERNEL_ADDRESS_SPACE.md`.
+has been Runtime Verified on the recorded QEMU 9.1.3 environment. The platform layout and
+publication boundary are in `docs/FINAL_KERNEL_ADDRESS_SPACE.md`.
 
 ## Translation regime
 
@@ -102,10 +102,11 @@ addresses, privilege and execute bits, W^X rejection, alignment, physical width,
 ordering, overlap, capacity, translation, unmapping, mixed-level direct-map decomposition,
 permission overrides, exact guard holes, table ownership, and retry-safe materialization. The
 focused final-map image is also Cross Compiled and ELF Inspected with the configured AArch64
-bare-metal target.
+bare-metal target. The recorded probe published final TTBR1 and continued through its success
+marker; permission and guard-fault negative cases remain pending.
 
-Runtime installation remains tracked as `RUN-MMU-001`, `RUN-MMU-002`, and `RUN-KSTACK-001` in
-`docs/RUNTIME_VALIDATION.md`.
+Runtime installation is verified by `RUN-MMU-001`; low-alias retirement and the guard-fault probe
+remain tracked by `RUN-MMU-002` and `RUN-KSTACK-001` in `docs/RUNTIME_VALIDATION.md`.
 
 ## TODO
 
@@ -115,7 +116,7 @@ Runtime installation remains tracked as `RUN-MMU-001`, `RUN-MMU-002`, and `RUN-K
 - add a guarded heap and replace the static guarded boot stack with owned thread/exception stacks;
 - define live table-update locking and break-before-make beyond the current one-time publication;
 - define safe ASID retirement, epochs, and reuse after TTBR0 lifetime ends;
-- runtime-validate final `TTBR1_EL1`, then retire the temporary low RAM alias safely;
+- retire the temporary low RAM alias safely and validate its absence;
 - decide whether a recursive/self-map region is needed alongside the implemented direct map.
 
 ## Skipped work

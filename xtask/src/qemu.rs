@@ -8,8 +8,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const PROGRAM: &str = "qemu-system-aarch64";
-const MACHINE: &str = "virt-9.2,virtualization=on,gic-version=3,highmem=off";
-const MACHINE_TYPE: &str = "virt-9.2";
+const MACHINE: &str = "virt-9.1,virtualization=on,gic-version=3,highmem=off";
+const MACHINE_TYPE: &str = "virt-9.1";
 const CPU: &str = "cortex-a72";
 const MEMORY: &str = "512M";
 const CPUS: &str = "1";
@@ -20,6 +20,7 @@ const OUTPUT_LIMIT: usize = 1024 * 1024;
 pub const BOOT_SUCCESS_SENTINEL: &str = "PHOENIX_BOOT_OK";
 pub const PANIC_SENTINEL: &str = "PHOENIX_PANIC";
 pub const EXCEPTION_SENTINEL: &str = "PHOENIX_EXCEPTION";
+pub const USER_FAULT_SENTINEL: &str = "PHOENIX_USER_FAULT";
 pub const MEMORY_SUCCESS_SENTINEL: &str = "PHOENIX_MEMORY_OK";
 pub const KERNEL_MAP_ENTER_SENTINEL: &str = "PHOENIX_KERNEL_MAP_ENTER";
 pub const KERNEL_MAP_SUCCESS_SENTINEL: &str = "PHOENIX_KERNEL_MAP_OK";
@@ -533,7 +534,8 @@ mod tests {
         ExpectedOutput, INIT_ENTER_SENTINEL, INIT_FAILURE_SENTINEL, INIT_KERNEL_MAP_ENTER_SENTINEL,
         INIT_KERNEL_MAP_SUCCESS_SENTINEL, INIT_SUCCESS_SENTINEL, INIT_USER_OUTPUT,
         KERNEL_MAP_ENTER_SENTINEL, KERNEL_MAP_SUCCESS_SENTINEL, MACHINE, MEMORY_SUCCESS_SENTINEL,
-        PANIC_SENTINEL, QemuCommand, TerminalOutput, classify_output, has_named_item, shell_quote,
+        PANIC_SENTINEL, QemuCommand, TerminalOutput, USER_FAULT_SENTINEL, classify_output,
+        has_named_item, shell_quote,
     };
 
     #[test]
@@ -603,6 +605,13 @@ mod tests {
         assert_eq!(
             classify_output(
                 format!("{EL0_FAILURE_SENTINEL}: status=1\n").as_bytes(),
+                ExpectedOutput::El0
+            ),
+            Some(TerminalOutput::Failure)
+        );
+        assert_eq!(
+            classify_output(
+                format!("{USER_FAULT_SENTINEL}\n{EL0_FAILURE_SENTINEL}: user-fault\n").as_bytes(),
                 ExpectedOutput::El0
             ),
             Some(TerminalOutput::Failure)
@@ -724,20 +733,27 @@ mod tests {
             ),
             Some(TerminalOutput::Failure)
         );
+        assert_eq!(
+            classify_output(
+                format!("{USER_FAULT_SENTINEL}\n{INIT_FAILURE_SENTINEL}: user-fault").as_bytes(),
+                ExpectedOutput::Init
+            ),
+            Some(TerminalOutput::Failure)
+        );
     }
 
     #[test]
     fn named_item_check_does_not_accept_prefixes() {
-        let machines = "virt-9.1 old\nvirt-9.2 pinned\nvirt latest";
-        assert!(has_named_item(machines, "virt-9.2"));
+        let machines = "virt-9.0 old\nvirt-9.1 pinned\nvirt latest";
+        assert!(has_named_item(machines, "virt-9.1"));
         assert!(!has_named_item(machines, "virt-9"));
     }
 
     #[test]
     fn shell_quoting_preserves_simple_values_and_escapes_spaces() {
         assert_eq!(
-            shell_quote("virt-9.2,gic-version=3".as_ref()),
-            "virt-9.2,gic-version=3"
+            shell_quote("virt-9.1,gic-version=3".as_ref()),
+            "virt-9.1,gic-version=3"
         );
         assert_eq!(shell_quote("two words".as_ref()), "'two words'");
         assert_eq!(shell_quote("it's".as_ref()), "'it'\\''s'");

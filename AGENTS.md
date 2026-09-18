@@ -3,7 +3,9 @@
 ## Mission and current boundary
 
 Phoenix is an experimental Unix-like Rust kernel. The current development target is AArch64 on
-QEMU `virt`. The Cargo version remains 0.0.0 throughout the linear pre-release construction path.
+QEMU `virt`. The Cargo version remains 0.0.0 throughout the linear construction path. After the
+technical Roadmap is complete, release candidates use `0.1.0-pre.N`; promotion to `0.1.0` requires
+explicit owner review and acceptance.
 Follow the Roadmap in dependency order. A runtime-pending item may remain open while work moves
 to the next explicitly host-verifiable item, but only when that work does not depend on an
 unobserved hardware result. Never convert static evidence into a runtime support claim.
@@ -93,7 +95,7 @@ cargo xtask ci
 ```
 
 Run `cargo xtask ci` before reporting completion. Never state that an unexecuted check passed.
-QEMU is optional in 0.0.0. Static artifact inspection is required. `run`, `test-boot`,
+QEMU is optional during 0.0.0 construction. Static artifact inspection is required. `run`, `test-boot`,
 `test-memory`, `test-kernel-map`, `test-el0`, and `test-init` are runtime-only commands; do not
 install or invoke QEMU in an environment where it is unavailable.
 
@@ -115,6 +117,8 @@ Record every Runtime Pending claim in `docs/RUNTIME_VALIDATION.md`.
 - Update `CHANGELOG.md` only for completed changes.
 - Do not leave long-lived source TODOs; record them in `FEATURES.md` with context.
 - Update README support claims whenever a target becomes buildable or bootable.
+- Never promote a `0.1.0-pre.N` candidate to `0.1.0` without explicit owner acceptance after
+  review and any requested corrections.
 
 ## Prohibited changes
 

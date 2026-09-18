@@ -3,8 +3,8 @@
 This document describes Phoenix's first separately linked userspace executable,
 `userspace/init`. It is built, stripped for embedding, accepted by the real Phoenix ELF parser,
 stored byte-for-byte as `init` in a deterministic initramfs, and statically inspected. The focused
-kernel embeds that exact archive. The program has not executed at EL0 and is therefore Runtime
-Pending.
+kernel embeds that exact archive. The recorded QEMU 9.1.3 loaded-init probe executed the program at
+EL0 through its successful stack, file-I/O, and `exit(42)` path.
 
 ## Current implementation
 
@@ -59,11 +59,10 @@ load count, final permissions, rounded virtual extent, in-memory size, message/p
 file-size bound, and nonempty linker map. The source was also assembled during implementation to
 verify the `write` and `exit` SVC paths and expected stack offsets. The loaded-init kernel path that consumes this
 artifact is documented in `docs/LOADED_INIT_PROBE.md`. Target execution is tracked by
-`RUN-INIT-001`.
+`RUN-INIT-001`, which is Runtime Verified for the positive path.
 
 ## TODO
 
-- execute `cargo xtask test-init` and record the complete target evidence;
 - implement production process exit and teardown instead of halting in the probe dispatcher;
 - replace the probe-only syscalls with process-owned general dispatch and descriptor objects;
 - move from a conformance-only init to a small Rust runtime once its startup ABI is stable enough;

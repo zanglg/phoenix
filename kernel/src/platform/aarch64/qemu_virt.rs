@@ -195,28 +195,26 @@ where
         if frames.is_empty() {
             continue;
         }
-        plan = plan
-            .with_direct_frames(
-                frames,
-                KERNEL_VIRTUAL_OFFSET,
-                MappingAttributes::kernel_data(),
-                &overrides,
-            )
-            .map_err(FinalKernelMapError::PageTable)?;
+        plan.map_direct_frames(
+            frames,
+            KERNEL_VIRTUAL_OFFSET,
+            MappingAttributes::kernel_data(),
+            &overrides,
+        )
+        .map_err(FinalKernelMapError::PageTable)?;
         mapped_ram = true;
     }
     if !mapped_ram {
         return Err(FinalKernelMapError::MissingRam);
     }
 
-    plan = plan
-        .with_mapping(
-            VirtAddr::new(PL011_VIRTUAL_BASE),
-            PhysAddr::new(PL011_PHYSICAL_BASE),
-            TranslationLevel::L3,
-            MappingAttributes::kernel_device(),
-        )
-        .map_err(FinalKernelMapError::PageTable)?;
+    plan.map(
+        VirtAddr::new(PL011_VIRTUAL_BASE),
+        PhysAddr::new(PL011_PHYSICAL_BASE),
+        TranslationLevel::L3,
+        MappingAttributes::kernel_device(),
+    )
+    .map_err(FinalKernelMapError::PageTable)?;
     validate_critical_mappings(&plan, layout)?;
     Ok(plan)
 }

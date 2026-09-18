@@ -1,8 +1,9 @@
 # Changelog
 
 All notable changes to Phoenix are documented here. The project uses SemVer-compatible release
-numbers and remains explicitly unstable before 1.0.0. During initial construction, changes remain
-under `Unreleased` and the Cargo version remains 0.0.0 until the 0.1.0 release gate is satisfied.
+numbers and remains explicitly unstable before 1.0.0. During construction, changes remain under
+`Unreleased` and the Cargo version remains 0.0.0. Technical completion produces a
+`0.1.0-pre.N` review candidate; `0.1.0` requires explicit owner acceptance.
 
 ## [Unreleased]
 
@@ -11,7 +12,7 @@ under `Unreleased` and the Cargo version remains 0.0.0 until the 0.1.0 release g
 - Initial Rust 2024 workspace with a single Phoenix version source.
 - Stable Rust toolchain policy, Rust 1.95 MSRV, and AArch64 bare-metal target.
 - `no_std` AArch64 kernel binary with the initial bootstrap, higher-half linker layout, BSS
-  initialization, 512 KiB boot-construction stack, PL011 early console, panic path, and safe halt loop.
+  initialization, 1 MiB boot-construction stack, PL011 early console, panic path, and safe halt loop.
 - Build identity plus deterministic boot-success and panic sentinels.
 - ELF, raw kernel image, and linker-map generation with static layout and symbol inspection.
 - Config-file-driven rust-analyzer target selection.
@@ -56,7 +57,7 @@ under `Unreleased` and the Cargo version remains 0.0.0 until the 0.1.0 release g
   table, bounded `open`/`read`/`close` probes, and end-to-end initramfs file-I/O conformance logic.
 - Allocator-owned mixed-level AArch64 kernel tables, page-granular text/rodata/data permission
   overrides, a QEMU `virt` RAM direct map and PL011 device page, one-time TTBR1 publication with
-  barriers/TLB invalidation, and a bounded Runtime Pending final-map probe.
+  barriers/TLB invalidation, and a bounded final-map probe now verified on QEMU 9.1.3.
 - Loaded-init integration of the retained final TTBR1 owner, explicit bootstrap-memory capability
   revocation, ownership-checked post-switch user-frame copies, and ordered QEMU progress evidence.
 - One linker-reserved boot-stack guard page, explicit direct-map holes, final-plan absence checks,
@@ -65,4 +66,12 @@ under `Unreleased` and the Cargo version remains 0.0.0 until the 0.1.0 release g
   ownership, reap semantics, and loaded-init ready/running/exited integration.
 - Nonzero 8-bit AArch64 ASIDs, monotonic no-reuse allocation, checked TTBR0 bit composition, and
   ASID-1 activation for both the static and loaded EL0 paths.
+- Architecture-neutral terminal user-fault records, AArch64 lower-EL synchronous classification,
+  faulted-process lifecycle/reap semantics, and deterministic EL0/init QEMU failure protocols.
+- First QEMU 9.1.3 runtime-validation pass on versioned `virt-9.1`: bounded boot, boot-memory,
+  final-kernel-map, EL0, and loaded-init probes passed with retained serial logs. The first
+  final-map run exposed construction-stack exhaustion; the 1 MiB stack and in-place plan building
+  retain the 4 KiB page size, 512 MiB board memory, and first-2-MiB image bound.
 - Project, Agent, Roadmap, and kernel capability documentation.
+- Two-stage release gating: technical completion produces `0.1.0-pre.N` candidates, while final
+  `0.1.0` promotion requires explicit owner review and acceptance.

@@ -1,8 +1,9 @@
 # AArch64 Exceptions
 
 This document defines Phoenix's exception metadata, frame ABI, assembly vector table, and fatal
-diagnostic path. The implementation is Host Tested, Cross Compiled, and ELF Inspected; no exception
-has been handled on a target yet.
+diagnostic path. The implementation is Host Tested, Cross Compiled, and ELF Inspected. The EL0
+probes Runtime Verified the narrow `SVC #0` entry-and-return path; deliberate fault diagnostics and
+full register-preservation probes remain Runtime Pending.
 
 ## Vector table model
 
@@ -43,9 +44,11 @@ uses `eret`. Current-EL `SP_EL0` slots switch to `SP_EL1` before touching memory
 trust the interrupted stack.
 
 The default Rust dispatcher is deliberately fatal. It emits `PHOENIX_EXCEPTION`, the decoded
-vector, PC, saved status, syndrome, and fault address, then halts. The opt-in EL0 probe recognizes
-its narrow `SVC #0` contract and exercises the assembly return epilogue; general recovery and
-production syscall dispatch are not enabled.
+vector, PC, saved status, syndrome, and fault address, then halts. The opt-in EL0 paths first
+recognize their narrow `SVC #0` contract and exercise the assembly return epilogue. Other
+consistent lower-AArch64 synchronous exceptions are classified as terminal user faults; current-EL,
+asynchronous, SError, and inconsistent exception classes retain the fatal kernel path. General
+recovery and production syscall dispatch are not enabled. See `docs/USER_FAULTS.md`.
 
 ## Syndrome decoding
 
@@ -65,6 +68,10 @@ all other six-bit DFSC values as raw `Other` cases.
 Unknown exception classes and fault status codes are data, not parser failures. A class-specific
 decoder fails only when applied to the wrong exception class.
 
+The separate user-fault adapter converts supported lower-EL abort, alignment, illegal-instruction,
+bad-SVC, and debug classes into architecture-neutral process diagnostics while preserving the raw
+syndrome and only retaining `FAR_EL1` when valid.
+
 ## Invariants
 
 - vector offsets are aligned, unique, and contained within the 2 KiB table;
@@ -74,27 +81,31 @@ decoder fails only when applied to the wrong exception class.
 - raw syndrome values and unknown enumerants are never silently discarded;
 - data-abort transfer fields are exposed only when `ISV` says they are valid;
 - decoding has no allocation, MMIO, system-register, or unsafe behavior;
+- only a lower-AArch64 synchronous vector with a consistent syndrome class can be classified as a
+  user fault;
 - changing the frame ABI requires coordinated source, assembly, inspection, and document changes.
 
 ## Validation
 
 Host tests cover all vector offsets, invalid offsets, frame size/alignment/register boundaries,
 known and unknown exception classes, SVC immediates, instruction length, data-abort flags and
-access metadata, every initially classified fault-status family, and wrong-class rejection. The
-same code is Cross Compiled for AArch64. Assembly-time size checks cover each vector entry, and ELF
-inspection verifies the complete table's address, alignment, and size.
+access metadata, every initially classified fault-status family, portable user-fault mapping,
+invalid fault-address handling, and incompatible vector/class rejection. The same code is Cross
+Compiled for AArch64. Assembly-time size checks cover each vector entry, and ELF inspection
+verifies the complete table's address, alignment, and size.
 
-The `VBAR_EL1` write, exception entry/return, register preservation, and fault output remain Runtime
-Pending in `docs/RUNTIME_VALIDATION.md`.
+Successful EL0 syscalls show that the installed vector and exception-return path is usable in the
+recorded configuration. Direct `VBAR_EL1` inspection, full register preservation, and deliberate
+fault output remain Runtime Pending in `docs/RUNTIME_VALIDATION.md`.
 
 ## TODO
 
 - validate vector installation and every save/restore path on QEMU;
 - choose dedicated exception-stack and nested-exception policies;
-- dispatch current-EL faults, EL0 faults/syscalls, IRQ, FIQ, and SError separately;
+- dispatch current-EL faults, IRQ, FIQ, and SError separately;
 - validate `FAR_EL1` only for classes and syndrome values where the architecture defines it;
 - expand diagnostic formatting with class-specific detail without allocation;
-- define recoverable user faults versus fatal kernel faults;
+- add recoverable user page-fault policy before terminal classification;
 - add guarded exception stacks and a double-fault/emergency path;
 - add QEMU probes for register preservation, deliberate aborts, `SVC`, and `eret`.
 

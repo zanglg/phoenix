@@ -15,8 +15,11 @@ EL0 issues `SVC #0`. On entry to EL1:
 
 The exception frame preserves all registers. The AArch64 adapter extracts the request without
 changing `ELR_EL1`; for an AArch64 `SVC`, the architectural return address already identifies the
-following instruction. The eventual dispatcher must accept only the lower-AArch64 synchronous
-vector with exception class `SupervisorCallAArch64` and immediate zero.
+following instruction. The dispatcher accepts only the lower-AArch64 synchronous vector with
+exception class `SupervisorCallAArch64` and immediate zero. The current EL0 variants treat a
+rejected SVC trap convention, such as a nonzero immediate, as a terminal `BadSystemCall` user
+fault rather than an unknown syscall number. Unknown numbers supplied correctly in `x8` still
+return `NotImplemented`.
 
 ## Initial number assignments
 
@@ -67,6 +70,9 @@ to Unix's conventional low eight bits. Loaded init accepts its terminal success 
 the active process control can move from `Running` to `Exited`. Resource reclamation remains a
 kernel lifecycle concern and does not occur on the exiting EL0 exception stack.
 
+Architecture exceptions are not encoded as syscall return values. The current terminal fault
+boundary records the process outcome and is documented in `docs/USER_FAULTS.md`.
+
 ## Invariants
 
 - the generic ABI preserves all six arguments and unknown call numbers;
@@ -91,6 +97,7 @@ copy directions have separate host tests. The types and adapter are Cross Compil
 - move the probe file table into table-owned process resources and define stdin/stderr initialization;
 - separate ABI revisioning from the project version when revision 1 is proposed;
 - execute both EL0 conformance programs and retain their QEMU transcripts.
+- define native wait/signal status for retained terminal user-fault outcomes.
 
 ## Skipped work
 

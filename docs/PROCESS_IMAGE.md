@@ -2,9 +2,9 @@
 
 This document describes the architecture-neutral bridge from a validated executable to owned
 physical pages. The implementation is Host Tested and Cross Compiled. A focused kernel variant
-connects the Runtime Pending AArch64 bootstrap loader and final direct map to a real ELF selected
-from the embedded initramfs, native stack, dynamic tables, and ownership-gated activation. It has
-not executed on the target.
+connects the AArch64 bootstrap loader and final direct map to a real ELF selected from the embedded
+initramfs, native stack, dynamic tables, and ownership-gated activation. That positive path is
+Runtime Verified on the recorded QEMU 9.1.3 environment.
 
 ## Current implementation
 
@@ -48,9 +48,9 @@ stale allocator from causing partial reclamation or an untracked leak.
 ## Population type state
 
 `ProcessImageMemory` is the narrow backend needed to clear a private frame and copy a checked byte
-slice into it. Host tests use ordinary owned byte arrays. QEMU `virt` has a Cross Compiled,
-Runtime Pending implementation using the temporary higher-half bootstrap RAM alias while loading;
-the completed owner is later accessed through the final direct map.
+slice into it. Host tests use ordinary owned byte arrays. QEMU `virt` uses the temporary
+higher-half bootstrap RAM alias while loading; the recorded loaded-init probe executed that
+positive population path, and the completed owner is later accessed through the final direct map.
 
 `AllocatedProcessImage::populate` clears every complete page before copying its initialized ELF
 prefix. It returns `PopulatedProcessImage` only after every operation succeeds. A backend failure
@@ -97,13 +97,17 @@ checks compile the same ownership model for bare-metal AArch64. Static inspectio
 exact validated initramfs containing the loader-accepted init ELF inside the resulting kernel
 artifact.
 
+The recorded `cargo xtask test-init` run exercised the complete positive ownership chain through
+EL0 entry and successful init termination. Target-side allocation/population failure and rollback
+probes remain pending.
+
 ## TODO
 
 - replace the bootstrap-only population phase with a general mapped-frame API after final-map
   activation can occur earlier in boot;
 - make instruction-cache maintenance explicit before newly copied executable bytes can run;
 - define when a complete address space becomes visible through an ASID and `TTBR0_EL1`;
-- execute the reproducibly built embedded ELF through this path and validate it in QEMU;
+- add target-side failure probes for allocation, population, and unpublished-release rollback;
 - move image ownership under the implemented process table and add resource accounting before
   supporting teardown outside tests.
 

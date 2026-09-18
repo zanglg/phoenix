@@ -2,8 +2,8 @@
 
 This document describes the opt-in `loaded-init-probe` kernel feature. It is Phoenix's first
 end-to-end construction path from a separately linked ELF file to an owned AArch64 EL0 address
-space. The complete path is Cross Compiled and ELF Inspected. It has not run under QEMU, so all
-target behavior remains Runtime Pending.
+space. The complete path is Cross Compiled, ELF Inspected, and Runtime Verified for its positive
+QEMU 9.1.3 probe; deliberate fault behavior remains Runtime Pending.
 
 ## Current implementation
 
@@ -47,7 +47,11 @@ At boot, the focused kernel variant:
 16. opens `etc/motd`, copies its bytes into a writable stack buffer, checks EOF, and closes it;
 17. writes those copied bytes, transitions its process control to `Exited(42)`, and accepts native
     `exit(42)` as `PHOENIX_INIT_OK` only after output;
-    any other terminal state emits `PHOENIX_INIT_FAIL`.
+18. classifies a consistent lower-AArch64 synchronous failure, transitions the running process to
+    `Faulted(details)`, and emits `PHOENIX_USER_FAULT` followed by
+    `PHOENIX_INIT_FAIL: user-fault`;
+    any other unsuccessful terminal state emits `PHOENIX_INIT_FAIL` or the kernel-fatal
+    `PHOENIX_EXCEPTION` marker, as appropriate.
 
 The user program independently checks its aligned stack pointer, argc, argv/envp pointers and
 strings, both list terminators, page-size and entry auxiliary entries, Phoenix ABI revision, and
@@ -81,7 +85,9 @@ the success status.
 - ASID 1, its monotonic allocator, and the active runtime remain live forever because the terminal
   probe halts rather than returning or reclaiming ownership.
 - the runtime control must reach `Ready` before final publication, `Running` before `eret`, and
-  `Exited` exactly once before terminal success.
+  exactly one of `Exited` or `Faulted` after running;
+- a user-fault marker is emitted only after the loaded process accepts the transition to
+  `Faulted`; a lifecycle mismatch remains a kernel exception.
 
 ## Fixed capacities
 
@@ -90,10 +96,10 @@ mappings, five resident image pages, five user-table pages, five user leaves, ei
 pages, 1024 kernel leaves, and 512 bytes for initial stack construction. Capacity exhaustion is a
 reported boot panic, never truncation. These are probe bounds, not stable process limits.
 
-The linked boot-construction stack is separately reserved at 512 KiB. Static disassembly of the
-current debug loaded-init artifact shows a `0x4cd20`-byte frame for the construction path, leaving
-more than 200 KiB for callers and interrupt-free bootstrap execution. This observation is not yet
-an automated upper-bound check and must be repeated after material changes to the plan types.
+The linked boot-construction stack is separately reserved at 1 MiB. The former 512 KiB reservation
+was exceeded by the first final-map runtime construction path, so the larger stack is now checked
+in every artifact. This observation is not yet an automated compiler-enforced upper bound and must
+be repeated after material changes to plan types.
 
 ## Validation
 
@@ -102,19 +108,22 @@ stack, allocator, dynamic table topology/materialization, combined ownership, bo
 validation, bidirectional cross-page user copying, file-table transactions, syscall decoding, and
 QEMU terminal-output classification.
 Target compilation validates the complete concrete composition, `include_bytes` artifact handoff,
-bootstrap and ownership-checked final direct-map backends, both activation sequences, and the
-exception dispatcher. Static inspection proves that the built kernel contains the exact initramfs
-whose `init` entry was accepted by the loader plus every required translation progress sentinel.
+bootstrap and ownership-checked final direct-map backends, both activation sequences, syscall and
+terminal-fault dispatch, and process lifecycle transitions. Static inspection proves that the
+built kernel contains the exact initramfs whose `init` entry was accepted by the loader plus every
+required translation, terminal success, and user-fault failure sentinel.
 
-Runtime validation is `RUN-INIT-001`. Success requires `cargo xtask test-init` to observe, in order,
+Runtime validation is `RUN-INIT-001`, Runtime Verified for the recorded positive probe. Success requires `cargo xtask test-init` to observe, in order,
 the final-map enter marker, post-switch marker, EL0 enter marker, both exact userspace lines, and
 `PHOENIX_INIT_OK`. A success marker without that exact ordered sequence is a protocol failure.
 Panic, exception, `PHOENIX_INIT_FAIL`, early QEMU exit, timeout, excessive output, and stream
 errors all fail.
 
+Deliberate fault execution is separately tracked as `RUN-UFAULT-001`; the current init program is
+still expected to follow the normal `Exited(42)` success path.
+
 ## TODO
 
-- run `cargo xtask test-init` on the pinned QEMU environment and retain the full evidence;
 - verify TTBR0, ELR, SP, SPSR, descriptor permissions, and the guard fault under GDB;
 - introduce explicit instruction-cache synchronization before enabling caches;
 - runtime-validate the integrated final TTBR1 switch and its ownership-checked user copies;
@@ -123,8 +132,10 @@ errors all fail.
 - accept a checked initramfs supplied independently by firmware or a bootloader instead of
   compile-time embedding;
 - replace fixed probe capacities with accounted process limits where dynamic scale is needed;
-- automate a static early-stack footprint bound before reducing the 512 KiB construction stack;
+- automate a static early-stack footprint bound before reducing the 1 MiB construction stack;
 - replace bounded probe I/O with process-owned descriptors and general fault policy.
+- add focused init variants that deliberately exercise translation, permission, execute-never,
+  and illegal-instruction termination.
 
 ## Skipped work
 

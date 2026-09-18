@@ -1,8 +1,9 @@
 # Read-only Initramfs File Descriptors
 
 This document describes Phoenix's first process-local file table. The table and its transaction
-rules are Host Tested and Cross Compiled. Its loaded-init syscall composition is Runtime Pending.
-It is intentionally a direct read-only initramfs consumer, not yet a general VFS.
+rules are Host Tested and Cross Compiled. Its positive loaded-init syscall composition is Runtime
+Verified on the recorded QEMU 9.1.3 environment. It is intentionally a direct read-only initramfs
+consumer, not yet a general VFS.
 
 ## Current implementation
 
@@ -65,8 +66,9 @@ writable permissions, cross-page writes, unmapped ranges, and backend failure. A
 three operation numbers, bounds, read-only flags, and argument extraction.
 
 The standalone init ELF and deterministic three-entry initramfs are statically inspected for exact
-path and payload bytes. Runtime execution is tracked by `RUN-FS-001`, `RUN-UCOPY-001`, and
-`RUN-INIT-001`.
+path and payload bytes. The recorded `test-init` run verified open/read/EOF/close and exact output;
+`RUN-FS-001` and `RUN-INIT-001` are Runtime Verified, while broader positive/negative user-copy
+coverage remains `RUN-UCOPY-001` Runtime Pending.
 
 ## TODO
 

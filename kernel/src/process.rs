@@ -52,6 +52,105 @@ impl ExitStatus {
     }
 }
 
+/// Access attempted by a user process when it faulted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UserFaultAccess {
+    /// Instruction fetch or execution.
+    Execute,
+    /// Data read.
+    Read,
+    /// Data write.
+    Write,
+    /// The architecture did not identify a memory access.
+    Other,
+}
+
+/// Architecture-neutral class of a terminal user fault.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UserFaultKind {
+    /// An address cannot be represented at the translation level.
+    AddressSize,
+    /// No valid translation exists.
+    Translation,
+    /// A descriptor's access flag rejected the operation.
+    AccessFlag,
+    /// A mapped page rejected the requested permission.
+    Permission,
+    /// The program counter, stack, or data access was misaligned.
+    Alignment,
+    /// An instruction or trapped operation is not available to the process.
+    IllegalInstruction,
+    /// A supervisor call used an unsupported trap convention.
+    BadSystemCall,
+    /// A debugger-visible breakpoint, watchpoint, or step trap occurred.
+    DebugTrap,
+    /// A terminal architecture condition is retained but not yet classified.
+    Other,
+}
+
+/// Terminal user fault translated from architecture-specific exception state.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UserFault {
+    kind: UserFaultKind,
+    access: UserFaultAccess,
+    instruction_pointer: u64,
+    fault_address: Option<u64>,
+    architecture_code: u64,
+}
+
+impl UserFault {
+    /// Construct a fault after architecture-specific validation and decoding.
+    pub const fn new(
+        kind: UserFaultKind,
+        access: UserFaultAccess,
+        instruction_pointer: u64,
+        fault_address: Option<u64>,
+        architecture_code: u64,
+    ) -> Self {
+        Self {
+            kind,
+            access,
+            instruction_pointer,
+            fault_address,
+            architecture_code,
+        }
+    }
+
+    /// Return the architecture-neutral fault class.
+    pub const fn kind(self) -> UserFaultKind {
+        self.kind
+    }
+
+    /// Return the attempted access class.
+    pub const fn access(self) -> UserFaultAccess {
+        self.access
+    }
+
+    /// Return the interrupted user program counter.
+    pub const fn instruction_pointer(self) -> u64 {
+        self.instruction_pointer
+    }
+
+    /// Return the faulting virtual address when the architecture marks it valid.
+    pub const fn fault_address(self) -> Option<u64> {
+        self.fault_address
+    }
+
+    /// Return the unmodified architecture-specific syndrome or reason code.
+    pub const fn architecture_code(self) -> u64 {
+        self.architecture_code
+    }
+}
+
+/// Terminal outcome retained until a process is reaped.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProcessTermination {
+    /// The process invoked the native exit operation.
+    Exited(ExitStatus),
+    /// The process caused a terminal user fault.
+    Faulted(UserFault),
+}
+
 /// Lifecycle phase without phase-specific data.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProcessPhase {
@@ -63,6 +162,8 @@ pub enum ProcessPhase {
     Running,
     /// Execution ended and resources await an explicit reap.
     Exited,
+    /// A terminal user fault ended execution and awaits an explicit reap.
+    Faulted,
 }
 
 /// Complete lifecycle state of one process.
@@ -76,6 +177,8 @@ pub enum ProcessState {
     Running,
     /// Execution ended with the retained native status.
     Exited(ExitStatus),
+    /// Execution ended with a classified user fault.
+    Faulted(UserFault),
 }
 
 impl ProcessState {
@@ -86,6 +189,7 @@ impl ProcessState {
             Self::Ready => ProcessPhase::Ready,
             Self::Running => ProcessPhase::Running,
             Self::Exited(_) => ProcessPhase::Exited,
+            Self::Faulted(_) => ProcessPhase::Faulted,
         }
     }
 
@@ -93,6 +197,15 @@ impl ProcessState {
     pub const fn exit_status(self) -> Option<ExitStatus> {
         match self {
             Self::Exited(status) => Some(status),
+            Self::Created | Self::Ready | Self::Running | Self::Faulted(_) => None,
+        }
+    }
+
+    /// Return the terminal outcome after normal exit or user fault.
+    pub const fn termination(self) -> Option<ProcessTermination> {
+        match self {
+            Self::Exited(status) => Some(ProcessTermination::Exited(status)),
+            Self::Faulted(fault) => Some(ProcessTermination::Faulted(fault)),
             Self::Created | Self::Ready | Self::Running => None,
         }
     }
@@ -162,6 +275,11 @@ impl ProcessControl {
     /// Record terminal status for the active process.
     pub fn exit(&mut self, status: ExitStatus) -> Result<(), ProcessTransitionError> {
         self.transition(ProcessPhase::Running, ProcessState::Exited(status))
+    }
+
+    /// Record a terminal fault for the active process.
+    pub fn fault(&mut self, fault: UserFault) -> Result<(), ProcessTransitionError> {
+        self.transition(ProcessPhase::Running, ProcessState::Faulted(fault))
     }
 
     fn transition(
@@ -234,8 +352,8 @@ pub enum ProcessLookupError {
 pub enum ProcessReapError {
     /// Identifier lookup failed.
     Lookup(ProcessLookupError),
-    /// Only an exited process can release its resource aggregate.
-    NotExited,
+    /// Only a normally exited or faulted process can release its resources.
+    NotTerminated,
 }
 
 /// Full-table error that returns ownership of the uninserted resources.
@@ -255,7 +373,7 @@ impl<T> ProcessTableFull<T> {
 #[derive(Debug, Eq, PartialEq)]
 pub struct ReapedProcess<T> {
     id: ProcessId,
-    status: ExitStatus,
+    termination: ProcessTermination,
     resources: T,
 }
 
@@ -265,9 +383,9 @@ impl<T> ReapedProcess<T> {
         self.id
     }
 
-    /// Return its retained exit status.
-    pub const fn status(&self) -> ExitStatus {
-        self.status
+    /// Return its retained normal-exit or fault outcome.
+    pub const fn termination(&self) -> ProcessTermination {
+        self.termination
     }
 
     /// Recover the process-owned resource aggregate.
@@ -371,14 +489,23 @@ impl<T, const CAPACITY: usize> ProcessTable<T, CAPACITY> {
             .map_err(ProcessTableStateError::Transition)
     }
 
-    /// Remove one exited process and return its resources to the caller.
+    /// Transition a running process to faulted while retaining all resources.
+    pub fn fault(&mut self, id: ProcessId, fault: UserFault) -> Result<(), ProcessTableStateError> {
+        self.get_mut(id)
+            .map_err(ProcessTableStateError::Lookup)?
+            .control
+            .fault(fault)
+            .map_err(ProcessTableStateError::Transition)
+    }
+
+    /// Remove one terminal process and return its resources to the caller.
     pub fn reap(&mut self, id: ProcessId) -> Result<ReapedProcess<T>, ProcessReapError> {
-        let status = self
+        let termination = self
             .get(id)
             .map_err(ProcessReapError::Lookup)?
             .state()
-            .exit_status()
-            .ok_or(ProcessReapError::NotExited)?;
+            .termination()
+            .ok_or(ProcessReapError::NotTerminated)?;
         let replacement = match id.generation().checked_add(1).and_then(NonZeroU64::new) {
             Some(generation) => ProcessSlot::Vacant { generation },
             None => ProcessSlot::Retired,
@@ -389,7 +516,7 @@ impl<T, const CAPACITY: usize> ProcessTable<T, CAPACITY> {
         };
         Ok(ReapedProcess {
             id,
-            status,
+            termination,
             resources: process.resources,
         })
     }
@@ -443,6 +570,7 @@ mod tests {
     use super::{
         ExitStatus, ProcessControl, ProcessId, ProcessIdError, ProcessLookupError, ProcessPhase,
         ProcessReapError, ProcessSlot, ProcessState, ProcessTable, ProcessTableStateError,
+        ProcessTermination, UserFault, UserFaultAccess, UserFaultKind,
     };
 
     #[test]
@@ -490,7 +618,7 @@ mod tests {
     fn reaping_requires_exit_and_invalidates_the_old_generation() {
         let mut table = ProcessTable::<u32, 1>::new();
         let first = table.insert(55).unwrap();
-        assert_eq!(table.reap(first), Err(ProcessReapError::NotExited));
+        assert_eq!(table.reap(first), Err(ProcessReapError::NotTerminated));
         assert_eq!(
             table.start(first),
             Err(ProcessTableStateError::Transition(
@@ -506,7 +634,10 @@ mod tests {
         table.exit(first, ExitStatus::new(9)).unwrap();
         let reaped = table.reap(first).unwrap();
         assert_eq!(reaped.id(), first);
-        assert_eq!(reaped.status().raw(), 9);
+        assert_eq!(
+            reaped.termination(),
+            ProcessTermination::Exited(ExitStatus::new(9))
+        );
         assert_eq!(reaped.into_resources(), 55);
         assert!(table.is_empty());
         assert_eq!(table.get(first), Err(ProcessLookupError::StaleIdentifier));
@@ -534,5 +665,35 @@ mod tests {
         assert_eq!(table.reap(id).unwrap().into_resources(), 7);
         assert_eq!(table.insert(8).unwrap_err().into_resources(), 8);
         assert_eq!(table.get(id), Err(ProcessLookupError::StaleIdentifier));
+    }
+
+    #[test]
+    fn fault_is_terminal_and_reap_retains_exact_diagnostics() {
+        let fault = UserFault::new(
+            UserFaultKind::Permission,
+            UserFaultAccess::Write,
+            0x400080,
+            Some(0x800000),
+            0x9600_004f,
+        );
+        assert_eq!(fault.kind(), UserFaultKind::Permission);
+        assert_eq!(fault.access(), UserFaultAccess::Write);
+        assert_eq!(fault.instruction_pointer(), 0x400080);
+        assert_eq!(fault.fault_address(), Some(0x800000));
+        assert_eq!(fault.architecture_code(), 0x9600_004f);
+
+        let mut table = ProcessTable::<u8, 1>::new();
+        let id = table.insert(9).unwrap();
+        table.make_ready(id).unwrap();
+        table.start(id).unwrap();
+        table.fault(id, fault).unwrap();
+        assert_eq!(table.get(id).unwrap().state(), ProcessState::Faulted(fault));
+        assert!(matches!(
+            table.exit(id, ExitStatus::new(0)),
+            Err(ProcessTableStateError::Transition(_))
+        ));
+        let reaped = table.reap(id).unwrap();
+        assert_eq!(reaped.termination(), ProcessTermination::Faulted(fault));
+        assert_eq!(reaped.into_resources(), 9);
     }
 }

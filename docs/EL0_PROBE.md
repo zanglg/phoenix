@@ -2,7 +2,8 @@
 
 This document describes the opt-in `el0-probe` kernel feature. It provides the shortest statically
 verifiable path through user translation, `eret`, `SVC`, exception return, and process exit. The
-probe has not executed on QEMU and is therefore Runtime Pending.
+positive probe is Runtime Verified on the recorded QEMU 9.1.3 environment; fault variants remain
+Runtime Pending.
 
 ## Purpose and activation
 
@@ -49,7 +50,9 @@ The user program performs:
 Only lower-AArch64 synchronous exceptions with class `SupervisorCallAArch64` and immediate zero
 enter this probe dispatcher. Unknown and not-yet-implemented `write` calls return
 `-NotImplemented`. `exit(42)` prints `PHOENIX_EL0_OK` and halts; another status prints
-`PHOENIX_EL0_FAIL`. Other exceptions retain the fatal diagnostic path.
+`PHOENIX_EL0_FAIL`. A consistent lower-AArch64 synchronous user fault prints
+`PHOENIX_USER_FAULT` and `PHOENIX_EL0_FAIL: user-fault`. Current-EL, asynchronous, and
+inconsistent exceptions retain the fatal `PHOENIX_EXCEPTION` path.
 
 This deliberately validates a returning syscall before the terminal exit call. It does not claim
 process teardown, scheduling, ELF loading, or general syscall support.
@@ -65,6 +68,7 @@ process teardown, scheduling, ELF loading, or general syscall support.
 - page tables are private until all descriptors are complete;
 - exception vectors and the EL1 boot stack exist before `eret`;
 - the EL0 test ignores `PHOENIX_BOOT_OK` and requires its own final marker.
+- user faults and kernel exceptions cannot satisfy the success protocol.
 
 ## Current validation
 
@@ -74,11 +78,14 @@ process teardown, scheduling, ELF loading, or general syscall support.
 - ELF Inspected: user entry equals the start of one aligned code page and the stack is one aligned
   page;
 - disassembly inspected during development: the probe contains the expected two `SVC #0` paths;
-- Runtime Pending: every CPU, translation, exception, and marker behavior above.
+- Runtime Verified: `cargo xtask test-el0` on QEMU 9.1.3 `virt-9.1` observed ordered
+  `PHOENIX_EL0_ENTER` and `PHOENIX_EL0_OK` output.
+
+The user-fault split is documented in `docs/USER_FAULTS.md` and tracked at runtime by
+`RUN-UFAULT-001`.
 
 ## TODO
 
-- execute `cargo xtask test-el0` and record the complete transcript;
 - verify the EL0 exception frame, SPSR mode, PC, TTBR0 root, and user permissions under GDB;
 - replace `VMALLE1` with an exact ASID-aware invalidation policy before identifiers are reused;
 - install a permission-separated final TTBR1 so the kernel alias is no longer a coarse RWX block;
@@ -86,7 +93,8 @@ process teardown, scheduling, ELF loading, or general syscall support.
 - replace the linked assembly page with an ELF image populated through allocator-owned frames;
 - use the general guarded-stack planner rather than this fixed one-page layout;
 - turn successful `exit` into process teardown and a scheduler handoff;
-- add fault probes for kernel access, guard-page access, execution from stack, and bad SVC immediate.
+- add deliberate variants for kernel access, guard-page access, execution from stack, and bad SVC
+  immediate, each requiring the exact fault kind and terminal marker order.
 
 ## Skipped work
 

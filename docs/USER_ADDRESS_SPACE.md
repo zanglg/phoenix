@@ -38,6 +38,11 @@ virtual-to-physical ownership metadata, then accesses frames through an explicit
 backend. It never creates a reference from an untrusted user virtual pointer and requires write
 permission for kernel-to-user copies. See `docs/USER_COPY.md`.
 
+A lower-EL synchronous access failure against an active mapping can now be normalized into a
+terminal process fault without treating it as an EL1 kernel failure. This reports existing
+translation/permission violations but does not mutate mappings or recover missing pages. See
+`docs/USER_FAULTS.md`.
+
 ## Permission policy
 
 User permissions are explicit read/write/execute booleans with these enforced rules:
@@ -72,7 +77,7 @@ bad page counts, and stack underflow. The same module is Cross Compiled for AArc
 ## TODO
 
 - move the monotonic ASID-1 allocation under process ownership and add safe retirement/reuse;
-- add general recoverable-fault support beyond immutable owned mappings;
+- add recoverable-fault support beyond the current terminal classification of immutable mappings;
 - define stack growth limits and resource accounting;
 - validate kernel isolation and guard-page faults on QEMU.
 

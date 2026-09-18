@@ -3,7 +3,8 @@
 This document describes Phoenix's first `copy_from_user` and `copy_to_user` boundaries plus their
 bounded syscall consumers. The generic range walks and ABI request validation are Host Tested. The
 concrete AArch64 bootstrap/final-direct-map backends, active-address-space retention, syscall
-paths, and userspace calls are Cross Compiled but Runtime Pending.
+paths, and userspace calls are Cross Compiled; the positive loaded-init write/read path is Runtime
+Verified, while boundary and failure injection on target remain Runtime Pending.
 
 ## Current implementation
 
@@ -76,11 +77,13 @@ all syscall bounds. The concrete composition and static runtime lifetime compile
 AArch64. Init ELF inspection requires the message and path bytes plus exact linker-symbol extents.
 
 The QEMU harness is host tested to reject `PHOENIX_INIT_OK` when the exact ordered userspace output
-did not precede it. Target execution is covered by `RUN-UCOPY-001` and `RUN-INIT-001`.
+did not precede it. The recorded `test-init` run exercised checked copies in both directions and
+reached `RUN-INIT-001`; complete same/cross-page and invalid-range target coverage remains tracked
+by `RUN-UCOPY-001`.
 
 ## TODO
 
-- run the loaded-init write path on QEMU and retain its complete serial evidence;
+- add explicit target probes for same-page, cross-page, invalid-range, and backend-failure cases;
 - replace the probe-local ownership-checked direct-map adapter with a process/VM-owned API;
 - move the static runtime's now-explicit lifecycle control and resources into a synchronized
   process-table owner;

@@ -1,8 +1,8 @@
 # Device Tree Support
 
 Phoenix contains a borrowed, allocation-free parser for version-17-compatible flattened device
-trees. Its behavior is Host Tested and Cross Compiled; the DTB supplied by QEMU has not yet been
-read at runtime.
+trees. Its behavior is Host Tested and Cross Compiled; the recorded QEMU 9.1.3 boot-memory probe
+read the generated DTB at runtime and used its boot CPU, size, memory, and reservations.
 
 ## Validated representation
 
@@ -31,9 +31,9 @@ partial `reg` entries, address overflow, and a tree without non-empty memory are
 Dynamic `size`-only reserved-memory requests and non-empty address-translating `ranges` are rejected
 rather than silently made allocatable.
 
-## Deferred target integration
+## Target integration boundary
 
-The bootstrap currently forwards the DTB physical address but does not dereference it. Before
-runtime integration, Phoenix must define how the blob's physical pages remain reserved and how
-long borrowed references remain valid. Device-specific extraction for interrupt controllers,
-timers, PSCI, and VirtIO will be added only when their consumers exist.
+The bootstrap forwards the DTB physical address, and focused memory/init paths borrow it through
+the temporary high RAM alias while reserving every page touched by the blob. The default boot path
+still does not consume it. Device-specific extraction for interrupt controllers, timers, PSCI, and
+VirtIO will be added only when their consumers exist.

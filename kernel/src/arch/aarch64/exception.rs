@@ -2,6 +2,8 @@
 
 use core::mem::{align_of, offset_of, size_of};
 
+use crate::process::{UserFault, UserFaultAccess, UserFaultKind};
+
 /// Architectural alignment of `VBAR_EL1`.
 pub const VECTOR_TABLE_ALIGNMENT: usize = 2048;
 /// Total size of an AArch64 exception vector table.
@@ -529,6 +531,104 @@ impl DataAbortSyndrome {
     }
 }
 
+/// Classify one synchronous AArch64 exception taken from EL0.
+///
+/// `None` means the vector origin/kind or syndrome class is inconsistent with
+/// a supported lower-EL terminal fault and must remain a kernel diagnostic.
+pub fn classify_user_fault(slot: VectorSlot, frame: &ExceptionFrame) -> Option<UserFault> {
+    if slot != VectorSlot::new(VectorOrigin::LowerAArch64, ExceptionKind::Synchronous) {
+        return None;
+    }
+    let syndrome = frame.syndrome();
+    let (kind, access, fault_address) = match syndrome.exception_class() {
+        ExceptionClass::InstructionAbortLower => (
+            user_fault_kind(DataFaultStatus::decode((syndrome.iss() & 0x3f) as u8)),
+            UserFaultAccess::Execute,
+            far_if_valid(frame, syndrome.iss()),
+        ),
+        ExceptionClass::DataAbortLower => {
+            let abort = syndrome
+                .data_abort()
+                .expect("the lower data-abort class was matched");
+            (
+                user_fault_kind(abort.fault_status()),
+                if abort.is_write() {
+                    UserFaultAccess::Write
+                } else {
+                    UserFaultAccess::Read
+                },
+                if abort.far_not_valid() {
+                    None
+                } else {
+                    Some(frame.fault_address())
+                },
+            )
+        }
+        ExceptionClass::ProgramCounterAlignment => (
+            UserFaultKind::Alignment,
+            UserFaultAccess::Execute,
+            Some(frame.program_counter()),
+        ),
+        ExceptionClass::StackPointerAlignment => (
+            UserFaultKind::Alignment,
+            UserFaultAccess::Other,
+            Some(frame.sp_el0()),
+        ),
+        ExceptionClass::SupervisorCallAArch64 => {
+            (UserFaultKind::BadSystemCall, UserFaultAccess::Other, None)
+        }
+        ExceptionClass::Unknown
+        | ExceptionClass::TrappedWfiWfe
+        | ExceptionClass::TrappedSimdFloatingPoint
+        | ExceptionClass::IllegalExecutionState
+        | ExceptionClass::TrappedSystemRegister => (
+            UserFaultKind::IllegalInstruction,
+            UserFaultAccess::Other,
+            None,
+        ),
+        ExceptionClass::BreakpointLower
+        | ExceptionClass::SoftwareStepLower
+        | ExceptionClass::WatchpointLower
+        | ExceptionClass::BreakpointInstructionAArch64 => {
+            (UserFaultKind::DebugTrap, UserFaultAccess::Other, None)
+        }
+        ExceptionClass::Other(_) => (UserFaultKind::Other, UserFaultAccess::Other, None),
+        ExceptionClass::InstructionAbortCurrent
+        | ExceptionClass::DataAbortCurrent
+        | ExceptionClass::SError
+        | ExceptionClass::BreakpointCurrent
+        | ExceptionClass::SoftwareStepCurrent
+        | ExceptionClass::WatchpointCurrent
+        | ExceptionClass::BreakpointInstructionAArch32 => return None,
+    };
+    Some(UserFault::new(
+        kind,
+        access,
+        frame.program_counter(),
+        fault_address,
+        syndrome.raw(),
+    ))
+}
+
+fn far_if_valid(frame: &ExceptionFrame, iss: u32) -> Option<u64> {
+    if iss & (1 << 10) == 0 {
+        Some(frame.fault_address())
+    } else {
+        None
+    }
+}
+
+const fn user_fault_kind(status: DataFaultStatus) -> UserFaultKind {
+    match status {
+        DataFaultStatus::AddressSize(_) => UserFaultKind::AddressSize,
+        DataFaultStatus::Translation(_) => UserFaultKind::Translation,
+        DataFaultStatus::AccessFlag(_) => UserFaultKind::AccessFlag,
+        DataFaultStatus::Permission(_) => UserFaultKind::Permission,
+        DataFaultStatus::Alignment => UserFaultKind::Alignment,
+        DataFaultStatus::Other(_) => UserFaultKind::Other,
+    }
+}
+
 const _: () = {
     assert!(VECTOR_TABLE_SIZE == 16 * VECTOR_ENTRY_SIZE);
     assert!(ExceptionFrame::X0_OFFSET == 0);
@@ -548,7 +648,9 @@ mod tests {
         AccessSize, DataAbortAccess, DataFaultStatus, ExceptionClass, ExceptionFrame,
         ExceptionKind, FaultLevel, InstructionLength, Syndrome, SyndromeDecodeError,
         VECTOR_ENTRY_SIZE, VECTOR_TABLE_ALIGNMENT, VECTOR_TABLE_SIZE, VectorOrigin, VectorSlot,
+        classify_user_fault,
     };
+    use crate::process::{UserFaultAccess, UserFaultKind};
 
     #[test]
     fn all_vector_slots_cover_the_table_in_architectural_order() {
@@ -671,5 +773,46 @@ mod tests {
             let syndrome = Syndrome::from_raw((0x25_u64 << 26) | status);
             assert_eq!(syndrome.data_abort().unwrap().fault_status(), expected);
         }
+    }
+
+    #[test]
+    fn classifies_only_consistent_lower_el_synchronous_faults() {
+        let lower_sync = VectorSlot::new(VectorOrigin::LowerAArch64, ExceptionKind::Synchronous);
+        let mut frame = ExceptionFrame::zeroed();
+        frame.elr_el1 = 0x0040_0080;
+        frame.far_el1 = 0x0080_0000;
+        frame.esr_el1 = (0x24_u64 << 26) | (1 << 25) | (1 << 6) | 0b001111;
+        let write = classify_user_fault(lower_sync, &frame).unwrap();
+        assert_eq!(write.kind(), UserFaultKind::Permission);
+        assert_eq!(write.access(), UserFaultAccess::Write);
+        assert_eq!(write.instruction_pointer(), 0x0040_0080);
+        assert_eq!(write.fault_address(), Some(0x0080_0000));
+        assert_eq!(write.architecture_code(), frame.esr_el1);
+
+        frame.esr_el1 = (0x20_u64 << 26) | (1 << 25) | (1 << 10) | 0b000111;
+        let execute = classify_user_fault(lower_sync, &frame).unwrap();
+        assert_eq!(execute.kind(), UserFaultKind::Translation);
+        assert_eq!(execute.access(), UserFaultAccess::Execute);
+        assert_eq!(execute.fault_address(), None);
+
+        frame.esr_el1 = (0x15_u64 << 26) | 1;
+        assert_eq!(
+            classify_user_fault(lower_sync, &frame).unwrap().kind(),
+            UserFaultKind::BadSystemCall
+        );
+        frame.esr_el1 = 0x25_u64 << 26;
+        assert_eq!(classify_user_fault(lower_sync, &frame), None);
+        frame.esr_el1 = 0x2f_u64 << 26;
+        assert_eq!(classify_user_fault(lower_sync, &frame), None);
+        frame.esr_el1 = 0x38_u64 << 26;
+        assert_eq!(classify_user_fault(lower_sync, &frame), None);
+        frame.esr_el1 = 0x24_u64 << 26;
+        assert_eq!(
+            classify_user_fault(
+                VectorSlot::new(VectorOrigin::CurrentSpX, ExceptionKind::Synchronous),
+                &frame,
+            ),
+            None
+        );
     }
 }

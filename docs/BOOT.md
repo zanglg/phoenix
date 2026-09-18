@@ -1,7 +1,8 @@
 # AArch64 Boot Contract
 
 This document records the current, intentionally small boot contract. It describes what the
-source and ELF layout require; it is not evidence that the image has run on an emulator.
+source and ELF layout require and the boundary verified by the recorded QEMU run. Unlisted entry
+state and negative paths must not be inferred from that positive evidence.
 
 ## Image and entry
 
@@ -38,7 +39,7 @@ remain disabled or deferred. The default image retains the coarse mapping; the o
 linked EL1 exception vector table before emitting its first console line, but keeps asynchronous
 exceptions masked.
 
-The linker reserves a zeroed BSS, one page-aligned 4 KiB guard frame, and a 512 KiB,
+The linker reserves a zeroed BSS, one page-aligned 4 KiB guard frame, and a 1 MiB,
 16-byte-aligned boot-construction stack. The coarse bootstrap mappings still map the guard; the
 final TTBR1 hierarchy deliberately omits it. The larger temporary stack covers the statically
 inspected debug-build footprint of allocation-free page-table and process-image planning; it is
@@ -56,7 +57,9 @@ On the intended platform, `kernel_main` should print the Phoenix build identity,
 argument, and `PHOENIX_BOOT_OK`, then flush PL011 and wait. A Rust panic should print
 `PHOENIX_PANIC`, the available panic information, flush, and wait.
 
-These strings define the implemented smoke-test protocol. They have not yet been observed on QEMU.
+These strings define the implemented smoke-test protocol. On QEMU 9.1.3 with `virt-9.1`, the
+bounded boot probe observed the build identity, DTB argument `0x0000000048000000`, and
+`PHOENIX_BOOT_OK`.
 
 ## Current validation
 
@@ -70,16 +73,13 @@ These commands build and statically verify the ELF machine type, entry address, 
 and virtual load addresses, required boot symbols, page-table alignment, BSS ordering, exact guard
 placement, stack size/alignment, raw image, and linker map. `cargo xtask ci` includes both commands.
 
-The bounded `cargo xtask test-boot` runner is documented in `docs/QEMU.md`. It is implemented and
-Host Tested at the command-construction and output-classification level, but has not been executed.
-The focused `cargo xtask test-kernel-map` runner similarly remains Runtime Pending.
+The bounded `cargo xtask test-boot` runner is documented in `docs/QEMU.md`. It is Host Tested and
+Runtime Verified for the recorded QEMU 9.1.3 environment. The focused `cargo xtask test-kernel-map`
+probe also passed there; negative panic, exception, and guard-fault paths remain Runtime Pending.
 
 ## Open runtime decisions
 
-- whether the initial `virt-9.2` and Cortex-A72 pins remain after real compatibility evidence;
-- the verified, rather than merely constructed, QEMU command line;
 - a guest-driven process-exit mechanism to replace host termination after the sentinel;
-- observed EL1 and EL2 entry behavior;
 - confirmation that direct boot supplies every assumed register and cache state.
 
 Resolve these from real emulator evidence before treating any runtime command as support evidence.

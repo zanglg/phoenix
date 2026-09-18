@@ -11,11 +11,12 @@ narrow support claim:
 - the Rust workspace follows stable Rust and declares Rust 1.95 as its minimum version;
 - the `no_std` kernel links as an AArch64 ELF and can be converted to a raw image;
 - static inspection verifies its machine type, entry, load addresses, page-table alignment,
-  BSS bounds, one-page boot-stack guard, and 512 KiB boot-construction stack;
+  BSS bounds, one-page boot-stack guard, and 1 MiB boot-construction stack;
 - rust-analyzer can use the configured kernel target from an x86_64 development host;
 - host-side unit tests and validation are available through `cargo xtask`;
 - a bounded QEMU runner and boot-test harness are implemented and host tested;
-- an opt-in first-EL0 probe is cross-linked and statically inspected, but not runtime verified;
+- bounded QEMU probes have verified direct boot, DTB/allocator access, final TTBR1 publication,
+  the first EL0 transition, and the loaded-init/file-I/O path on the pinned board;
 - validated ELF segments and a guarded stack can be planned and assigned frames transactionally;
 - native argc/argv/envp and minimal auxiliary-vector stack bytes are host tested;
 - a separately linked one-page AArch64 `init` ELF is accepted by the Phoenix loader and inspected;
@@ -26,18 +27,22 @@ narrow support claim:
 - checked cross-page user copies and bounded `open`/`read`/`write`/`close` probes let init read
   `etc/motd` from initramfs into its stack and emit verified output without raw pointer dereferences;
 - an architecture-neutral process state machine and generation-checked fixed-capacity registry are
-  host tested; loaded init uses the state machine for ready, running, and exited transitions;
+  host tested; loaded init uses the state machine for ready, running, exited, and faulted
+  transitions;
+- lower-AArch64 synchronous user faults are normalized into retained terminal process diagnostics;
+  current-EL and inconsistent exceptions remain on the kernel fatal path;
 - lower-half AArch64 user-table topology and descriptor materialization are host tested;
 - nonzero 8-bit AArch64 ASIDs, monotonic no-reuse allocation, and checked TTBR0 composition are
   host tested; both EL0 paths use ASID 1;
-- a checked QEMU `virt` bootstrap physical-memory backend is cross-compiled but runtime pending;
+- the checked QEMU `virt` bootstrap physical-memory backend has performed one DTB-derived
+  allocation/readback/scrub/release cycle on the pinned board;
 - DTB memory plus firmware/kernel/DTB reservations form a transactional boot allocator map;
 - an opt-in boot-memory probe cross-links the real DTB-to-allocation-to-readback path;
 - an opt-in final-kernel-map image builds allocator-owned TTBR1 tables with RX text, RO/NX
   rodata, RW/NX RAM, an unmapped boot-stack guard, and a page-granular PL011 mapping, then
-  publishes them with barriers and TLB invalidation; target execution is pending;
-- runtime boot and serial output have **not** been validated because the current development
-  environment has no QEMU.
+  publishes them with barriers and TLB invalidation; the focused runtime probe has passed;
+- early PL011 output and the bounded boot smoke test have been verified on QEMU 9.1.3; deliberate
+  panic, fault, guard, and permission-negative probes remain Runtime Pending.
 
 [`boot.S`](kernel/src/arch/aarch64/boot.S) is Phoenix's first AArch64 bootstrap implementation.
 The boot contract and current validation boundary are recorded in [`docs/BOOT.md`](docs/BOOT.md).
@@ -108,7 +113,8 @@ the archive and end-to-end integration in [`docs/INITRAMFS.md`](docs/INITRAMFS.m
 and its explicit limits are recorded in [`docs/KERNEL_STACKS.md`](docs/KERNEL_STACKS.md).
 Process identity, lifecycle, ownership, and teardown deferrals are documented in
 [`docs/PROCESS_LIFECYCLE.md`](docs/PROCESS_LIFECYCLE.md); the current nonzero/no-reuse ASID policy
-is in [`docs/AARCH64_ASIDS.md`](docs/AARCH64_ASIDS.md).
+is in [`docs/AARCH64_ASIDS.md`](docs/AARCH64_ASIDS.md), and the current terminal EL0 fault boundary
+is in [`docs/USER_FAULTS.md`](docs/USER_FAULTS.md).
 
 ## LSP target
 
@@ -152,14 +158,16 @@ ordered Roadmap, and only the first incomplete section is active.
 Phoenix reserves SemVer-compatible version numbers for releases. The project version has one
 source of truth: `workspace.package.version` in [`Cargo.toml`](Cargo.toml).
 
-During the long pre-release construction period, the Cargo version remains `0.0.0`, the ordered
-Roadmap describes progress, and Git commit hashes identify exact states. Development steps do not
-create releases or tags. `CHANGELOG.md` remains under `Unreleased` during this period.
+During construction, the Cargo version remains `0.0.0`, the ordered Roadmap describes progress,
+and Git commit hashes identify exact states. Development steps do not create releases or tags.
+`CHANGELOG.md` remains under `Unreleased` during this period.
 
-The first formal release is `0.1.0`, created only after the release boundary in `ROADMAP.md` is
-satisfied. Only releases receive annotated `vX.Y.Z` tags, and strict SemVer compatibility meaning
-begins when the corresponding public contract is documented. ABI-specific versions will be
-introduced only when those ABIs actually exist.
+After the technical release boundary in `ROADMAP.md` is satisfied, Phoenix first becomes
+`0.1.0-pre.1`. Owner review and requested corrections may produce additional `0.1.0-pre.N`
+candidates. The first formal release is `0.1.0`, created only after explicit owner acceptance of a
+reviewed candidate. Candidates and releases receive matching annotated tags; strict SemVer
+compatibility meaning begins when the corresponding public contract is documented. ABI-specific
+versions will be introduced only when those ABIs actually exist.
 
 The workspace declares Rust 1.95 as its minimum supported Rust version (MSRV). Development follows
 `stable`; the exact compiler identity will be embedded in release provenance. If a stable update

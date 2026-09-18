@@ -72,7 +72,9 @@ use phoenix_kernel::arch::aarch64::asid::{AddressSpaceId, AsidAllocator};
 #[cfg(all(feature = "el0-probe", not(feature = "loaded-init-probe")))]
 use phoenix_kernel::arch::aarch64::el0;
 #[cfg(any(feature = "el0-probe", feature = "loaded-init-probe"))]
-use phoenix_kernel::arch::aarch64::exception::{ExceptionClass, ExceptionKind, VectorOrigin};
+use phoenix_kernel::arch::aarch64::exception::{
+    ExceptionClass, ExceptionKind, VectorOrigin, classify_user_fault,
+};
 #[cfg(any(feature = "el0-probe", feature = "loaded-init-probe"))]
 use phoenix_kernel::arch::aarch64::syscall;
 #[cfg(feature = "loaded-init-probe")]
@@ -88,7 +90,7 @@ use phoenix_kernel::platform::aarch64::qemu_virt::{
     BootstrapMemoryError, read_direct_mapped_frame, write_direct_mapped_frame,
 };
 #[cfg(feature = "loaded-init-probe")]
-use phoenix_kernel::process::{ExitStatus, ProcessControl, ProcessId};
+use phoenix_kernel::process::{ExitStatus, ProcessControl, ProcessId, UserFault};
 #[cfg(feature = "loaded-init-probe")]
 use phoenix_kernel::process_image::ProcessImagePlan;
 #[cfg(feature = "loaded-init-probe")]
@@ -106,6 +108,8 @@ core::arch::global_asm!(include_str!("arch/aarch64/user_probe.S"));
 const BOOT_SUCCESS_SENTINEL: &str = "PHOENIX_BOOT_OK";
 const PANIC_SENTINEL: &str = "PHOENIX_PANIC";
 const EXCEPTION_SENTINEL: &str = "PHOENIX_EXCEPTION";
+#[cfg(any(feature = "el0-probe", feature = "loaded-init-probe"))]
+const USER_FAULT_SENTINEL: &str = "PHOENIX_USER_FAULT";
 #[cfg(feature = "boot-memory-probe")]
 const MEMORY_SUCCESS_SENTINEL: &str = "PHOENIX_MEMORY_OK";
 #[cfg(all(
@@ -718,6 +722,21 @@ unsafe fn exit_active_init_process(
     }
 }
 
+#[cfg(feature = "loaded-init-probe")]
+unsafe fn fault_active_init_process(
+    fault: UserFault,
+) -> Result<ProcessId, phoenix_kernel::process::ProcessTransitionError> {
+    let slot = &raw mut INIT_RUNTIME;
+    // SAFETY: the runtime is installed and running before a lower-EL fault is
+    // dispatched. Dispatch is non-reentrant on one CPU and no borrow escapes.
+    unsafe {
+        let runtime = (*slot).as_mut_ptr();
+        let process = &mut *core::ptr::addr_of_mut!((*runtime).process);
+        process.fault(fault)?;
+        Ok(process.id())
+    }
+}
+
 /// Common target of the assembly exception vectors.
 ///
 /// # Safety
@@ -736,6 +755,15 @@ pub unsafe extern "C" fn phoenix_exception_dispatch(frame: *mut ExceptionFrame, 
         return;
     }
 
+    #[cfg(feature = "loaded-init-probe")]
+    if handle_loaded_init_fault(frame, slot) {
+        return;
+    }
+    #[cfg(all(feature = "el0-probe", not(feature = "loaded-init-probe")))]
+    if handle_static_el0_fault(frame, slot) {
+        return;
+    }
+
     let mut console = Console::new(EarlyPl011::new());
     let _ = writeln!(console, "{EXCEPTION_SENTINEL}");
     let _ = writeln!(console, "vector: {slot:?}");
@@ -743,6 +771,59 @@ pub unsafe extern "C" fn phoenix_exception_dispatch(frame: *mut ExceptionFrame, 
     let _ = writeln!(console, "spsr: {:#018x}", frame.saved_program_status());
     let _ = writeln!(console, "esr: {:#018x}", frame.syndrome().raw());
     let _ = writeln!(console, "far: {:#018x}", frame.fault_address());
+    console.sink_mut().flush();
+    halt()
+}
+
+#[cfg(feature = "loaded-init-probe")]
+fn handle_loaded_init_fault(frame: &ExceptionFrame, slot: Option<VectorSlot>) -> bool {
+    let Some(slot) = slot else {
+        return false;
+    };
+    let Some(fault) = classify_user_fault(slot, frame) else {
+        return false;
+    };
+    // SAFETY: the only reachable lower-EL context is the installed running
+    // init process, and exception dispatch is synchronous and non-reentrant.
+    let Ok(process_id) = (unsafe { fault_active_init_process(fault) }) else {
+        return false;
+    };
+    let mut console = Console::new(EarlyPl011::new());
+    let _ = writeln!(console, "{USER_FAULT_SENTINEL}");
+    let _ = writeln!(
+        console,
+        "fault: process={process_id:?} kind={:?} access={:?} pc={:#018x} address={:?} syndrome={:#018x}",
+        fault.kind(),
+        fault.access(),
+        fault.instruction_pointer(),
+        fault.fault_address(),
+        fault.architecture_code(),
+    );
+    let _ = writeln!(console, "{INIT_FAILURE_SENTINEL}: user-fault");
+    console.sink_mut().flush();
+    halt()
+}
+
+#[cfg(all(feature = "el0-probe", not(feature = "loaded-init-probe")))]
+fn handle_static_el0_fault(frame: &ExceptionFrame, slot: Option<VectorSlot>) -> bool {
+    let Some(slot) = slot else {
+        return false;
+    };
+    let Some(fault) = classify_user_fault(slot, frame) else {
+        return false;
+    };
+    let mut console = Console::new(EarlyPl011::new());
+    let _ = writeln!(console, "{USER_FAULT_SENTINEL}");
+    let _ = writeln!(
+        console,
+        "fault: kind={:?} access={:?} pc={:#018x} address={:?} syndrome={:#018x}",
+        fault.kind(),
+        fault.access(),
+        fault.instruction_pointer(),
+        fault.fault_address(),
+        fault.architecture_code(),
+    );
+    let _ = writeln!(console, "{EL0_FAILURE_SENTINEL}: user-fault");
     console.sink_mut().flush();
     halt()
 }

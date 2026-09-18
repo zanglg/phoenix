@@ -2,8 +2,8 @@
 
 This document describes the opt-in `boot-memory-probe` kernel feature. It joins Phoenix's parsed
 DTB, linker-derived image reservation, physical memory map, frame allocator, and temporary
-higher-half RAM access in one bounded target path. The image is Cross Compiled and ELF Inspected;
-the complete probe is Runtime Pending.
+higher-half RAM access in one bounded target path. The image is Cross Compiled, ELF Inspected, and
+Runtime Verified for the recorded QEMU 9.1.3 environment.
 
 ## Purpose and activation
 
@@ -51,12 +51,11 @@ in the allocator.
 - Cross Compiled: the complete feature-gated target path and physical memory operations;
 - ELF Inspected: normal entry, load addresses, bootstrap table, vectors, BSS, stack, embedded
   memory sentinel, raw image, and map artifact;
-- Runtime Pending: DTB placement/content, linker conversion, exact free map, RAM alias access,
-  byte readback, and sentinel output.
+- Runtime Verified: QEMU 9.1.3 `virt-9.1` reported DTB size 1,048,576, boot CPU 0, 130,530 free
+  frames, a probe frame at `0x0000000040000000`, and `PHOENIX_MEMORY_OK`.
 
 ## TODO
 
-- run `cargo xtask test-memory` and preserve the full serial log and QEMU version;
 - compare the printed DTB CPU, size, free-frame count, and allocated address with a captured DTB;
 - inspect the translation and reservation boundaries under GDB after the first run;
 - replace the provisional 16-range capacity using evidence from supported firmware inputs;
