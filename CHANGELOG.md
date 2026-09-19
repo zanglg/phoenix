@@ -24,6 +24,9 @@ numbers and remains explicitly unstable before 1.0.0. During construction, chang
 - Fixed-metadata fallible kernel heap core with transactionally acquired and cleared contiguous
   backing frames, exact alignment, explicit physical/byte/metadata exhaustion, implicit free-space
   coalescing, lifecycle-checked tokens, and transactional backing release.
+- Fixed-capacity guarded kernel-stack slots with transactional cleared-frame ownership, lower and
+  upper guard pages, generation-safe reuse, explicit failure rollback, and Host Tested AArch64
+  EL1 RW/NX offline mapping.
 - Host-tested AArch64 translation indices, stage-1 descriptors, mapping attributes, and fixed-capacity offline mapping plans.
 - Pinned QEMU `virt` command generation and a bounded boot integration harness with sentinel, timeout, output-limit, and log handling.
 - Host-tested AArch64 vector-slot model, stable exception-frame ABI, ESR decoding, SVC immediate extraction, and data-abort classification.

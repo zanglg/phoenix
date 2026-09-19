@@ -122,7 +122,8 @@ the ordered enter/success markers after TTBR1 publication.
   the current 32-bit IPS envelope;
 - enable caches only after cache-maintenance and memory-ordering requirements are designed and
   runtime tested;
-- replace the guarded boot-construction stack with owned per-thread and exception stacks;
+- reserve a non-overlapping TTBR1 arena for the Host Tested owned stack-slot plans, then define
+  safe live mapping, switching, and teardown for thread and exception stacks;
 - define safe live mapping updates, break-before-make, local versus broadcast TLB maintenance,
   ASIDs, and SMP synchronization;
 

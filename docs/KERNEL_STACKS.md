@@ -1,10 +1,15 @@
 # Kernel Stacks
 
 This document describes the stack protection that Phoenix currently implements and the larger
-kernel-stack policy that remains to be built. The implemented part applies only after the final
-AArch64 `TTBR1_EL1` hierarchy has been installed.
+kernel-stack policy that remains to be built. The linker-owned boot guard becomes effective only
+after the final AArch64 `TTBR1_EL1` hierarchy is installed; the owned runtime-stack mechanism is
+currently a Host Tested allocation and offline-mapping foundation.
 
 ## Current implementation
+
+Phoenix now has two separate stack foundations.
+
+### Boot-construction stack
 
 The linker reserves this ordered physical and higher-half virtual layout inside the writable
 kernel image:
@@ -35,6 +40,37 @@ frame exceeded it. The linker now reserves 1 MiB, while the platform builder use
 transactional mapping to reduce the nested frame. This is an observed runtime correction, not an
 automated compiler-enforced bound.
 
+### Owned runtime-stack plans
+
+`memory::KernelStackPool<SLOTS, STACK_PAGES>` manages a caller-selected, page-aligned virtual
+arena without allocating metadata. Every deterministic lowest-free slot has this layout:
+
+```text
+4 KiB lower guard (unmapped)
+STACK_PAGES private usable frames (EL1 RW, PXN, UXN)
+4 KiB upper guard (unmapped)
+```
+
+The stack grows down from the exclusive end of the usable range, immediately below the upper
+guard. Both guard pages consume virtual address space but no physical frames. The generic pool
+does not choose an AArch64 address; the future platform integration must reserve a non-overlapping
+TTBR1 arena and validate it against the complete kernel layout. Constructing two pools over the
+same virtual arena is a caller error until that platform reservation owner exists.
+
+Allocation clones the physical allocator, acquires all usable frames, then clears every frame
+through `KernelStackMemory`. Only complete success commits the allocator and marks the virtual
+slot allocated. The resulting non-copyable `OwnedKernelStack` retains the slot generation,
+intended `Thread` or `Exception` role, guarded layout, and frames in increasing virtual order.
+Unpublished release validates the exact pool and generation and returns every frame as one
+transaction before recycling the slot. Generation overflow retires a slot instead of aliasing an
+old owner. Failed allocation can have cleared candidate frames, but it does not publish their
+ownership and leaves the original physical allocator unchanged.
+
+The owned stack can supply page-by-page pairs to an offline architecture page-table plan. Host
+tests use the real AArch64 planner to map only usable pages with `kernel_data` attributes and prove
+both guards remain absent. No live table mutation, stack-pointer switch, or exception entry uses
+these owners yet.
+
 ## Invariants
 
 - the guard is exactly one 4 KiB frame and immediately precedes the downward-growing stack;
@@ -44,7 +80,18 @@ automated compiler-enforced bound.
 - the first and last usable stack frames remain kernel-only, writable, and non-executable;
 - the stack and guard layout must fit inside the linker's first-2-MiB permission window;
 - static artifact inspection rejects missing, misaligned, reordered, or wrongly sized symbols;
-- no current code intentionally probes the guard until recoverable kernel-fault testing exists.
+- no current code intentionally probes the guard until recoverable kernel-fault testing exists;
+- each runtime slot has exactly one lower guard, one nonempty usable range, and one upper guard;
+- a pool's slot layouts are page-aligned, disjoint, adjacent, and contained by its checked arena;
+- an allocated owner uniquely retains every usable physical frame and its virtual slot generation;
+- physical OOM, slot exhaustion, allocator failure, and injected clear failure leave the pool and
+  caller's physical allocator unchanged;
+- every usable frame is cleared before an owner can be returned;
+- unpublished release either restores every frame and recycles the slot or changes neither owner;
+- guards never appear in the owner's mapping iterator, while every usable page appears exactly
+  once in increasing virtual order;
+- current pool mutation requires one non-reentrant mutable owner. IRQ, preemption, and SMP sharing
+  require an IRQ-safe lock plus documented acquire/release ordering before use.
 
 ## Validation
 
@@ -54,6 +101,14 @@ declared guard absent while retaining text, rodata, data, and PL011 mappings. Ev
 variant is cross-linked and inspected for the two guard symbols, their exact size and adjacency,
 the 1 MiB stack size, and the overall image bound.
 
+Host tests additionally cover arena capacity, alignment and overflow, exact two-guard layouts,
+deterministic slot assignment, slot exhaustion, physical OOM, full-frame clearing, injected clear
+failure, transactional foreign-pool rejection, frame restoration, slot reuse, and both stack-role
+labels. Release tests also prove that a wrong physical allocator retains the owner and changes
+neither allocator nor slot. An integration test feeds owned page pairs to the AArch64 offline
+planner and verifies EL1-only RW/NX translations plus absent guards. `cargo xtask ci` Cross
+Compiles this mechanism in all AArch64 variants and retains the existing ELF inspections.
+
 The recorded final-map and loaded-init probes crossed final TTBR1 publication while using the
 1 MiB construction stack. This validates the positive live-stack mapping, but not an intentional
 underflow into the guard.
@@ -61,22 +116,36 @@ underflow into the guard.
 This does not prove that an AArch64 translation fault occurs on stack underflow. That evidence is
 tracked as `RUN-KSTACK-001` in `docs/RUNTIME_VALIDATION.md`.
 
+It also does not prove that an owned runtime stack can be safely published, entered, switched, or
+retired. That separate target boundary is `RUN-KSTACK-002` and remains Runtime Pending.
+
+## Runtime status
+
+`RUN-KSTACK-001` remains Runtime Pending for an intentional fault on the existing boot guard.
+`RUN-KSTACK-002` remains Runtime Pending for owned-stack publication, entry, and retirement. The
+recorded positive final-map and loaded-init runs validate only the linker-owned construction stack
+and do not close either negative or dynamic-stack boundary.
+
 ## TODO
 
 - execute a controlled guard access after final TTBR1 publication and confirm the expected EL1
   data abort without relying on a corrupted stack;
 - automate a conservative early-stack footprint upper bound for supported build profiles;
 - move bulky boot plans into explicitly owned scratch memory so the temporary stack can shrink;
-- define a small per-thread stack size, allocation owner, lifetime, and mandatory lower guard;
-- define a separate exception-stack policy before asynchronous interrupts or recoverable faults;
+- choose the AArch64 TTBR1 runtime-stack arena, slot count, and usable page count from measured
+  call depth and the complete virtual-address layout;
+- add an ownership-preserving mapped-stack type that couples frames to installed descriptors;
+- define break-before-make, TLB maintenance, and rollback for live stack map/unmap operations;
+- define separate exception and emergency-stack sizing, nesting, and double-fault policy before
+  asynchronous interrupts or recoverable current-EL faults;
 - switch stacks safely during thread creation, context switching, teardown, and CPU-local idle;
-- decide whether an upper guard is also required and how overflow diagnostics find stack owners;
+- make overflow diagnostics identify the owning slot without touching guard memory;
 - add stack canaries or high-water accounting only after their failure and concurrency semantics
   are specified.
 
 ## Skipped work
 
-Phoenix does not yet allocate runtime kernel stacks, switch between kernel threads, recover from
-kernel stack faults, maintain per-CPU exception stacks, unwind stack traces, randomize stack
-locations, or reclaim stack mappings. The one implemented guard must not be described as a
-complete kernel-stack subsystem.
+Phoenix does not yet publish owned runtime stacks into live tables, switch between kernel threads,
+recover from kernel stack faults, enter a dedicated exception stack, maintain per-CPU emergency
+stacks, unwind stack traces, randomize stack locations, or reclaim live stack mappings. The pool
+and offline mapping evidence must not be described as a running kernel-stack subsystem.

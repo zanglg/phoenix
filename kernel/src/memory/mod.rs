@@ -4,12 +4,17 @@ use core::cmp::{max, min};
 
 mod boot;
 mod heap;
+mod kernel_stack;
 mod physical;
 
 pub use boot::{BootMemoryError, memory_map_from_boot_info};
 pub use heap::{
     HeapAllocation, HeapAllocationError, HeapBackingMemory, HeapDeallocationError,
     HeapInitializationError, HeapReleaseError, KernelHeap,
+};
+pub use kernel_stack::{
+    KernelStackAllocationError, KernelStackKind, KernelStackLayout, KernelStackMemory,
+    KernelStackPool, KernelStackPoolError, KernelStackReleaseError, OwnedKernelStack,
 };
 pub use physical::{AllocationError, FrameAllocator, FrameRange, MemoryMap, MemoryMapError};
 

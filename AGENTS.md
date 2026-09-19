@@ -32,6 +32,7 @@ not create speculative implementations for them.
 - `docs/AARCH64_PAGING.md`: temporary and final page-table model, permissions, and remaining work.
 - `docs/FINAL_KERNEL_ADDRESS_SPACE.md`: final QEMU `virt` TTBR1 layout, ownership, publication, and deferrals.
 - `docs/KERNEL_HEAP.md`: fallible allocation, backing-frame ownership, failure, and synchronization boundary.
+- `docs/KERNEL_STACKS.md`: boot guard plus owned runtime-stack layout, frames, and activation boundary.
 - `docs/AARCH64_USER_PAGE_TABLES.md`: user-table topology, ownership, materialization, and activation boundary.
 - `docs/QEMU_VIRT_BOOTSTRAP_MEMORY.md`: checked target access to private RAM under the temporary TTBR1 alias.
 - `docs/BOOT_MEMORY_MAP.md`: DTB-to-allocator construction and mandatory boot reservations.
