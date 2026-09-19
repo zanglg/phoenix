@@ -145,10 +145,10 @@ so it remains final-table evidence but does not validate the current extended pr
   the current 32-bit IPS envelope;
 - enable caches only after cache-maintenance and memory-ordering requirements are designed and
   runtime tested;
-- replace the provisional stack arena sizing with measured policy, then define safe live mapping,
-  switching, and teardown for thread and exception stacks;
-- define safe live mapping updates, break-before-make, local versus broadcast TLB maintenance,
-  ASIDs, and SMP synchronization;
+- replace the provisional stack arena sizing with measured policy, then implement the AArch64
+  backend under the mapped-stack ownership contract for thread and exception stacks;
+- implement live mapping updates with break-before-make, local versus broadcast TLB maintenance,
+  ASIDs, rollback, and SMP synchronization;
 
 ## Skipped work
 

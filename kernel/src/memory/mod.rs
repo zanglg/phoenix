@@ -13,8 +13,9 @@ pub use heap::{
     HeapInitializationError, HeapReleaseError, KernelHeap,
 };
 pub use kernel_stack::{
-    KernelStackAllocationError, KernelStackKind, KernelStackLayout, KernelStackMemory,
-    KernelStackPool, KernelStackPoolError, KernelStackReleaseError, OwnedKernelStack,
+    KernelStackAllocationError, KernelStackKind, KernelStackLayout, KernelStackMappingBackend,
+    KernelStackMemory, KernelStackPool, KernelStackPoolError, KernelStackReleaseError,
+    MappedKernelStack, OwnedKernelStack,
 };
 pub use physical::{
     AllocationError, FrameAllocator, FrameRange, ManagedFrameSet, MemoryMap, MemoryMapError,

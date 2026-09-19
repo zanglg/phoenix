@@ -29,6 +29,9 @@ numbers and remains explicitly unstable before 1.0.0. During construction, chang
   EL1 RW/NX offline mapping.
 - A provisional QEMU `virt` runtime-stack arena with 16 retained slots, eight usable pages per
   slot, two guards, full initial-unmapped validation, and one pool owner in each final-TTBR1 path.
+- Ownership-preserving mapped kernel-stack type state with an unsafe architecture-backend contract,
+  unique publication tokens, transactional map/unmap failures, and frame release gated on
+  successful mapping retirement.
 - Reservation-filtered managed-frame snapshots, full-leaf final-direct-map proof, a retained-table
   RAM access capability, and loaded-init user copies no longer dependent on bootstrap raw helpers.
 - Bounded final-map heap initialization after TTBR1 publication, with retained frame ownership,

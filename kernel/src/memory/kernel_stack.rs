@@ -1,5 +1,7 @@
 //! Guarded virtual slots and physical ownership for runtime kernel stacks.
 
+use core::marker::PhantomData;
+
 use super::{AddressRange, AllocationError, FrameAllocator, PAGE_SIZE, PageFrame, VirtAddr};
 
 /// Intended execution role of an owned kernel stack.
@@ -31,6 +33,42 @@ pub trait KernelStackMemory {
 
     /// Clear all `PAGE_SIZE` bytes in one private stack frame.
     fn clear_frame(&mut self, frame: PageFrame) -> Result<(), Self::Error>;
+}
+
+/// Architecture backend that publishes and retires one owned stack mapping.
+///
+/// # Safety
+///
+/// A successful `map_stack` must make every pair from `stack.mappings()`
+/// visible with kernel read/write, non-executable attributes in one retained
+/// active address space, leave both guard ranges invalid, and return a unique
+/// token identifying that exact publication. Failure must leave no descriptor
+/// from the requested stack installed.
+///
+/// A successful `unmap_stack` must invalidate every usable-page descriptor and
+/// complete all required barriers and TLB maintenance before returning. On
+/// failure it must return the still-valid token and preserve or restore the
+/// complete mapping. Implementations must serialize descriptor mutation and
+/// token use against IRQ, preemption, and other CPUs as required by their
+/// architecture contract.
+pub unsafe trait KernelStackMappingBackend<const STACK_PAGES: usize> {
+    /// Backend-specific publication or retirement failure.
+    type Error;
+    /// Unique identity for one complete installed stack mapping.
+    type Mapping;
+
+    /// Publish the exact owned stack and its deliberately absent guards.
+    fn map_stack(
+        &mut self,
+        stack: &OwnedKernelStack<STACK_PAGES>,
+    ) -> Result<Self::Mapping, Self::Error>;
+
+    /// Retire the exact mapping, returning its token unchanged on failure.
+    fn unmap_stack(
+        &mut self,
+        stack: &OwnedKernelStack<STACK_PAGES>,
+        mapping: Self::Mapping,
+    ) -> Result<(), (Self::Mapping, Self::Error)>;
 }
 
 /// Failure while assigning a virtual slot and its physical frames.
@@ -224,9 +262,10 @@ impl<const SLOTS: usize, const STACK_PAGES: usize> KernelStackPool<SLOTS, STACK_
 
 /// Private frames and virtual layout of one stack that has not been published.
 ///
-/// Mapping publication must consume this owner into a future mapped-stack type.
-/// Until that type exists, only an unpublished owner can be released safely.
+/// Mapping publication consumes this owner into [`MappedKernelStack`]. Only an
+/// unpublished owner can return its frames and slot to their allocators.
 #[derive(Debug, Eq, PartialEq)]
+#[must_use = "an owned stack retains physical frames and a virtual slot until explicitly released"]
 pub struct OwnedKernelStack<const STACK_PAGES: usize> {
     pool: PoolIdentity,
     slot: usize,
@@ -274,6 +313,25 @@ impl<const STACK_PAGES: usize> OwnedKernelStack<STACK_PAGES> {
         })
     }
 
+    /// Publish this owner through a transactional architecture backend.
+    ///
+    /// Failure returns the unchanged unpublished owner. Success moves frame
+    /// ownership into a [`MappedKernelStack`], which deliberately exposes no
+    /// physical-frame release operation until the mapping is retired.
+    pub fn publish<B: KernelStackMappingBackend<STACK_PAGES>>(
+        self,
+        backend: &mut B,
+    ) -> Result<MappedKernelStack<STACK_PAGES, B>, (Self, B::Error)> {
+        match backend.map_stack(&self) {
+            Ok(mapping) => Ok(MappedKernelStack {
+                stack: self,
+                mapping,
+                _not_send_or_sync: PhantomData,
+            }),
+            Err(error) => Err((self, error)),
+        }
+    }
+
     /// Return unpublished frames and the virtual slot to their owners transactionally.
     pub fn release_unpublished<const SLOTS: usize, const RANGES: usize>(
         self,
@@ -303,6 +361,66 @@ impl<const STACK_PAGES: usize> OwnedKernelStack<STACK_PAGES> {
             None => SlotState::Retired,
         };
         Ok(())
+    }
+}
+
+/// An owned kernel stack whose usable pages are installed in a live hierarchy.
+///
+/// The private mapping token couples physical ownership to one exact backend
+/// publication. Frames and the virtual slot cannot be released through this
+/// state; callers must first successfully [`Self::unpublish`] the mapping. The
+/// state is intentionally neither `Send` nor `Sync` until cross-CPU ownership
+/// and TLB shootdown exist.
+#[derive(Debug)]
+#[must_use = "a mapped stack must be unpublished before its frames and slot can be released"]
+pub struct MappedKernelStack<const STACK_PAGES: usize, B: KernelStackMappingBackend<STACK_PAGES>> {
+    stack: OwnedKernelStack<STACK_PAGES>,
+    mapping: B::Mapping,
+    _not_send_or_sync: PhantomData<*mut B>,
+}
+
+impl<const STACK_PAGES: usize, B: KernelStackMappingBackend<STACK_PAGES>>
+    MappedKernelStack<STACK_PAGES, B>
+{
+    /// Return the intended execution role.
+    pub const fn kind(&self) -> KernelStackKind {
+        self.stack.kind()
+    }
+
+    /// Return the guarded virtual layout.
+    pub const fn layout(&self) -> KernelStackLayout {
+        self.stack.layout()
+    }
+
+    /// Return the aligned stack pointer at the exclusive usable end.
+    pub const fn initial_stack_pointer(&self) -> VirtAddr {
+        self.stack.layout().initial_stack_pointer()
+    }
+
+    /// Retire the mapping and recover the unpublished owner.
+    ///
+    /// Backend failure returns the complete mapped owner and its still-valid
+    /// token, so neither virtual nor physical ownership can be lost.
+    pub fn unpublish(
+        self,
+        backend: &mut B,
+    ) -> Result<OwnedKernelStack<STACK_PAGES>, (Self, B::Error)> {
+        let Self {
+            stack,
+            mapping,
+            _not_send_or_sync,
+        } = self;
+        match backend.unmap_stack(&stack, mapping) {
+            Ok(()) => Ok(stack),
+            Err((mapping, error)) => Err((
+                Self {
+                    stack,
+                    mapping,
+                    _not_send_or_sync,
+                },
+                error,
+            )),
+        }
     }
 }
 
@@ -343,8 +461,8 @@ mod tests {
     use std::vec::Vec;
 
     use super::{
-        KernelStackAllocationError, KernelStackKind, KernelStackMemory, KernelStackPool,
-        KernelStackPoolError, KernelStackReleaseError,
+        KernelStackAllocationError, KernelStackKind, KernelStackMappingBackend, KernelStackMemory,
+        KernelStackPool, KernelStackPoolError, KernelStackReleaseError, OwnedKernelStack,
     };
     use crate::arch::aarch64::kernel_page_table::KernelPageTablePlan;
     use crate::arch::aarch64::paging::MappingAttributes;
@@ -356,6 +474,70 @@ mod tests {
     struct TestMemory {
         cleared: Vec<PageFrame>,
         fail_at: Option<usize>,
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    enum MappingError {
+        Injected,
+        WrongBackend,
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    struct TestMapping {
+        backend_id: u8,
+        layout: super::KernelStackLayout,
+        frames: [PageFrame; 2],
+    }
+
+    #[derive(Debug)]
+    struct TestMappingBackend {
+        id: u8,
+        active: Option<TestMapping>,
+        fail_map: bool,
+        fail_unmap: bool,
+    }
+
+    // SAFETY: in this test model `active` is the complete translation regime.
+    // Mapping publishes the exact layout and both frames atomically; unmapping
+    // either preserves that complete token or removes it atomically.
+    unsafe impl KernelStackMappingBackend<2> for TestMappingBackend {
+        type Error = MappingError;
+        type Mapping = TestMapping;
+
+        fn map_stack(&mut self, stack: &OwnedKernelStack<2>) -> Result<Self::Mapping, Self::Error> {
+            if self.fail_map {
+                return Err(MappingError::Injected);
+            }
+            assert!(self.active.is_none());
+            let mut frames = stack.frames();
+            let mapping = TestMapping {
+                backend_id: self.id,
+                layout: stack.layout(),
+                frames: [
+                    frames.next().expect("first stack frame"),
+                    frames.next().expect("second stack frame"),
+                ],
+            };
+            assert!(frames.next().is_none());
+            self.active = Some(mapping);
+            Ok(mapping)
+        }
+
+        fn unmap_stack(
+            &mut self,
+            stack: &OwnedKernelStack<2>,
+            mapping: Self::Mapping,
+        ) -> Result<(), (Self::Mapping, Self::Error)> {
+            assert_eq!(mapping.layout, stack.layout());
+            if mapping.backend_id != self.id || self.active != Some(mapping) {
+                return Err((mapping, MappingError::WrongBackend));
+            }
+            if self.fail_unmap {
+                return Err((mapping, MappingError::Injected));
+            }
+            self.active = None;
+            Ok(())
+        }
     }
 
     impl KernelStackMemory for TestMemory {
@@ -529,6 +711,79 @@ mod tests {
             .allocate(&mut allocator, &mut memory, KernelStackKind::Exception)
             .expect("second");
         assert_eq!(second.kind(), KernelStackKind::Exception);
+    }
+
+    #[test]
+    fn mapped_state_preserves_ownership_across_publication_failures() {
+        let mut pool = KernelStackPool::<1, 2>::new(VirtAddr::new(0x80000)).expect("pool");
+        let mut allocator = allocator::<2>(2);
+        let original_allocator = allocator;
+        let mut memory = TestMemory {
+            cleared: Vec::new(),
+            fail_at: None,
+        };
+        let stack = pool
+            .allocate(&mut allocator, &mut memory, KernelStackKind::Thread)
+            .expect("stack");
+        let allocated_allocator = allocator;
+        let layout = stack.layout();
+        let mut backend = TestMappingBackend {
+            id: 1,
+            active: None,
+            fail_map: true,
+            fail_unmap: false,
+        };
+
+        let (stack, MappingError::Injected) = stack.publish(&mut backend).expect_err("map failure")
+        else {
+            unreachable!("injected mapping failure has an exact error")
+        };
+        assert!(backend.active.is_none());
+        assert_eq!(allocator, allocated_allocator);
+        assert_eq!(pool.allocated_slots(), 1);
+
+        backend.fail_map = false;
+        let mapped = stack.publish(&mut backend).expect("publish stack");
+        assert_eq!(mapped.kind(), KernelStackKind::Thread);
+        assert_eq!(mapped.layout(), layout);
+        assert_eq!(mapped.initial_stack_pointer(), layout.usable().end());
+        assert!(backend.active.is_some());
+        assert_eq!(allocator, allocated_allocator);
+        assert_eq!(pool.allocated_slots(), 1);
+
+        let mut foreign_backend = TestMappingBackend {
+            id: 2,
+            active: None,
+            fail_map: false,
+            fail_unmap: false,
+        };
+        let (mapped, MappingError::WrongBackend) = mapped
+            .unpublish(&mut foreign_backend)
+            .expect_err("foreign backend")
+        else {
+            unreachable!("foreign backend has an exact error")
+        };
+        assert!(backend.active.is_some());
+        assert!(foreign_backend.active.is_none());
+
+        backend.fail_unmap = true;
+        let (mapped, MappingError::Injected) =
+            mapped.unpublish(&mut backend).expect_err("unmap failure")
+        else {
+            unreachable!("injected unmapping failure has an exact error")
+        };
+        assert!(backend.active.is_some());
+        assert_eq!(allocator, allocated_allocator);
+        assert_eq!(pool.allocated_slots(), 1);
+
+        backend.fail_unmap = false;
+        let stack = mapped.unpublish(&mut backend).expect("unpublish stack");
+        assert!(backend.active.is_none());
+        stack
+            .release_unpublished(&mut pool, &mut allocator)
+            .expect("release frames and slot");
+        assert_eq!(allocator, original_allocator);
+        assert_eq!(pool.allocated_slots(), 0);
     }
 
     #[test]

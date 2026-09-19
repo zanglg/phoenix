@@ -43,7 +43,8 @@ narrow support claim:
   whose target run remains pending;
 - guarded runtime kernel-stack slots transactionally own and clear private frames, retain both
   guard holes, and feed EL1 RW/NX mappings to the Host Tested AArch64 offline planner; final-map
-  owners retain a provisional 16-slot/eight-page platform arena proved initially unmapped;
+  owners retain a provisional 16-slot/eight-page platform arena proved initially unmapped, while
+  mapped ownership type state prevents frame release before transactional mapping retirement;
 - an opt-in boot-memory probe cross-links the real DTB-to-allocation-to-readback path;
 - an opt-in final-kernel-map image builds allocator-owned TTBR1 tables with RX text, RO/NX
   rodata, RW/NX RAM, an unmapped boot-stack guard, and a page-granular PL011 mapping, then
