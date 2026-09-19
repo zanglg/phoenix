@@ -65,7 +65,8 @@ use phoenix_kernel::{
     arch::aarch64::kernel_page_table::MaterializedKernelPageTables,
     platform::aarch64::qemu_virt::{
         FINAL_KERNEL_TABLE_CAPACITY, FinalDirectMapLayout, FinalDirectMapMemory,
-        final_direct_map_layout, final_kernel_page_table_plan,
+        QemuVirtKernelStackPool, final_direct_map_layout, final_kernel_page_table_plan,
+        runtime_kernel_stack_pool,
     },
 };
 
@@ -185,6 +186,7 @@ struct InitRuntime {
     address_space: InitAddressSpace,
     kernel_tables: FinalKernelTables,
     direct_map_layout: FinalDirectMapLayout<INIT_MEMORY_RANGES>,
+    _kernel_stack_pool: QemuVirtKernelStackPool,
     files: ReadOnlyFileTable<'static, INIT_OPEN_FILES>,
     _allocator: FrameAllocator<INIT_MEMORY_RANGES>,
     _asids: AsidAllocator,
@@ -291,6 +293,7 @@ struct KernelMapRuntime {
     direct_map_layout: FinalDirectMapLayout<KERNEL_MAP_MEMORY_RANGES>,
     allocator: FrameAllocator<KERNEL_MAP_MEMORY_RANGES>,
     heap: KernelHeap<KERNEL_HEAP_ALLOCATIONS>,
+    _kernel_stack_pool: QemuVirtKernelStackPool,
 }
 #[cfg(all(
     feature = "kernel-map-probe",
@@ -482,6 +485,8 @@ fn run_kernel_map_probe(boot_argument: usize, console: &mut Console<EarlyPl011>)
             direct_map_layout,
             allocator,
             heap: KernelHeap::new(),
+            _kernel_stack_pool: runtime_kernel_stack_pool()
+                .unwrap_or_else(|error| panic!("could not reserve kernel-stack arena: {error:?}")),
         })
     };
 
@@ -739,6 +744,8 @@ fn run_loaded_init_probe(boot_argument: usize, console: &mut Console<EarlyPl011>
             address_space: prepared,
             kernel_tables,
             direct_map_layout,
+            _kernel_stack_pool: runtime_kernel_stack_pool()
+                .unwrap_or_else(|error| panic!("could not reserve kernel-stack arena: {error:?}")),
             files: ReadOnlyFileTable::new(initramfs),
             _allocator: allocator,
             _asids: asids,

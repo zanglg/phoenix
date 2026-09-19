@@ -16,8 +16,8 @@ use crate::console::ByteSink;
 use crate::dtb::BootInfo;
 use crate::dtb::{DeviceTree, Error as DeviceTreeError};
 use crate::memory::{
-    AddressRange, FrameRange, HeapBackingMemory, KernelStackMemory, ManagedFrameSet, PAGE_SIZE,
-    PageFrame, PhysAddr, VirtAddr,
+    AddressRange, FrameRange, HeapBackingMemory, KernelStackMemory, KernelStackPool,
+    KernelStackPoolError, ManagedFrameSet, PAGE_SIZE, PageFrame, PhysAddr, VirtAddr,
 };
 use crate::process_image::ProcessImageMemory;
 use crate::user_copy::{UserMemoryReader, UserMemoryWriter};
@@ -32,6 +32,12 @@ pub const BOOTSTRAP_RAM_PHYSICAL_START: usize = 0x4000_0000;
 pub const BOOTSTRAP_RAM_PHYSICAL_END: usize = 0x8000_0000;
 /// Fixed physical-to-virtual offset of the QEMU `virt` kernel direct map.
 pub const KERNEL_VIRTUAL_OFFSET: usize = 0xffff_ff80_0000_0000;
+/// First byte of the platform-owned runtime kernel-stack virtual arena.
+pub const KERNEL_STACK_ARENA_START: usize = 0xffff_ff90_0000_0000;
+/// Number of guarded runtime-stack slots reserved by the initial platform policy.
+pub const KERNEL_STACK_ARENA_SLOTS: usize = 16;
+/// Number of usable 4 KiB pages in each initial runtime-stack slot.
+pub const KERNEL_STACK_USABLE_PAGES: usize = 8;
 /// Maximum number of page-table frames in the pinned single-region layout.
 pub const FINAL_KERNEL_TABLE_CAPACITY: usize = 8;
 /// Maximum number of leaf mappings in the pinned 512 MiB layout.
@@ -93,6 +99,9 @@ impl ByteSink for EarlyPl011 {
 /// Final page-table plan for the pinned QEMU `virt` memory envelope.
 pub type QemuVirtKernelPageTablePlan =
     KernelPageTablePlan<FINAL_KERNEL_TABLE_CAPACITY, FINAL_KERNEL_MAPPING_CAPACITY>;
+/// Platform pool type for the initially reserved guarded runtime-stack arena.
+pub type QemuVirtKernelStackPool =
+    KernelStackPool<KERNEL_STACK_ARENA_SLOTS, KERNEL_STACK_USABLE_PAGES>;
 
 /// Failure while deriving the final QEMU `virt` higher-half address space.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -112,8 +121,20 @@ pub enum FinalKernelMapError {
     MissingRam,
     /// A required kernel section is absent from the resulting direct map.
     MissingKernelSectionMapping,
+    /// The fixed runtime-stack arena could not be represented.
+    InvalidRuntimeStackArena(KernelStackPoolError),
+    /// A final mapping unexpectedly occupies the reserved runtime-stack arena.
+    RuntimeStackArenaMapped {
+        /// First conflicting virtual page.
+        address: usize,
+    },
     /// The fixed table topology or mapping metadata cannot represent the layout.
     PageTable(KernelPageTableError),
+}
+
+/// Construct the sole owner for the QEMU `virt` runtime-stack virtual arena.
+pub fn runtime_kernel_stack_pool() -> Result<QemuVirtKernelStackPool, KernelStackPoolError> {
+    QemuVirtKernelStackPool::new(VirtAddr::new(KERNEL_STACK_ARENA_START))
 }
 
 /// Failure while proving allocator-managed RAM is present in a final TTBR1 plan.
@@ -415,7 +436,35 @@ where
     )
     .map_err(FinalKernelMapError::PageTable)?;
     validate_critical_mappings(&plan, layout)?;
+    validate_runtime_stack_arena(&plan)?;
     Ok(plan)
+}
+
+#[cfg(any(target_arch = "aarch64", test))]
+fn validate_runtime_stack_arena(
+    plan: &QemuVirtKernelPageTablePlan,
+) -> Result<(), FinalKernelMapError> {
+    let pool =
+        runtime_kernel_stack_pool().map_err(FinalKernelMapError::InvalidRuntimeStackArena)?;
+    let arena = pool.arena();
+    let mut address = arena.start().as_usize();
+    while address < arena.end().as_usize() {
+        if plan
+            .translate(VirtAddr::new(address))
+            .map_err(KernelPageTableError::Paging)
+            .map_err(FinalKernelMapError::PageTable)?
+            .is_some()
+        {
+            return Err(FinalKernelMapError::RuntimeStackArenaMapped { address });
+        }
+        address =
+            address
+                .checked_add(PAGE_SIZE)
+                .ok_or(FinalKernelMapError::InvalidRuntimeStackArena(
+                    KernelStackPoolError::AddressOverflow,
+                ))?;
+    }
+    Ok(())
 }
 
 #[cfg(any(target_arch = "aarch64", test))]
@@ -1024,10 +1073,11 @@ mod tests {
     use super::{
         BOOTSTRAP_RAM_PHYSICAL_END, BOOTSTRAP_RAM_PHYSICAL_START, BootstrapMemoryError,
         BootstrapPhysicalMemory, FinalDirectMapAccessError, FinalDirectMapLayoutError,
-        FinalKernelMapError, KERNEL_VIRTUAL_OFFSET, PL011_VIRTUAL_BASE,
+        FinalKernelMapError, KERNEL_STACK_ARENA_SLOTS, KERNEL_STACK_ARENA_START,
+        KERNEL_STACK_USABLE_PAGES, KERNEL_VIRTUAL_OFFSET, PL011_VIRTUAL_BASE,
         QemuVirtKernelPageTablePlan, final_direct_map_layout,
         final_kernel_page_table_plan_from_regions, linked_kernel_image_layout,
-        physical_kernel_range,
+        physical_kernel_range, runtime_kernel_stack_pool, validate_runtime_stack_arena,
     };
     use crate::arch::aarch64::kernel_page_table::DirectMapOverride;
     use crate::arch::aarch64::paging::{MappingAttributes, TranslationLevel};
@@ -1194,6 +1244,40 @@ mod tests {
         let managed = memory.into_allocator().managed_frames();
         let proof = final_direct_map_layout(&plan, managed).expect("actual final-plan proof");
         assert_eq!(proof.managed_frames(), managed);
+
+        let stack_pool = runtime_kernel_stack_pool().expect("runtime-stack arena");
+        assert_eq!(
+            stack_pool.arena().start().as_usize(),
+            KERNEL_STACK_ARENA_START
+        );
+        assert_eq!(
+            stack_pool.arena().len(),
+            KERNEL_STACK_ARENA_SLOTS * (KERNEL_STACK_USABLE_PAGES + 2) * PAGE_SIZE
+        );
+        let mut address = stack_pool.arena().start().as_usize();
+        while address < stack_pool.arena().end().as_usize() {
+            assert_eq!(plan.translate(VirtAddr::new(address)), Ok(None));
+            address += PAGE_SIZE;
+        }
+    }
+
+    #[test]
+    fn rejects_a_final_mapping_inside_the_runtime_stack_arena() {
+        let mut plan = QemuVirtKernelPageTablePlan::new().unwrap();
+        plan.map(
+            VirtAddr::new(KERNEL_STACK_ARENA_START),
+            PhysAddr::new(BOOTSTRAP_RAM_PHYSICAL_START),
+            TranslationLevel::L3,
+            MappingAttributes::kernel_data(),
+        )
+        .unwrap();
+
+        assert_eq!(
+            validate_runtime_stack_arena(&plan),
+            Err(FinalKernelMapError::RuntimeStackArenaMapped {
+                address: KERNEL_STACK_ARENA_START,
+            })
+        );
     }
 
     #[test]

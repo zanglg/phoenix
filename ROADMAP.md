@@ -109,9 +109,11 @@ integration now retains a Host Tested proof that every reservation-filtered allo
 the exact EL1 RW/NX mapping and routes loaded-init user copies through a table-owner-bound
 capability. The focused final-map image now Cross Compiles a four-frame/four-record post-TTBR1
 heap probe with aligned allocation, recoverable byte/metadata exhaustion, release/reuse, and an
-ordered success marker; target rerun and production consumer sizing remain. Guarded runtime-stack slots, transactional frame ownership, clearing,
-failure rollback, reuse, and offline AArch64 RW/NX mapping are Host Tested; live map/unmap,
-thread switching, and exception-stack activation remain;
+ordered success marker; target rerun and production consumer sizing remain. Guarded runtime-stack
+slots, transactional frame ownership, clearing, failure rollback, reuse, and offline AArch64 RW/NX
+mapping are Host Tested. Final-map builders now prove a retained provisional 16-slot/eight-page
+QEMU `virt` arena completely unmapped; live map/unmap, measured sizing, thread switching, and
+exception-stack activation remain;
 the loaded-init path retires temporary TTBR0 aliases when it installs its user hierarchy.
 
 Observable result: allocator and mapping self-tests exercise success and failure paths without

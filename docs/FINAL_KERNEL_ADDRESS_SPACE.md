@@ -23,6 +23,7 @@ The linker emits page-aligned permission-domain symbols and enforces their order
 | Boot-stack guard | `__boot_stack_guard_start..__boot_stack_guard_end` minus the offset | Deliberately unmapped |
 | Other DTB-declared RAM | Complete frames in each memory node | Normal, read/write, non-executable |
 | PL011 | Physical `0x09000000`, one 4 KiB page | Device-nGnRnE, read/write, non-executable |
+| Runtime-stack arena | `0xffffff9000000000..0xffffff90000a0000` | Initially unmapped; retained 16-slot pool owner |
 
 All mappings are EL1-only. The plan rejects EL0-accessible attributes and writable-executable
 combinations. The linked image must end no later than physical `0x40200000`; this keeps all
@@ -53,7 +54,9 @@ that owner below 512 bytes.
 
 The QEMU platform builder verifies both ends of text, rodata, and data through the offline
 translation model, proves the boot-stack guard is absent, and verifies the PL011 physical address,
-page level, and device attributes before any table frame is allocated.
+page level, and device attributes before any table frame is allocated. It also checks all 160
+pages of the provisional runtime-stack arena and rejects the plan if any already has a
+translation.
 
 ## Ownership and publication
 
@@ -71,6 +74,10 @@ publication operation. Publication executes:
 3. `ISB`;
 4. `TLBI VMALLE1IS`;
 5. `DSB ISH` and `ISB` before continuing.
+
+Both final-map runtime owner variants also retain one platform-created runtime-stack pool for the
+reserved arena. This establishes virtual-slot ownership but does not allocate stack frames or
+authorize live descriptor mutation.
 
 This replaces the coarse higher-half bootstrap hierarchy. The standalone final-map probe
 intentionally leaves `TTBR0_EL1` unchanged, so its temporary low device and RAM aliases remain.
@@ -117,7 +124,8 @@ belong to the retained init address space.
 Host tests cover range decomposition, exact translation, permission replacement, deterministic
 topology, table-capacity and overlap failures, atomic allocation, descriptor materialization,
 retryable backend failure, and unpublished release. Platform tests cover the pinned 512 MiB
-topology, critical mappings, linker-layout rejection, and RAM-window rejection.
+topology, critical mappings, linker-layout rejection, RAM-window rejection, exact runtime-stack
+arena extent, initial absence, and injected mapping conflicts.
 
 The focused kernel image is Cross Compiled and ELF Inspected. Static checks require every
 permission-domain symbol, page alignment and ordering, the first-2-MiB image bound, the expected
@@ -137,8 +145,8 @@ so it remains final-table evidence but does not validate the current extended pr
   the current 32-bit IPS envelope;
 - enable caches only after cache-maintenance and memory-ordering requirements are designed and
   runtime tested;
-- reserve a non-overlapping TTBR1 arena for the Host Tested owned stack-slot plans, then define
-  safe live mapping, switching, and teardown for thread and exception stacks;
+- replace the provisional stack arena sizing with measured policy, then define safe live mapping,
+  switching, and teardown for thread and exception stacks;
 - define safe live mapping updates, break-before-make, local versus broadcast TLB maintenance,
   ASIDs, and SMP synchronization;
 

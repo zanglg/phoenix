@@ -63,7 +63,8 @@ descriptors. It reuses intermediate tables, atomically allocates their frames, a
 links and leaves through a private-table backend. `kernel_page_table.rs` builds a separate
 mixed-level upper-half hierarchy, applies ordered page-granular permission overrides or explicit
 holes to a direct map, atomically owns its table frames, and exposes publication only through a
-permanent borrow.
+permanent borrow. The QEMU platform layer additionally reserves a retained guarded-stack arena and
+rejects any initial final-plan translation inside it.
 See `docs/AARCH64_USER_PAGE_TABLES.md`, `docs/FINAL_KERNEL_ADDRESS_SPACE.md`, and
 `docs/FINAL_DIRECT_MAP.md` for their distinct ownership boundaries.
 
@@ -113,9 +114,8 @@ remain tracked by `RUN-MMU-002` and `RUN-KSTACK-001` in `docs/RUNTIME_VALIDATION
 - derive supported physical-address size from `ID_AA64MMFR0_EL1.PARange`;
 - replace the bootstrap private-table backend and retained ASID-1 activation with process-table
   address-space ownership;
-- rerun the bounded fallible-heap final-map integration and integrate guarded owned-stack plans
-  through retained final-map ownership; live stack map/unmap, switching, and exception-stack
-  policy remain;
+- rerun the bounded fallible-heap final-map integration and connect the retained guarded-stack
+  arena to safe live map/unmap; switching and exception-stack policy remain;
 - define live table-update locking and break-before-make beyond the current one-time publication;
 - define safe ASID retirement, epochs, and reuse after TTBR0 lifetime ends;
 - retire the temporary low RAM alias safely and validate its absence;

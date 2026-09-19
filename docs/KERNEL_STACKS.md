@@ -53,9 +53,9 @@ STACK_PAGES private usable frames (EL1 RW, PXN, UXN)
 
 The stack grows down from the exclusive end of the usable range, immediately below the upper
 guard. Both guard pages consume virtual address space but no physical frames. The generic pool
-does not choose an AArch64 address; the future platform integration must reserve a non-overlapping
-TTBR1 arena and validate it against the complete kernel layout. Constructing two pools over the
-same virtual arena is a caller error until that platform reservation owner exists.
+does not choose an AArch64 address. Platform integration must supply a non-overlapping arena and
+retain one pool owner; the QEMU `virt` policy described below now does so for both final-TTBR1 boot
+paths.
 
 Allocation clones the physical allocator, acquires all usable frames, then clears every frame
 through `KernelStackMemory`. Only complete success commits the allocator and marks the virtual
@@ -65,6 +65,14 @@ Unpublished release validates the exact pool and generation and returns every fr
 transaction before recycling the slot. Generation overflow retires a slot instead of aliasing an
 old owner. Failed allocation can have cleared candidate frames, but it does not publish their
 ownership and leaves the original physical allocator unchanged.
+
+The QEMU `virt` platform now assigns the previously generic pool one provisional virtual arena:
+`0xffffff9000000000..0xffffff90000a0000`. It contains 16 slots, each with eight usable pages and
+two guard pages. Every final-map build walks all 160 pages and rejects any existing translation in
+that interval. Both the focused final-map and loaded-init runtime owners retain exactly one
+`QemuVirtKernelStackPool`, so later allocation cannot accidentally construct competing pool
+metadata for that boot path. The sizes are an initial bounded policy for integration, not measured
+production stack sizing.
 
 The owned stack can supply page-by-page pairs to an offline architecture page-table plan. Host
 tests use the real AArch64 planner to map only usable pages with `kernel_data` attributes and prove
@@ -87,6 +95,8 @@ the separate virtual stack mappings can be published and retired safely.
 - no current code intentionally probes the guard until recoverable kernel-fault testing exists;
 - each runtime slot has exactly one lower guard, one nonempty usable range, and one upper guard;
 - a pool's slot layouts are page-aligned, disjoint, adjacent, and contained by its checked arena;
+- the platform arena is canonical TTBR1 space, wholly absent from every initial final-map plan,
+  and retained by one runtime pool owner in both final-map boot paths;
 - an allocated owner uniquely retains every usable physical frame and its virtual slot generation;
 - physical OOM, slot exhaustion, allocator failure, and injected clear failure leave the pool and
   caller's physical allocator unchanged;
@@ -111,7 +121,9 @@ failure, transactional foreign-pool rejection, frame restoration, slot reuse, an
 labels. Release tests also prove that a wrong physical allocator retains the owner and changes
 neither allocator nor slot. An integration test feeds owned page pairs to the AArch64 offline
 planner and verifies EL1-only RW/NX translations plus absent guards. `cargo xtask ci` Cross
-Compiles this mechanism in all AArch64 variants and retains the existing ELF inspections.
+Compiles this mechanism in all AArch64 variants and retains the existing ELF inspections. Platform
+tests verify the exact 640 KiB arena, prove every initial translation absent, and reject an injected
+mapping at its first page.
 
 The recorded final-map and loaded-init probes crossed final TTBR1 publication while using the
 1 MiB construction stack. This validates the positive live-stack mapping, but not an intentional
@@ -136,8 +148,8 @@ and do not close either negative or dynamic-stack boundary.
   data abort without relying on a corrupted stack;
 - automate a conservative early-stack footprint upper bound for supported build profiles;
 - move bulky boot plans into explicitly owned scratch memory so the temporary stack can shrink;
-- choose the AArch64 TTBR1 runtime-stack arena, slot count, and usable page count from measured
-  call depth and the complete virtual-address layout;
+- replace the provisional 16-slot/eight-page policy with measured thread and exception call-depth
+  requirements before relying on it as production sizing;
 - add an ownership-preserving mapped-stack type that couples frames to installed descriptors;
 - define break-before-make, TLB maintenance, and rollback for live stack map/unmap operations;
 - define separate exception and emergency-stack sizing, nesting, and double-fault policy before
@@ -149,7 +161,8 @@ and do not close either negative or dynamic-stack boundary.
 
 ## Skipped work
 
-Phoenix does not yet publish owned runtime stacks into live tables, switch between kernel threads,
+Phoenix reserves and owns the virtual pool metadata, but does not yet allocate its physical stack
+frames during boot, publish owned runtime stacks into live tables, switch between kernel threads,
 recover from kernel stack faults, enter a dedicated exception stack, maintain per-CPU emergency
 stacks, unwind stack traces, randomize stack locations, or reclaim live stack mappings. The pool
 and offline mapping evidence must not be described as a running kernel-stack subsystem.
