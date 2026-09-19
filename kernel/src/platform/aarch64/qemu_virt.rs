@@ -5,7 +5,8 @@ use core::ptr::{self, read_volatile, write_volatile};
 #[cfg(any(target_arch = "aarch64", test))]
 use crate::arch::aarch64::kernel_page_table::DirectMapOverride;
 use crate::arch::aarch64::kernel_page_table::{
-    KernelPageTableError, KernelPageTablePlan, MaterializedKernelPageTables,
+    ActiveKernelTableMemory, KernelPageTableError, KernelPageTablePlan,
+    MaterializedKernelPageTables,
 };
 #[cfg(any(target_arch = "aarch64", test))]
 use crate::arch::aarch64::paging::TranslationLevel;
@@ -1072,6 +1073,43 @@ impl<const TABLES: usize, const RANGES: usize> TranslationTableMemory
             ptr::write(destination, descriptor.raw());
         }
         Ok(())
+    }
+}
+
+// SAFETY: reads and writes use the retained final direct map for exact
+// allocator-managed table frames. A successful read validates the complete
+// aligned u64 slot; while the caller preserves exclusive access, the matching
+// volatile write cannot fail or target unrelated memory.
+unsafe impl<const TABLES: usize, const RANGES: usize> ActiveKernelTableMemory
+    for FinalDirectMapMemory<'_, TABLES, RANGES>
+{
+    type Error = FinalDirectMapAccessError;
+
+    fn read_descriptor(&mut self, frame: PageFrame, index: usize) -> Result<u64, Self::Error> {
+        let offset = index
+            .checked_mul(core::mem::size_of::<u64>())
+            .ok_or(FinalDirectMapAccessError::AddressOverflow)?;
+        let source =
+            self.layout
+                .translated_address(frame, offset, size_of::<u64>())? as *const u64;
+        // SAFETY: checked translation proves an aligned complete u64 inside
+        // one retained, writable normal-memory table frame.
+        Ok(unsafe { ptr::read_volatile(source) })
+    }
+
+    unsafe fn write_descriptor(&mut self, frame: PageFrame, index: usize, descriptor: Descriptor) {
+        let offset = index
+            .checked_mul(core::mem::size_of::<u64>())
+            .expect("preflighted descriptor offset");
+        let destination = self
+            .layout
+            .translated_address(frame, offset, size_of::<u64>())
+            .expect("preflighted active table descriptor") as *mut u64;
+        // SAFETY: the trait caller successfully preflighted this exact slot
+        // and retains exclusive active-table access through the write.
+        unsafe {
+            ptr::write_volatile(destination, descriptor.raw());
+        }
     }
 }
 

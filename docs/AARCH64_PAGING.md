@@ -66,7 +66,9 @@ holes to a direct map, atomically owns its table frames, and exposes publication
 permanent borrow. The QEMU platform layer additionally reserves a retained guarded-stack arena and
 rejects any initial final-plan leaf translation inside it. The planner then materializes prelinked
 L2/L3 topology with invalid leaves for that arena, while preventing a later L1/L2 leaf from
-overwriting the reserved child tables.
+overwriting the reserved child tables. A restricted active mapper can subsequently install or
+remove exact guarded-stack L3 leaves after preflighting the retained table owner and descriptor
+state. It performs no valid-to-valid replacement.
 See `docs/AARCH64_USER_PAGE_TABLES.md`, `docs/FINAL_KERNEL_ADDRESS_SPACE.md`, and
 `docs/FINAL_DIRECT_MAP.md` for their distinct ownership boundaries.
 
@@ -97,6 +99,8 @@ non-executable convenience constructor.
   permanent retention;
 - reserved empty topology owns and links its intermediate tables without implying a valid leaf
   translation, and coarser leaves cannot replace those child tables;
+- active stack publication changes only zero invalid L3 slots to exact EL1 RW/NX leaves, while
+  retirement accepts only those exact leaves and completes TLB maintenance before frame release;
 - user mappings additionally retain populated leaf-frame ownership because those pages are not a
   permanent physical direct map.
 
@@ -110,7 +114,9 @@ reserved-topology tests additionally cover range boundaries, transactional rejec
 conflicts, and materialized invalid leaves. The focused final-map image is also Cross Compiled and
 ELF Inspected with the configured AArch64 bare-metal target. The recorded probe published the
 earlier five-table TTBR1 and continued through its success marker; the current seven-table image,
-permission cases, and guard-fault negative cases remain pending.
+live stack-leaf mapper, permission cases, and guard-fault negative cases remain pending. Host
+failure injection proves mapper errors precede all writes and successful retirement completes a
+second maintenance batch before ownership becomes releasable.
 
 Runtime installation is verified by `RUN-MMU-001`; low-alias retirement and the guard-fault probe
 remain tracked by `RUN-MMU-002` and `RUN-KSTACK-001` in `docs/RUNTIME_VALIDATION.md`.
@@ -120,9 +126,10 @@ remain tracked by `RUN-MMU-002` and `RUN-KSTACK-001` in `docs/RUNTIME_VALIDATION
 - derive supported physical-address size from `ID_AA64MMFR0_EL1.PARange`;
 - replace the bootstrap private-table backend and retained ASID-1 activation with process-table
   address-space ownership;
-- rerun the bounded fallible-heap final-map integration and implement the AArch64 live mapper under
-  the Host Tested mapped-stack ownership contract; switching and exception-stack policy remain;
-- define live table-update locking and break-before-make beyond the current one-time publication;
+- rerun the bounded fallible-heap final-map integration and instantiate the AArch64 stack mapper
+  under the Host Tested ownership contract; switching and exception-stack policy remain;
+- define live table-update locking and break-before-make beyond restricted invalid/valid stack
+  leaf transitions;
 - define safe ASID retirement, epochs, and reuse after TTBR0 lifetime ends;
 - retire the temporary low RAM alias safely and validate its absence;
 - decide whether a recursive/self-map region is needed alongside the implemented direct map.

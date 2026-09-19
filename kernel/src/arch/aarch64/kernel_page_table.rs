@@ -9,7 +9,8 @@ use crate::arch::aarch64::paging::{
 };
 use crate::arch::aarch64::user_page_table::TranslationTableMemory;
 use crate::memory::{
-    AllocationError, FrameAllocator, FrameRange, PAGE_SIZE, PageFrame, PhysAddr, VirtAddr,
+    AllocationError, FrameAllocator, FrameRange, KernelStackLayout, KernelStackMappingBackend,
+    OwnedKernelStack, PAGE_SIZE, PageFrame, PhysAddr, VirtAddr,
 };
 
 /// Failure while planning the final upper-half hierarchy.
@@ -827,6 +828,378 @@ impl<const TABLES: usize> MaterializedKernelPageTables<TABLES> {
         *allocator = candidate;
         Ok(())
     }
+
+    fn frame_for_role(&self, role: KernelTranslationTableRole) -> Option<PageFrame> {
+        self.tables()
+            .find(|table| table.role() == role)
+            .map(AllocatedKernelTranslationTable::frame)
+    }
+}
+
+/// Checked access to descriptor slots in one active kernel-table hierarchy.
+///
+/// # Safety
+///
+/// An implementation must read the exact aligned 64-bit descriptor selected by
+/// an owned table frame and index. After a successful read, an unsafe write to
+/// that same slot must complete as one non-tearing store and cannot fail or
+/// panic while the caller preserves the implementation's exclusive-access
+/// contract. Implementations must not redirect an owned frame to unrelated
+/// memory.
+pub unsafe trait ActiveKernelTableMemory {
+    /// Backend-specific preflight failure.
+    type Error;
+
+    /// Read one descriptor before any transaction writes occur.
+    fn read_descriptor(&mut self, frame: PageFrame, index: usize) -> Result<u64, Self::Error>;
+
+    /// Replace one descriptor after all fallible preflight work has succeeded.
+    ///
+    /// # Safety
+    ///
+    /// The frame and index must have been successfully read through this same
+    /// backend without any intervening access that can revoke or alias the
+    /// descriptor slot.
+    unsafe fn write_descriptor(&mut self, frame: PageFrame, index: usize, descriptor: Descriptor);
+}
+
+/// Visibility and TLB maintenance after a batch of kernel L3 leaf stores.
+///
+/// # Safety
+///
+/// Returning must make every preceding descriptor store visible to the active
+/// translation regime, invalidate cached translations for every supplied page,
+/// and complete the barriers required before code can use a new mapping or
+/// release frames from a retired mapping. The caller serializes descriptor
+/// mutation against IRQ, preemption, and other CPUs.
+pub unsafe trait KernelLeafTlbMaintenance<const PAGES: usize> {
+    /// Publish one complete batch of leaf changes.
+    fn synchronize(&mut self, pages: &[VirtAddr; PAGES]);
+}
+
+/// Failure while publishing or retiring one guarded AArch64 kernel stack.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Aarch64KernelStackMapError<E> {
+    /// A stack address could not be decoded under the current translation regime.
+    Paging(PagingError),
+    /// A stack page selected the lower TTBR0 half.
+    LowerHalf {
+        /// Rejected virtual page.
+        address: usize,
+    },
+    /// The retained hierarchy does not own the required prelinked L3 table.
+    MissingLevel3Table {
+        /// Virtual page whose table is absent.
+        address: usize,
+    },
+    /// A page that must be invalid already contains a descriptor.
+    DescriptorOccupied {
+        /// Conflicting virtual page.
+        address: usize,
+        /// Observed raw descriptor.
+        descriptor: u64,
+    },
+    /// A mapped usable page no longer contains its exact owned descriptor.
+    DescriptorMismatch {
+        /// Virtual page with unexpected state.
+        address: usize,
+        /// Required raw descriptor.
+        expected: u64,
+        /// Observed raw descriptor.
+        actual: u64,
+    },
+    /// The mapping token does not describe this hierarchy and stack owner.
+    MappingTokenMismatch,
+    /// Descriptor construction rejected an owned physical frame.
+    InvalidFrame(PagingError),
+    /// Descriptor preflight access failed before any mutation occurred.
+    Memory {
+        /// Virtual page whose descriptor could not be read.
+        address: usize,
+        /// Backend-specific failure.
+        error: E,
+    },
+}
+
+/// Exact identity of one published guarded stack mapping.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Aarch64KernelStackMapping<const STACK_PAGES: usize> {
+    root: PageFrame,
+    layout: KernelStackLayout,
+    frames: [PageFrame; STACK_PAGES],
+}
+
+#[derive(Clone, Copy)]
+struct StackLeafUpdate {
+    address: VirtAddr,
+    table: PageFrame,
+    index: usize,
+    descriptor: Descriptor,
+}
+
+/// Serialized mapper for prelinked L3 leaves in one active TTBR1 hierarchy.
+///
+/// All recoverable checks and backend reads finish before the first descriptor
+/// store. The commit phase uses only infallible stores followed by one complete
+/// maintenance batch, so a returned error never leaves a partial mapping.
+pub struct Aarch64KernelStackMapper<'a, M, T, const TABLES: usize, const STACK_PAGES: usize> {
+    tables: &'a MaterializedKernelPageTables<TABLES>,
+    memory: &'a mut M,
+    maintenance: &'a mut T,
+}
+
+impl<'a, M, T, const TABLES: usize, const STACK_PAGES: usize>
+    Aarch64KernelStackMapper<'a, M, T, TABLES, STACK_PAGES>
+{
+    /// Bind exclusive descriptor access to the exact active table owner.
+    ///
+    /// # Safety
+    ///
+    /// `tables` must be the active, permanently retained TTBR1 hierarchy.
+    /// `memory` must address those exact table frames and be uniquely held for
+    /// the mapper's lifetime. IRQs and preemption must remain unable to mutate
+    /// these descriptors, and no other CPU may access them concurrently.
+    pub unsafe fn new(
+        tables: &'a MaterializedKernelPageTables<TABLES>,
+        memory: &'a mut M,
+        maintenance: &'a mut T,
+    ) -> Self {
+        Self {
+            tables,
+            memory,
+            maintenance,
+        }
+    }
+}
+
+impl<
+    M: ActiveKernelTableMemory,
+    T: KernelLeafTlbMaintenance<STACK_PAGES>,
+    const TABLES: usize,
+    const STACK_PAGES: usize,
+> Aarch64KernelStackMapper<'_, M, T, TABLES, STACK_PAGES>
+{
+    fn leaf_location(
+        &self,
+        address: VirtAddr,
+    ) -> Result<(PageFrame, usize), Aarch64KernelStackMapError<M::Error>> {
+        let indices =
+            TranslationIndices::new(address).map_err(Aarch64KernelStackMapError::Paging)?;
+        if indices.half() != AddressSpaceHalf::Upper {
+            return Err(Aarch64KernelStackMapError::LowerHalf {
+                address: address.as_usize(),
+            });
+        }
+        let role = KernelTranslationTableRole::Level3 {
+            l1: indices.l1(),
+            l2: indices.l2(),
+        };
+        let table = self.tables.frame_for_role(role).ok_or(
+            Aarch64KernelStackMapError::MissingLevel3Table {
+                address: address.as_usize(),
+            },
+        )?;
+        Ok((table, indices.l3()))
+    }
+
+    fn read_raw(
+        &mut self,
+        address: VirtAddr,
+    ) -> Result<(PageFrame, usize, u64), Aarch64KernelStackMapError<M::Error>> {
+        let (table, index) = self.leaf_location(address)?;
+        let raw = self.memory.read_descriptor(table, index).map_err(|error| {
+            Aarch64KernelStackMapError::Memory {
+                address: address.as_usize(),
+                error,
+            }
+        })?;
+        Ok((table, index, raw))
+    }
+
+    fn require_invalid(
+        &mut self,
+        address: VirtAddr,
+    ) -> Result<(PageFrame, usize), Aarch64KernelStackMapError<M::Error>> {
+        let (table, index, raw) = self.read_raw(address)?;
+        if raw != Descriptor::invalid().raw() {
+            return Err(Aarch64KernelStackMapError::DescriptorOccupied {
+                address: address.as_usize(),
+                descriptor: raw,
+            });
+        }
+        Ok((table, index))
+    }
+
+    fn preflight_map(
+        &mut self,
+        stack: &OwnedKernelStack<STACK_PAGES>,
+    ) -> Result<[StackLeafUpdate; STACK_PAGES], Aarch64KernelStackMapError<M::Error>> {
+        let layout = stack.layout();
+        self.require_invalid(layout.lower_guard().start())?;
+        self.require_invalid(layout.upper_guard().start())?;
+        let mut updates = [None; STACK_PAGES];
+        for (slot, (address, frame)) in updates.iter_mut().zip(stack.mappings()) {
+            let (table, index) = self.require_invalid(address)?;
+            let descriptor = Descriptor::leaf(
+                TranslationLevel::L3,
+                frame.start_address(),
+                MappingAttributes::kernel_data(),
+            )
+            .map_err(Aarch64KernelStackMapError::InvalidFrame)?;
+            *slot = Some(StackLeafUpdate {
+                address,
+                table,
+                index,
+                descriptor,
+            });
+        }
+        Ok(updates.map(|update| update.expect("complete owned stack mapping")))
+    }
+
+    fn preflight_unmap(
+        &mut self,
+        stack: &OwnedKernelStack<STACK_PAGES>,
+        mapping: Aarch64KernelStackMapping<STACK_PAGES>,
+    ) -> Result<[StackLeafUpdate; STACK_PAGES], Aarch64KernelStackMapError<M::Error>> {
+        let mut frames = [None; STACK_PAGES];
+        for (slot, frame) in frames.iter_mut().zip(stack.frames()) {
+            *slot = Some(frame);
+        }
+        let frames = frames.map(|frame| frame.expect("complete owned stack frames"));
+        if mapping.root != self.tables.root_frame()
+            || mapping.layout != stack.layout()
+            || mapping.frames != frames
+        {
+            return Err(Aarch64KernelStackMapError::MappingTokenMismatch);
+        }
+
+        let layout = stack.layout();
+        self.require_invalid(layout.lower_guard().start())?;
+        self.require_invalid(layout.upper_guard().start())?;
+        let mut updates = [None; STACK_PAGES];
+        for (slot, (address, frame)) in updates.iter_mut().zip(stack.mappings()) {
+            let (table, index, raw) = self.read_raw(address)?;
+            let descriptor = Descriptor::leaf(
+                TranslationLevel::L3,
+                frame.start_address(),
+                MappingAttributes::kernel_data(),
+            )
+            .map_err(Aarch64KernelStackMapError::InvalidFrame)?;
+            if raw != descriptor.raw() {
+                return Err(Aarch64KernelStackMapError::DescriptorMismatch {
+                    address: address.as_usize(),
+                    expected: descriptor.raw(),
+                    actual: raw,
+                });
+            }
+            *slot = Some(StackLeafUpdate {
+                address,
+                table,
+                index,
+                descriptor,
+            });
+        }
+        Ok(updates.map(|update| update.expect("complete mapped stack")))
+    }
+}
+
+// SAFETY: construction requires one exact active hierarchy, exclusive table
+// access, and serialized execution. All fallible reads and validation precede
+// infallible descriptor stores; maintenance completes visibility and TLBI
+// before success, so errors preserve the entire prior mapping state.
+unsafe impl<
+    M: ActiveKernelTableMemory,
+    T: KernelLeafTlbMaintenance<STACK_PAGES>,
+    const TABLES: usize,
+    const STACK_PAGES: usize,
+> KernelStackMappingBackend<STACK_PAGES>
+    for Aarch64KernelStackMapper<'_, M, T, TABLES, STACK_PAGES>
+{
+    type Error = Aarch64KernelStackMapError<M::Error>;
+    type Mapping = Aarch64KernelStackMapping<STACK_PAGES>;
+
+    unsafe fn map_stack(
+        &mut self,
+        stack: &OwnedKernelStack<STACK_PAGES>,
+    ) -> Result<Self::Mapping, Self::Error> {
+        let updates = self.preflight_map(stack)?;
+        for update in &updates {
+            // SAFETY: preflight successfully read this exact slot through the
+            // same exclusively held backend and no intervening access occurs.
+            unsafe {
+                self.memory
+                    .write_descriptor(update.table, update.index, update.descriptor);
+            }
+        }
+        let pages = updates.map(|update| update.address);
+        self.maintenance.synchronize(&pages);
+        let mut frames = [None; STACK_PAGES];
+        for (slot, frame) in frames.iter_mut().zip(stack.frames()) {
+            *slot = Some(frame);
+        }
+        Ok(Aarch64KernelStackMapping {
+            root: self.tables.root_frame(),
+            layout: stack.layout(),
+            frames: frames.map(|frame| frame.expect("complete owned stack frames")),
+        })
+    }
+
+    unsafe fn unmap_stack(
+        &mut self,
+        stack: &OwnedKernelStack<STACK_PAGES>,
+        mapping: Self::Mapping,
+    ) -> Result<(), (Self::Mapping, Self::Error)> {
+        let updates = match self.preflight_unmap(stack, mapping) {
+            Ok(updates) => updates,
+            Err(error) => return Err((mapping, error)),
+        };
+        for update in &updates {
+            // SAFETY: preflight successfully read and matched this exact slot
+            // through the same exclusive backend with no intervening access.
+            unsafe {
+                self.memory
+                    .write_descriptor(update.table, update.index, Descriptor::invalid());
+            }
+        }
+        let pages = updates.map(|update| update.address);
+        self.maintenance.synchronize(&pages);
+        Ok(())
+    }
+}
+
+/// Single-CPU AArch64 maintenance for global TTBR1 L3 leaf changes.
+#[cfg(target_arch = "aarch64")]
+pub struct Aarch64KernelLeafTlb;
+
+#[cfg(target_arch = "aarch64")]
+// SAFETY: the sequence publishes preceding descriptor stores, broadcasts one
+// all-ASID EL1 invalidation per page, and completes before returning. The
+// mapper constructor separately requires exclusive single-core mutation.
+unsafe impl<const PAGES: usize> KernelLeafTlbMaintenance<PAGES> for Aarch64KernelLeafTlb {
+    fn synchronize(&mut self, pages: &[VirtAddr; PAGES]) {
+        // SAFETY: the trait contract and mapper transaction establish valid
+        // descriptor stores and exclusive mutation before this barrier.
+        unsafe {
+            asm!("dsb ishst", options(nostack, preserves_flags));
+        }
+        for page in pages {
+            let operand = (page.as_usize() >> 12) & ((1_usize << 44) - 1);
+            // SAFETY: `VAAE1IS` accepts the page number of a canonical VA and
+            // invalidates the global EL1 translation for all ASIDs.
+            unsafe {
+                asm!(
+                    "tlbi vaae1is, {operand}",
+                    operand = in(reg) operand,
+                    options(nostack, preserves_flags)
+                );
+            }
+        }
+        // SAFETY: the completion barrier and ISB prevent later execution or
+        // frame release from racing stale translations.
+        unsafe {
+            asm!("dsb ish", "isb", options(nostack, preserves_flags));
+        }
+    }
 }
 
 const _: () = assert!(PAGE_SIZE == 4096);
@@ -839,16 +1212,18 @@ mod tests {
     use std::vec::Vec;
 
     use super::{
-        AllocatedKernelTranslationTable, DirectMapOverride, KernelPageTableError,
-        KernelPageTablePlan, KernelTableMaterializationStage, KernelTranslationTableRole,
-        MaterializedKernelPageTables,
+        Aarch64KernelStackMapError, Aarch64KernelStackMapper, ActiveKernelTableMemory,
+        AllocatedKernelTranslationTable, DirectMapOverride, KernelLeafTlbMaintenance,
+        KernelPageTableError, KernelPageTablePlan, KernelTableMaterializationStage,
+        KernelTranslationTableRole, MaterializedKernelPageTables,
     };
     use crate::arch::aarch64::paging::{
-        Descriptor, MappingAttributes, PagingError, TranslationLevel,
+        Descriptor, MappingAttributes, PagingError, TranslationIndices, TranslationLevel,
     };
     use crate::arch::aarch64::user_page_table::TranslationTableMemory;
     use crate::memory::{
-        AddressRange, FrameRange, MemoryMap, PAGE_SIZE, PageFrame, PhysAddr, VirtAddr,
+        AddressRange, FrameRange, KernelStackKind, KernelStackMemory, KernelStackPool, MemoryMap,
+        PAGE_SIZE, PageFrame, PhysAddr, VirtAddr,
     };
 
     const OFFSET: usize = 0xffff_ff80_0000_0000;
@@ -1271,6 +1646,143 @@ mod tests {
     }
 
     #[test]
+    fn live_stack_mapper_preflights_failures_and_retires_before_release() {
+        const ARENA: usize = 0xffff_ff90_0000_0000;
+        let mut pool = KernelStackPool::<1, 2>::new(VirtAddr::new(ARENA)).unwrap();
+        let mut plan = KernelPageTablePlan::<3, 0>::new().unwrap();
+        plan.reserve_l3_range(pool.arena().start(), pool.arena().len())
+            .unwrap();
+        let mut map = MemoryMap::<1>::new();
+        map.add_usable(range(0x6300_0000, 0x6300_5000)).unwrap();
+        let mut allocator = map.into_allocator();
+        let allocated = plan.allocate(&mut allocator).unwrap();
+        let table_frames: Vec<_> = allocated.tables().collect();
+        let mut table_memory = TestMemory::new(&table_frames);
+        let tables = allocated.materialize(&mut table_memory).unwrap();
+        let mut clear_memory = ClearMemory;
+        let stack = pool
+            .allocate(&mut allocator, &mut clear_memory, KernelStackKind::Thread)
+            .unwrap();
+        let layout = stack.layout();
+        let expected_mappings: Vec<_> = stack.mappings().collect();
+        let expected_pages: Vec<_> = expected_mappings
+            .iter()
+            .map(|(address, _)| *address)
+            .collect();
+        let mut maintenance = TestMaintenance::default();
+
+        table_memory.fail_live_read = Some(2);
+        // SAFETY: this host model treats `tables` as the active hierarchy,
+        // gives the mapper exclusive descriptor access, and models complete
+        // maintenance synchronously.
+        let mut mapper = unsafe {
+            Aarch64KernelStackMapper::<_, _, 3, 2>::new(
+                &tables,
+                &mut table_memory,
+                &mut maintenance,
+            )
+        };
+        let (stack, Aarch64KernelStackMapError::Memory { error, .. }) =
+            (match stack.publish(&mut mapper) {
+                Ok(_) => panic!("injected mapping read should fail"),
+                Err(failure) => failure,
+            })
+        else {
+            panic!("expected preflight memory failure");
+        };
+        assert_eq!(error, TestMemoryError::Injected);
+        assert_eq!(mapper.memory.live_write_count, 0);
+        assert!(mapper.maintenance.batches.is_empty());
+
+        mapper.memory.fail_live_read = None;
+        let mapped = stack.publish(&mut mapper).expect("publish stack leaves");
+        assert_eq!(mapper.memory.live_write_count, 2);
+        assert_eq!(mapper.maintenance.batches.len(), 1);
+        assert_eq!(mapper.maintenance.batches[0], expected_pages);
+        for (address, frame) in expected_mappings.iter().copied() {
+            let indices = TranslationIndices::new(address).unwrap();
+            let l3 = frame_for(
+                &table_frames,
+                KernelTranslationTableRole::Level3 {
+                    l1: indices.l1(),
+                    l2: indices.l2(),
+                },
+            );
+            let expected = Descriptor::leaf(
+                TranslationLevel::L3,
+                frame.start_address(),
+                MappingAttributes::kernel_data(),
+            )
+            .unwrap();
+            assert_eq!(mapper.memory.descriptor(l3, indices.l3()), expected);
+        }
+        assert!(
+            !descriptor_for(&table_frames, mapper.memory, layout.lower_guard().start()).is_valid()
+        );
+        assert!(
+            !descriptor_for(&table_frames, mapper.memory, layout.upper_guard().start()).is_valid()
+        );
+
+        let (first_address, first_frame) = expected_mappings[0];
+        let first_indices = TranslationIndices::new(first_address).unwrap();
+        let first_l3 = frame_for(
+            &table_frames,
+            KernelTranslationTableRole::Level3 {
+                l1: first_indices.l1(),
+                l2: first_indices.l2(),
+            },
+        );
+        let first_table_index = mapper.memory.frame_index(first_l3).unwrap();
+        let expected_first = Descriptor::leaf(
+            TranslationLevel::L3,
+            first_frame.start_address(),
+            MappingAttributes::kernel_data(),
+        )
+        .unwrap();
+        mapper.memory.entries[first_table_index][first_indices.l3()] = Descriptor::invalid();
+        let writes_before_mismatch = mapper.memory.live_write_count;
+        let (mapped, Aarch64KernelStackMapError::DescriptorMismatch { address, .. }) = mapped
+            .unpublish(&mut mapper)
+            .expect_err("descriptor mismatch")
+        else {
+            panic!("expected exact descriptor mismatch")
+        };
+        assert_eq!(address, first_address.as_usize());
+        assert_eq!(mapper.memory.live_write_count, writes_before_mismatch);
+        assert_eq!(mapper.maintenance.batches.len(), 1);
+        mapper.memory.entries[first_table_index][first_indices.l3()] = expected_first;
+
+        mapper.memory.fail_live_read = Some(mapper.memory.live_read_count + 2);
+        let writes_before_failed_unmap = mapper.memory.live_write_count;
+        let (mapped, Aarch64KernelStackMapError::Memory { error, .. }) = mapped
+            .unpublish(&mut mapper)
+            .expect_err("injected retirement read failure")
+        else {
+            panic!("expected retirement preflight failure")
+        };
+        assert_eq!(error, TestMemoryError::Injected);
+        assert_eq!(mapper.memory.live_write_count, writes_before_failed_unmap);
+        assert_eq!(mapper.maintenance.batches.len(), 1);
+
+        mapper.memory.fail_live_read = None;
+        let stack = match mapped.unpublish(&mut mapper) {
+            Ok(stack) => stack,
+            Err(_) => panic!("retry should retire stack leaves"),
+        };
+        assert_eq!(mapper.memory.live_write_count, 4);
+        assert_eq!(mapper.maintenance.batches.len(), 2);
+        assert_eq!(mapper.maintenance.batches[1], expected_pages);
+        for address in stack.mappings().map(|(address, _)| address) {
+            assert!(!descriptor_for(&table_frames, mapper.memory, address).is_valid());
+        }
+        stack
+            .release_unpublished(&mut pool, &mut allocator)
+            .unwrap();
+        assert_eq!(pool.allocated_slots(), 0);
+        assert_eq!(allocator.total_free_frames(), 2);
+    }
+
+    #[test]
     fn materialization_failure_returns_retryable_ownership() {
         let mut plan = KernelPageTablePlan::<2, 1>::new().unwrap();
         plan.map(
@@ -1322,6 +1834,22 @@ mod tests {
         .unwrap()
     }
 
+    fn descriptor_for(
+        frames: &[AllocatedKernelTranslationTable],
+        memory: &TestMemory,
+        address: VirtAddr,
+    ) -> Descriptor {
+        let indices = TranslationIndices::new(address).unwrap();
+        let l3 = frame_for(
+            frames,
+            KernelTranslationTableRole::Level3 {
+                l1: indices.l1(),
+                l2: indices.l2(),
+            },
+        );
+        memory.descriptor(l3, indices.l3())
+    }
+
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum TestMemoryError {
         UnknownFrame,
@@ -1334,6 +1862,9 @@ mod tests {
         entries: Vec<Vec<Descriptor>>,
         write_count: usize,
         fail_write: Option<usize>,
+        live_read_count: usize,
+        fail_live_read: Option<usize>,
+        live_write_count: usize,
     }
 
     impl TestMemory {
@@ -1343,6 +1874,9 @@ mod tests {
                 entries: vec![vec![Descriptor::invalid(); 512]; tables.len()],
                 write_count: 0,
                 fail_write: None,
+                live_read_count: 0,
+                fail_live_read: None,
+                live_write_count: 0,
             }
         }
 
@@ -1383,6 +1917,60 @@ mod tests {
                 .ok_or(TestMemoryError::InvalidIndex)?;
             *slot = descriptor;
             Ok(())
+        }
+    }
+
+    // SAFETY: this host model owns fixed descriptor arrays. Successful reads
+    // select an exact slot, and the matching unsafe write is infallible and
+    // non-tearing within the single-threaded test.
+    unsafe impl ActiveKernelTableMemory for TestMemory {
+        type Error = TestMemoryError;
+
+        fn read_descriptor(&mut self, frame: PageFrame, index: usize) -> Result<u64, Self::Error> {
+            if self.live_read_count == self.fail_live_read.unwrap_or(usize::MAX) {
+                return Err(TestMemoryError::Injected);
+            }
+            self.live_read_count += 1;
+            let frame_index = self.frame_index(frame)?;
+            self.entries[frame_index]
+                .get(index)
+                .copied()
+                .map(Descriptor::raw)
+                .ok_or(TestMemoryError::InvalidIndex)
+        }
+
+        unsafe fn write_descriptor(
+            &mut self,
+            frame: PageFrame,
+            index: usize,
+            descriptor: Descriptor,
+        ) {
+            let frame_index = self.frame_index(frame).expect("preflighted table frame");
+            self.entries[frame_index][index] = descriptor;
+            self.live_write_count += 1;
+        }
+    }
+
+    struct ClearMemory;
+
+    impl KernelStackMemory for ClearMemory {
+        type Error = core::convert::Infallible;
+
+        fn clear_frame(&mut self, _frame: PageFrame) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct TestMaintenance {
+        batches: Vec<Vec<VirtAddr>>,
+    }
+
+    // SAFETY: this single-threaded host model records the complete batch and
+    // has no hardware translation cache to invalidate.
+    unsafe impl<const PAGES: usize> KernelLeafTlbMaintenance<PAGES> for TestMaintenance {
+        fn synchronize(&mut self, pages: &[VirtAddr; PAGES]) {
+            self.batches.push(pages.to_vec());
         }
     }
 }

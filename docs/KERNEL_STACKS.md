@@ -3,7 +3,7 @@
 This document describes the stack protection that Phoenix currently implements and the larger
 kernel-stack policy that remains to be built. The linker-owned boot guard becomes effective only
 after the final AArch64 `TTBR1_EL1` hierarchy is installed; the owned runtime-stack mechanism is
-currently a Host Tested allocation and offline-mapping foundation.
+currently a Host Tested allocation, ownership, and restricted live-leaf-mapping foundation.
 
 ## Current implementation
 
@@ -78,8 +78,8 @@ are an initial bounded policy for integration, not measured production stack siz
 
 The owned stack can supply page-by-page pairs to an offline architecture page-table plan. Host
 tests use the real AArch64 planner to map only usable pages with `kernel_data` attributes and prove
-both guards remain absent. No live table mutation, stack-pointer switch, or exception entry uses
-these owners yet.
+both guards remain absent. No boot path invokes live table mutation, switches the stack pointer, or
+enters an exception on these owners yet.
 
 `KernelStackMappingBackend` and `MappedKernelStack` now define the ownership boundary for future
 live integration. Publishing consumes `OwnedKernelStack`; success couples it to a unique backend
@@ -88,16 +88,31 @@ guarded layout, and aligned initial SP, but deliberately has no frame/slot relea
 Unpublishing must first consume the exact token; success recovers the unpublished owner, while
 failure returns the complete mapped state so ownership cannot disappear. The mapped owner is
 intentionally neither `Send` nor `Sync` until cross-CPU transfer and TLB shootdown are defined.
+The trait's low-level map/unmap methods are themselves `unsafe`; safe callers can reach them only
+through these consuming type-state transitions and therefore cannot retain an unpublished release
+path beside a live token.
 
 Implementing the backend is `unsafe`. Its contract requires exact EL1 RW/NX usable-page mappings,
 invalid guards, all-or-nothing publication, and completed descriptor/TLB visibility. Unpublication
 must remove all usable pages and complete TLB maintenance before success; failure must preserve or
 restore the complete mapping and return its token. The contract also requires serialization against
-IRQ, preemption, and SMP mutation. No AArch64 live backend implements this contract yet.
+IRQ, preemption, and SMP mutation.
 
-`FinalDirectMapMemory` now implements the stack-clearing backend and is restricted to allocator
-managed frames proved against the retained TTBR1 hierarchy. It is not used for owned stacks until
-the separate virtual stack mappings can be published and retired safely.
+`Aarch64KernelStackMapper` now implements that narrow contract for the prelinked arena. It locates
+only L3 frames owned by the retained `MaterializedKernelPageTables`, checks both guards and every
+usable descriptor, and constructs exact `kernel_data` leaves before changing memory. All fallible
+reads and validation finish first. The commit phase performs infallible aligned descriptor stores,
+then `DSB ISHST`, one `TLBI VAAE1IS` per page, `DSB ISH`, and `ISB`. Retirement first proves that
+the mapping token names the same root, layout, and frames and that every live descriptor is exact;
+only then does it invalidate the batch and complete the same maintenance before returning the
+unpublished owner. It never performs valid-to-valid replacement, so break-before-make is not part
+of this restricted transition.
+
+`FinalDirectMapMemory` implements stack clearing and the active-table descriptor backend. Both are
+restricted to allocator-managed frames proved against the retained TTBR1 hierarchy. Constructing
+the mapper remains unsafe and requires the single boot CPU, masked/non-mutating exceptions,
+exclusive descriptor access, and the exact active table owner. No boot path allocates or publishes
+an owned runtime stack yet.
 
 ## Invariants
 
@@ -123,8 +138,16 @@ the separate virtual stack mappings can be published and retired safely.
 - guards never appear in the owner's mapping iterator, while every usable page appears exactly
   once in increasing virtual order;
 - publication failure returns the unchanged unpublished owner and leaves no partial mapping;
+- safe code cannot call the low-level backend methods directly and bypass the consuming ownership
+  transitions;
 - a mapped owner retains its frames and slot until the exact backend token is successfully retired;
 - unpublication failure returns a still-complete mapped owner and cannot expose physical release;
+- the AArch64 mapper accepts only zero invalid leaves for publication and only the exact owned
+  descriptors for retirement; all recoverable errors occur before its first write;
+- a successful leaf batch completes store visibility, all-ASID per-page invalidation, and final
+  barriers before mapping use or physical-frame release;
+- current live updates are only invalid-to-valid publication and valid-to-invalid retirement;
+  valid-to-valid replacement is outside this backend and would require break-before-make;
 - mapped ownership cannot be sent or shared across Rust concurrency domains in the current
   single-core policy;
 - current pool mutation requires one non-reentrant mutable owner. IRQ, preemption, and SMP sharing
@@ -154,6 +177,14 @@ fault-injecting mapping model verifies failed publication, successful type-state
 rejection by a foreign backend instance, failed unpublication with token retention, successful
 retry, and frame/slot release only after returning to the unpublished state.
 
+The concrete AArch64 mapper test materializes the prelinked hierarchy, injects a descriptor-read
+failure before publication, verifies zero writes and zero maintenance, publishes exact RW/NX
+leaves with guards unchanged, rejects a deliberately corrupted live descriptor without mutation,
+injects a retirement preflight failure, then retries retirement. It proves the second maintenance
+batch precedes recovery of the unpublished owner and only that state can release frames. The
+target-specific barrier/TLBI implementation and final-direct-map descriptor backend Cross Compile;
+neither has executed on QEMU.
+
 The recorded final-map and loaded-init probes crossed final TTBR1 publication while using the
 1 MiB construction stack. This validates the positive live-stack mapping, but not an intentional
 underflow into the guard.
@@ -171,7 +202,8 @@ retired. That separate target boundary is `RUN-KSTACK-002` and remains Runtime P
 recorded positive final-map and loaded-init runs validate only the linker-owned construction stack
 and do not close either negative or dynamic-stack boundary. Those runs also predate the current
 seven-table hierarchy; the empty arena topology is Host Tested, Cross Compiled, and Runtime
-Pending rather than inferred from the older five-table output.
+Pending rather than inferred from the older five-table output. The live leaf mapper is likewise
+Host Tested and Cross Compiled but has not been instantiated by a boot path.
 
 ## TODO
 
@@ -181,9 +213,9 @@ Pending rather than inferred from the older five-table output.
 - move bulky boot plans into explicitly owned scratch memory so the temporary stack can shrink;
 - replace the provisional 16-slot/eight-page policy with measured thread and exception call-depth
   requirements before relying on it as production sizing;
-- implement the AArch64 live backend under the mapped-stack safety contract, including
-  leaf publication inside the prelinked topology, break-before-make, TLB maintenance, rollback,
-  and exact table-owner identity;
+- integrate the AArch64 mapper with one boot-owned stack allocation, keep exceptions unable to
+  mutate the hierarchy, and validate publication/retirement on target before switching SP;
+- define break-before-make separately before allowing any valid-to-valid descriptor replacement;
 - define separate exception and emergency-stack sizing, nesting, and double-fault policy before
   asynchronous interrupts or recoverable current-EL faults;
 - switch stacks safely during thread creation, context switching, teardown, and CPU-local idle;
@@ -193,9 +225,9 @@ Pending rather than inferred from the older five-table output.
 
 ## Skipped work
 
-Phoenix reserves and owns the virtual pool metadata and models mapped ownership, but does not yet
-allocate its physical stack frames during boot, implement a live AArch64 mapping backend, switch
-between kernel threads,
-recover from kernel stack faults, enter a dedicated exception stack, maintain per-CPU emergency
-stacks, unwind stack traces, randomize stack locations, or reclaim live stack mappings. The pool
-and offline mapping evidence must not be described as a running kernel-stack subsystem.
+Phoenix reserves and owns the virtual pool metadata and implements a restricted AArch64 leaf
+mapper, but does not yet allocate runtime-stack frames during boot, instantiate that mapper against
+the active hierarchy, switch between kernel threads, recover from kernel stack faults, enter a
+dedicated exception stack, maintain per-CPU emergency stacks, unwind stack traces, randomize stack
+locations, or reclaim a mapping on target. The Host Tested mapping evidence must not be described
+as a running kernel-stack subsystem.

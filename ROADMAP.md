@@ -115,8 +115,11 @@ mapping are Host Tested. Final-map builders now prove a retained provisional 16-
 QEMU `virt` arena has no leaf translations and prelink its empty L2/L3 topology in the retained
 final hierarchy. An ownership-preserving mapped-stack type state now makes publication and
 retirement failures transactional and prevents mapped frames from reaching the unpublished
-release path; the current seven-table image still needs target execution, and the live AArch64
-backend, measured sizing, thread switching, and exception-stack activation remain;
+release path. A restricted AArch64 backend now preflights exact active L3 descriptors, performs
+infallible batch writes, and completes per-page all-ASID TLB maintenance before publication or
+release; host failure injection covers partial-update prevention. The current seven-table image
+and mapper still need target execution, and boot integration, measured sizing, thread switching,
+and exception-stack activation remain;
 the loaded-init path retires temporary TTBR0 aliases when it installs its user hierarchy.
 
 Observable result: allocator and mapping self-tests exercise success and failure paths without

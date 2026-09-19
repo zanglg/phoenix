@@ -58,13 +58,25 @@ pub unsafe trait KernelStackMappingBackend<const STACK_PAGES: usize> {
     type Mapping;
 
     /// Publish the exact owned stack and its deliberately absent guards.
-    fn map_stack(
+    ///
+    /// # Safety
+    ///
+    /// This must be called only as the ownership transition performed by
+    /// [`OwnedKernelStack::publish`]. A direct call would leave the caller able
+    /// to release frames that the returned token still maps.
+    unsafe fn map_stack(
         &mut self,
         stack: &OwnedKernelStack<STACK_PAGES>,
     ) -> Result<Self::Mapping, Self::Error>;
 
     /// Retire the exact mapping, returning its token unchanged on failure.
-    fn unmap_stack(
+    ///
+    /// # Safety
+    ///
+    /// This must be called only as the ownership transition performed by
+    /// [`MappedKernelStack::unpublish`] with the token stored in that mapped
+    /// owner.
+    unsafe fn unmap_stack(
         &mut self,
         stack: &OwnedKernelStack<STACK_PAGES>,
         mapping: Self::Mapping,
@@ -322,7 +334,9 @@ impl<const STACK_PAGES: usize> OwnedKernelStack<STACK_PAGES> {
         self,
         backend: &mut B,
     ) -> Result<MappedKernelStack<STACK_PAGES, B>, (Self, B::Error)> {
-        match backend.map_stack(&self) {
+        // SAFETY: consuming `self` into `MappedKernelStack` couples the exact
+        // owner to the returned token and removes the frame-release path.
+        match unsafe { backend.map_stack(&self) } {
             Ok(mapping) => Ok(MappedKernelStack {
                 stack: self,
                 mapping,
@@ -410,7 +424,9 @@ impl<const STACK_PAGES: usize, B: KernelStackMappingBackend<STACK_PAGES>>
             mapping,
             _not_send_or_sync,
         } = self;
-        match backend.unmap_stack(&stack, mapping) {
+        // SAFETY: `mapping` came from this mapped owner and success returns the
+        // unpublished owner only after the backend has retired the mapping.
+        match unsafe { backend.unmap_stack(&stack, mapping) } {
             Ok(()) => Ok(stack),
             Err((mapping, error)) => Err((
                 Self {
@@ -504,7 +520,10 @@ mod tests {
         type Error = MappingError;
         type Mapping = TestMapping;
 
-        fn map_stack(&mut self, stack: &OwnedKernelStack<2>) -> Result<Self::Mapping, Self::Error> {
+        unsafe fn map_stack(
+            &mut self,
+            stack: &OwnedKernelStack<2>,
+        ) -> Result<Self::Mapping, Self::Error> {
             if self.fail_map {
                 return Err(MappingError::Injected);
             }
@@ -523,7 +542,7 @@ mod tests {
             Ok(mapping)
         }
 
-        fn unmap_stack(
+        unsafe fn unmap_stack(
             &mut self,
             stack: &OwnedKernelStack<2>,
             mapping: Self::Mapping,

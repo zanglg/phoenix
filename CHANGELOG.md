@@ -31,8 +31,11 @@ numbers and remains explicitly unstable before 1.0.0. During construction, chang
   slot, two guards, full initial-leaf-absence validation, prelinked empty L2/L3 topology, and one
   pool owner in each final-TTBR1 path.
 - Ownership-preserving mapped kernel-stack type state with an unsafe architecture-backend contract,
-  unique publication tokens, transactional map/unmap failures, and frame release gated on
-  successful mapping retirement.
+  unsafe low-level entry points, unique publication tokens, transactional map/unmap failures, and
+  frame release gated on successful mapping retirement.
+- A restricted AArch64 runtime-stack leaf mapper with retained-table identity, fallible preflight,
+  exact descriptor/token validation, infallible batch commit, final-direct-map descriptor access,
+  and per-page all-ASID TLB maintenance before mapping use or frame release.
 - Reservation-filtered managed-frame snapshots, full-leaf final-direct-map proof, a retained-table
   RAM access capability, and loaded-init user copies no longer dependent on bootstrap raw helpers.
 - Bounded final-map heap initialization after TTBR1 publication, with retained frame ownership,

@@ -84,7 +84,10 @@ publication operation. Publication executes:
 
 Both final-map runtime owner variants also retain one platform-created runtime-stack pool for the
 reserved arena. This establishes virtual-slot ownership but does not allocate stack frames or
-authorize live descriptor mutation.
+by itself authorize live descriptor mutation. A separate unsafe AArch64 mapper can bind the exact
+retained table owner, its final-direct-map descriptor access, and serialized TLB maintenance. It
+changes only prelinked L3 leaves after completing all fallible checks, and no boot path constructs
+that mapper yet.
 
 This replaces the coarse higher-half bootstrap hierarchy. The standalone final-map probe
 intentionally leaves `TTBR0_EL1` unchanged, so its temporary low device and RAM aliases remain.
@@ -134,7 +137,9 @@ retryable backend failure, and unpublished release. Platform tests cover the pin
 topology, critical mappings, linker-layout rejection, RAM-window rejection, exact runtime-stack
 arena extent, seven-table/767-leaf result, initial leaf absence, reserved-parent materialization,
 and injected mapping conflicts. Planner tests also cover reservations crossing an L3-table
-boundary plus transactional alignment, half, capacity, and leaf/topology conflict failures.
+boundary plus transactional alignment, half, capacity, and leaf/topology conflict failures. A live
+mapper model injects publication and retirement reads, verifies zero partial writes on errors,
+rejects an altered live descriptor, and requires a completed maintenance batch before frame release.
 
 The focused kernel image is Cross Compiled and ELF Inspected. Static checks require every
 permission-domain symbol, page alignment and ordering, the first-2-MiB image bound, the expected
@@ -156,15 +161,15 @@ but does not validate the current seven-table extended probe.
 - enable caches only after cache-maintenance and memory-ordering requirements are designed and
   runtime tested;
 - replace the provisional stack arena sizing with measured policy, then implement the AArch64
-  backend under the mapped-stack ownership contract for thread and exception stacks;
-- implement live mapping updates with break-before-make, local versus broadcast TLB maintenance,
-  ASIDs, rollback, and SMP synchronization;
+  mapper integration under the ownership contract for thread and exception stacks;
+- define general live mapping updates with break-before-make, local versus broadcast TLB policy,
+  rollback, and SMP synchronization beyond the restricted stack leaf transitions;
 
 ## Skipped work
 
-This implementation does not provide dynamic kernel mappings, general heap consumers, per-CPU
-tables, recursive mapping, KASLR, copy-on-write, demand paging, swapping, transparent huge pages,
-16/64 KiB granules,
+This implementation does not provide general dynamic kernel mappings, general heap consumers,
+per-CPU tables, recursive mapping, KASLR, copy-on-write, demand paging, swapping, transparent huge
+pages, 16/64 KiB granules,
 52-bit addresses, MTE, stage-2 translation, DMA/IOMMU mappings, or SMP TLB shootdown. It maps all
 DTB-declared RAM into an EL1-only direct map; it does not use mapping permissions as an ownership
 substitute for firmware-reserved or allocator-owned frames.
