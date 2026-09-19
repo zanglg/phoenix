@@ -29,6 +29,9 @@ numbers and remains explicitly unstable before 1.0.0. During construction, chang
   EL1 RW/NX offline mapping.
 - Reservation-filtered managed-frame snapshots, full-leaf final-direct-map proof, a retained-table
   RAM access capability, and loaded-init user copies no longer dependent on bootstrap raw helpers.
+- Bounded final-map heap initialization after TTBR1 publication, with retained frame ownership,
+  aligned release/reuse, recoverable byte and metadata exhaustion checks, and an ordered static
+  and runtime-validation marker.
 - Host-tested AArch64 translation indices, stage-1 descriptors, mapping attributes, and fixed-capacity offline mapping plans.
 - Pinned QEMU `virt` command generation and a bounded boot integration harness with sentinel, timeout, output-limit, and log handling.
 - Host-tested AArch64 vector-slot model, stable exception-frame ABI, ESR decoding, SVC immediate extraction, and data-abort classification.

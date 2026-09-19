@@ -82,9 +82,10 @@ cargo xtask test-init
 another machine silently. The normal emulator-free `cargo xtask ci` command never launches QEMU.
 
 Static inspection also requires each image variant's own terminal sentinel to be embedded in its
-ELF. EL0-capable variants must additionally contain `PHOENIX_USER_FAULT` and their matching failure
-sentinel. These checks prevent a default image or incomplete fault path built under the wrong
-feature set from masquerading as a focused probe artifact.
+ELF. The final-map image must additionally contain `PHOENIX_KERNEL_HEAP_OK`; EL0-capable variants
+must contain `PHOENIX_USER_FAULT` and their matching failure sentinel. These checks prevent a
+default image or incomplete path built under the wrong feature set from masquerading as a focused
+probe artifact.
 
 ## Boot-test protocol
 
@@ -95,8 +96,10 @@ terminal sentinel determines the result:
 - `PHOENIX_PANIC`: fail immediately;
 - `PHOENIX_EXCEPTION`: fail immediately and retain the register report;
 - `PHOENIX_MEMORY_OK`: pass for `test-memory` only;
-- `PHOENIX_KERNEL_MAP_OK`: pass for `test-kernel-map` only, after TTBR1 publication;
-- `PHOENIX_KERNEL_MAP_OK` without the earlier `PHOENIX_KERNEL_MAP_ENTER`: protocol fail;
+- `PHOENIX_KERNEL_HEAP_OK`: required progress after TTBR1 publication and bounded heap checks;
+- `PHOENIX_KERNEL_MAP_OK`: pass for `test-kernel-map` only, after ordered
+  `PHOENIX_KERNEL_MAP_ENTER` and `PHOENIX_KERNEL_HEAP_OK`;
+- `PHOENIX_KERNEL_MAP_OK` without either earlier required marker: protocol fail;
 - `PHOENIX_EL0_OK`: pass for `test-el0` only;
 - `PHOENIX_EL0_FAIL`: fail `test-el0` immediately;
 - `PHOENIX_USER_FAULT`: diagnostic prelude only; an EL0 variant must then emit its own failure
@@ -141,6 +144,11 @@ exception trace showed an outer approximately 305 KiB frame plus a nested approx
 planner frame. The recorded fix increases only the construction stack to 1 MiB and uses in-place
 transactional planner updates; it does not change the 4 KiB granule, QEMU RAM size, or address
 layout.
+
+That recorded final-map run predates the bounded heap path and did not emit
+`PHOENIX_KERNEL_HEAP_OK`. It remains evidence for final TTBR1 publication, not for the current
+heap-extended protocol or `RUN-KHEAP-001`; the latter remains Runtime Pending until a new run is
+captured.
 
 ## How to report a run
 

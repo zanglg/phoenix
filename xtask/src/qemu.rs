@@ -23,6 +23,7 @@ pub const EXCEPTION_SENTINEL: &str = "PHOENIX_EXCEPTION";
 pub const USER_FAULT_SENTINEL: &str = "PHOENIX_USER_FAULT";
 pub const MEMORY_SUCCESS_SENTINEL: &str = "PHOENIX_MEMORY_OK";
 pub const KERNEL_MAP_ENTER_SENTINEL: &str = "PHOENIX_KERNEL_MAP_ENTER";
+pub const KERNEL_HEAP_SUCCESS_SENTINEL: &str = "PHOENIX_KERNEL_HEAP_OK";
 pub const KERNEL_MAP_SUCCESS_SENTINEL: &str = "PHOENIX_KERNEL_MAP_OK";
 pub const EL0_SUCCESS_SENTINEL: &str = "PHOENIX_EL0_OK";
 pub const EL0_FAILURE_SENTINEL: &str = "PHOENIX_EL0_FAIL";
@@ -129,7 +130,7 @@ impl ExpectedOutput {
 
     const fn required_output(self) -> &'static [&'static str] {
         match self {
-            Self::KernelMap => &[KERNEL_MAP_ENTER_SENTINEL],
+            Self::KernelMap => &[KERNEL_MAP_ENTER_SENTINEL, KERNEL_HEAP_SUCCESS_SENTINEL],
             Self::Init => &[
                 INIT_KERNEL_MAP_ENTER_SENTINEL,
                 INIT_KERNEL_MAP_SUCCESS_SENTINEL,
@@ -533,9 +534,9 @@ mod tests {
         BOOT_SUCCESS_SENTINEL, CPU, EL0_FAILURE_SENTINEL, EL0_SUCCESS_SENTINEL, EXCEPTION_SENTINEL,
         ExpectedOutput, INIT_ENTER_SENTINEL, INIT_FAILURE_SENTINEL, INIT_KERNEL_MAP_ENTER_SENTINEL,
         INIT_KERNEL_MAP_SUCCESS_SENTINEL, INIT_SUCCESS_SENTINEL, INIT_USER_OUTPUT,
-        KERNEL_MAP_ENTER_SENTINEL, KERNEL_MAP_SUCCESS_SENTINEL, MACHINE, MEMORY_SUCCESS_SENTINEL,
-        PANIC_SENTINEL, QemuCommand, TerminalOutput, USER_FAULT_SENTINEL, classify_output,
-        has_named_item, shell_quote,
+        KERNEL_HEAP_SUCCESS_SENTINEL, KERNEL_MAP_ENTER_SENTINEL, KERNEL_MAP_SUCCESS_SENTINEL,
+        MACHINE, MEMORY_SUCCESS_SENTINEL, PANIC_SENTINEL, QemuCommand, TerminalOutput,
+        USER_FAULT_SENTINEL, classify_output, has_named_item, shell_quote,
     };
 
     #[test]
@@ -644,7 +645,7 @@ mod tests {
     }
 
     #[test]
-    fn kernel_map_classifier_requires_post_switch_success() {
+    fn kernel_map_classifier_requires_post_switch_heap_success() {
         assert_eq!(
             classify_output(
                 format!("{BOOT_SUCCESS_SENTINEL}\nPHOENIX_KERNEL_MAP_ENTER\n").as_bytes(),
@@ -654,10 +655,20 @@ mod tests {
         );
         assert_eq!(
             classify_output(
-                format!("PHOENIX_KERNEL_MAP_ENTER\n{KERNEL_MAP_SUCCESS_SENTINEL}\n").as_bytes(),
+                format!(
+                    "PHOENIX_KERNEL_MAP_ENTER\n{KERNEL_HEAP_SUCCESS_SENTINEL}\n{KERNEL_MAP_SUCCESS_SENTINEL}\n"
+                )
+                .as_bytes(),
                 ExpectedOutput::KernelMap
             ),
             Some(TerminalOutput::Success)
+        );
+        assert_eq!(
+            classify_output(
+                format!("PHOENIX_KERNEL_MAP_ENTER\n{KERNEL_MAP_SUCCESS_SENTINEL}\n").as_bytes(),
+                ExpectedOutput::KernelMap
+            ),
+            Some(TerminalOutput::ProtocolFailure)
         );
         assert_eq!(
             classify_output(
@@ -669,7 +680,7 @@ mod tests {
         assert_eq!(
             classify_output(
                 format!(
-                    "{PANIC_SENTINEL}\n{KERNEL_MAP_ENTER_SENTINEL}\n{KERNEL_MAP_SUCCESS_SENTINEL}\n"
+                    "{PANIC_SENTINEL}\n{KERNEL_MAP_ENTER_SENTINEL}\n{KERNEL_HEAP_SUCCESS_SENTINEL}\n{KERNEL_MAP_SUCCESS_SENTINEL}\n"
                 )
                 .as_bytes(),
                 ExpectedOutput::KernelMap

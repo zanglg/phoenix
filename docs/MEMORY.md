@@ -72,6 +72,7 @@ module is Cross Compiled for AArch64 by `cargo xtask ci`.
 
 Buddy allocation, NUMA, memory hotplug, DMA constraints, IOMMU integration, huge-page promotion,
 dynamic kernel mappings, general OOM policy, and reclaim are deliberately skipped. The first
-fallible heap and its physical-backing relationship are specified in `docs/KERNEL_HEAP.md`; it is
-not yet boot-integrated. None of those later policies is required to validate the early single-core
-physical-memory ownership model.
+fallible heap and its physical-backing relationship are specified in `docs/KERNEL_HEAP.md`; a
+bounded post-TTBR1 probe is Cross Compiled, while its target execution and general consumers remain
+pending. None of those later policies is required to validate the early single-core physical-memory
+ownership model.

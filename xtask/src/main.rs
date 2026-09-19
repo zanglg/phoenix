@@ -449,6 +449,10 @@ impl KernelVariant {
         matches!(self, Self::LoadedInitProbe)
     }
 
+    const fn expects_kernel_heap(self) -> bool {
+        matches!(self, Self::KernelMapProbe)
+    }
+
     const fn expected_user_fault_sentinel(self) -> Option<(&'static str, &'static str)> {
         match self {
             Self::El0Probe => Some((qemu::USER_FAULT_SENTINEL, qemu::EL0_FAILURE_SENTINEL)),
@@ -1226,6 +1230,22 @@ fn inspect_kernel_variant(variant: KernelVariant) -> bool {
                     "ELF does not contain required user-fault sentinel: {sentinel}"
                 ));
             }
+        }
+    }
+
+    if variant.expects_kernel_heap()
+        && let Some(bytes) = kernel_bytes.as_deref()
+    {
+        let sentinel = qemu::KERNEL_HEAP_SUCCESS_SENTINEL;
+        if bytes
+            .windows(sentinel.len())
+            .all(|window| window != sentinel.as_bytes())
+        {
+            errors.push(format!(
+                "kernel-map ELF does not contain required heap sentinel: {sentinel}"
+            ));
+        } else {
+            println!("ok: kernel-map heap sentinel is embedded: {sentinel}");
         }
     }
 

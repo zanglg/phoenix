@@ -39,12 +39,15 @@ narrow support claim:
 - DTB memory plus firmware/kernel/DTB reservations form a transactional boot allocator map;
 - a fixed-metadata fallible kernel heap core transactionally acquires and clears unique physical
   backing, distinguishes OOM and metadata exhaustion, and detects invalid or duplicate releases;
+  the focused final-map image Cross Compiles a four-frame/four-record post-TTBR1 conformance path,
+  whose target run remains pending;
 - guarded runtime kernel-stack slots transactionally own and clear private frames, retain both
   guard holes, and feed EL1 RW/NX mappings to the Host Tested AArch64 offline planner;
 - an opt-in boot-memory probe cross-links the real DTB-to-allocation-to-readback path;
 - an opt-in final-kernel-map image builds allocator-owned TTBR1 tables with RX text, RO/NX
   rodata, RW/NX RAM, an unmapped boot-stack guard, and a page-granular PL011 mapping, then
-  publishes them with barriers and TLB invalidation; the focused runtime probe has passed;
+  publishes them with barriers and TLB invalidation; that base path passed previously, while the
+  newly heap-extended image requires a target rerun;
 - final-map builders retain a Host Tested managed-RAM proof beside their table owner, and the
   loaded-init user-copy adapter is Cross Compiled against that bounded capability;
 - early PL011 output and the bounded boot smoke test have been verified on QEMU 9.1.3; deliberate
@@ -105,7 +108,8 @@ standalone native user ELF and deterministic initramfs. `qemu-command` prints th
 without starting an emulator. `run` is interactive and `test-boot` is bounded; neither is part of
 emulator-free `ci`.
 `test-memory` builds the opt-in boot-memory integration image; `test-kernel-map` replaces TTBR1
-with the final permission-separated layout; `test-el0` builds the opt-in statically linked
+with the final permission-separated layout and requires the bounded heap probe before terminal
+success; `test-el0` builds the opt-in statically linked
 user-mode conformance image; `test-init` builds the full dynamically loaded standalone-init path.
 Each requires its own final marker. See [`docs/QEMU.md`](docs/QEMU.md),
 [`docs/BOOT_MEMORY_PROBE.md`](docs/BOOT_MEMORY_PROBE.md),
@@ -121,7 +125,7 @@ Process identity, lifecycle, ownership, and teardown deferrals are documented in
 [`docs/PROCESS_LIFECYCLE.md`](docs/PROCESS_LIFECYCLE.md); the current nonzero/no-reuse ASID policy
 is in [`docs/AARCH64_ASIDS.md`](docs/AARCH64_ASIDS.md), and the current terminal EL0 fault boundary
 is in [`docs/USER_FAULTS.md`](docs/USER_FAULTS.md). The heap's ownership, failure,
-synchronization, and Runtime Pending boot-integration boundary is defined in
+synchronization, bounded boot integration, and Runtime Pending target boundary are defined in
 [`docs/KERNEL_HEAP.md`](docs/KERNEL_HEAP.md).
 The reservation-filtered final RAM proof and retained-table access boundary are documented in
 [`docs/FINAL_DIRECT_MAP.md`](docs/FINAL_DIRECT_MAP.md).

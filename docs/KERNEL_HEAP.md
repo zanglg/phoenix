@@ -1,8 +1,9 @@
 # Fallible Kernel Heap
 
-This document defines Phoenix's first kernel heap. The allocator core is Host Tested and Cross
-Compiled, but it is not a global Rust allocator and is not yet initialized by an AArch64 boot
-path. Target execution therefore remains Runtime Pending.
+This document defines Phoenix's first kernel heap. The allocator core is Host Tested, and the
+focused AArch64 final-map image now Cross Compiles a bounded post-TTBR1 initialization path. It is
+not a global Rust allocator. The extended target path has not run, so target execution remains
+Runtime Pending.
 
 ## Current implementation
 
@@ -41,6 +42,18 @@ The heap returns `HeapAllocation` tokens rather than raw references or pointers.
 token is useful only while that token and the heap backing remain live. Higher-level owning types
 must preserve this lifetime before any safe reference-producing API can be added.
 
+The `kernel-map-probe` runtime owner contains the materialized final tables, their direct-map
+proof, the surviving physical allocator, and an initially empty `KernelHeap<4>`. Only after the
+owner is installed and TTBR1 is published does the probe bind `FinalDirectMapMemory` to those
+exact tables and transactionally acquire four contiguous frames. The probe checks a 64-byte
+aligned allocation, release to the same first-fit address, recoverable byte exhaustion,
+recoverable four-record metadata exhaustion, complete token release, exact physical-frame
+retention, and continued progress. It then emits `PHOENIX_KERNEL_HEAP_OK`; the existing
+`PHOENIX_KERNEL_MAP_OK` remains terminal and is accepted only after the heap marker.
+
+Four frames and four live records are deliberately a conformance bound, not a production sizing
+claim. No other boot variant or subsystem consumes heap allocations yet.
+
 ## Ownership and failure invariants
 
 - an initialized heap uniquely owns its complete `FrameRange`; those frames are absent from the
@@ -72,14 +85,15 @@ release, contiguous-frame restoration, and stale-epoch rejection. Physical alloc
 cover transactional contiguous release, coalescing, duplicate release, and partly foreign ranges.
 
 `cargo xtask ci` cross-compiles this code into every configured AArch64 kernel variant and
-performs the existing ELF inspections. Static inclusion does not prove that an AArch64 boot path
-has initialized or used the heap.
+performs the existing ELF inspections. The final-map inspection additionally requires the heap
+success marker, and host tests require it to precede final-map success in the runtime protocol.
+Static inclusion does not prove that the AArch64 path initialized or used the heap.
 
 ## TODO
 
-- initialize a bounded heap after final TTBR1 publication using the implemented
-  `FinalDirectMapMemory` backend and the retained physical allocator;
-- select backing size and fixed live-allocation capacity from observed kernel consumers;
+- rerun the extended final-map probe on the pinned QEMU board and record the exact heap evidence;
+- select production backing size and fixed live-allocation capacity from observed kernel
+  consumers rather than the four-frame/four-record conformance bound;
 - move suitable fixed boot plans and later VFS/process/scheduler ownership into explicit heap
   allocations while preserving their recoverable OOM paths;
 - introduce typed owning containers that cannot outlive their `HeapAllocation` token;
@@ -96,13 +110,16 @@ has initialized or used the heap.
 Phoenix does not register this heap as `#[global_allocator]`, implement infallible `Box`/`Vec`
 allocation, map pages dynamically, grow or shrink backing, allocate discontiguous backing,
 reclaim memory under pressure, compact live allocations, provide per-CPU caches, support IRQ/SMP
-access, or wire the heap into boot. OOM is returned to the caller; the heap does not panic, invoke
-an OOM handler, or silently overcommit.
+access, or make loaded init depend on heap allocation. OOM is returned to the caller; the heap
+does not invoke an OOM handler or silently overcommit. The focused boot probe treats failure of
+its required initialization contract as fatal, while deliberately induced byte and metadata OOM
+remain returned values that the probe checks without panicking.
 
 ## Runtime status
 
-`RUN-KHEAP-001` is Runtime Pending. Closing it requires a boot path to initialize the heap only
-after final TTBR1 publication, demonstrate that its frames were removed from the retained physical
-allocator, exercise aligned success plus recoverable byte and metadata exhaustion, release and
-reuse allocations without corruption, and retain deterministic kernel progress. No existing
-positive boot, final-map, EL0, or loaded-init transcript supplies that evidence.
+`RUN-KHEAP-001` is Runtime Pending. The required boot path and ordered
+`PHOENIX_KERNEL_HEAP_OK`/`PHOENIX_KERNEL_MAP_OK` protocol now exist, but have only been Cross
+Compiled and ELF Inspected. Closing the item requires `cargo xtask test-kernel-map` to demonstrate
+post-TTBR1 initialization, exact frame retention, aligned success, recoverable byte and metadata
+exhaustion, release/reuse, and continued kernel progress. The earlier positive final-map transcript
+predates this path and supplies none of that evidence.

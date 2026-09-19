@@ -83,13 +83,18 @@ normal-memory attributes. They retain that compact proof beside the materialized
 allocator. `FinalDirectMapMemory` can be constructed only under an unsafe contract tying the proof
 to those active retained tables. The loaded-init syscall adapter uses this capability after first
 checking exact user-leaf ownership. Its post-refactor target execution is `RUN-MMU-003` Pending.
+The standalone final-map owner also retains a bounded fallible heap. After publication it binds
+the same capability to the active tables, acquires and clears four free managed frames, exercises
+the documented allocation failures, and keeps both heap and remaining allocator permanently
+owned.
 
 ## Focused QEMU probe
 
 The `kernel-map-probe` image uses the real boot DTB, kernel linker bounds, reservation-aware frame
 allocator, and bootstrap physical-memory backend. Before publication it emits
 `PHOENIX_KERNEL_MAP_ENTER`. After the TTBR1 switch it reuses the mapped kernel text, rodata, stack,
-data, and PL011 device page to emit `PHOENIX_KERNEL_MAP_OK`, then halts.
+data, and PL011 device page, initializes and exercises the bounded heap, emits
+`PHOENIX_KERNEL_HEAP_OK`, then emits `PHOENIX_KERNEL_MAP_OK` and halts.
 
 When QEMU is available, run:
 
@@ -97,8 +102,9 @@ When QEMU is available, run:
 cargo xtask test-kernel-map
 ```
 
-The bounded harness cannot pass on the earlier boot or enter marker. Panic, exception, early exit,
-timeout, and excessive output are failures. Output is retained in
+The bounded harness cannot pass on the earlier boot, enter, or heap marker; both progress markers
+must precede terminal success. Panic, exception, early exit, timeout, and excessive output are
+failures. Output is retained in
 `target/phoenix/aarch64-unknown-none-softfloat/debug/qemu-kernel-map.log`.
 
 The `loaded-init-probe` uses the same builder and owner in its end-to-end path. It constructs both
@@ -115,17 +121,18 @@ topology, critical mappings, linker-layout rejection, and RAM-window rejection.
 
 The focused kernel image is Cross Compiled and ELF Inspected. Static checks require every
 permission-domain symbol, page alignment and ordering, the first-2-MiB image bound, the expected
-load addresses, and the final success sentinel. On the recorded QEMU 9.1.3 `virt-9.1` run,
+load addresses, and the heap and final success sentinels. On the recorded QEMU 9.1.3 `virt-9.1` run,
 `cargo xtask test-kernel-map` reported root `0x0000000040000000`, five tables, 767 leaves, and
-the ordered enter/success markers after TTBR1 publication.
+the ordered enter/success markers after TTBR1 publication. That run predates the new heap marker,
+so it remains final-table evidence but does not validate the current extended probe.
 
 ## TODO
 
 - remove the temporary TTBR0 aliases when no low virtual pointer or bootstrap handle survives;
 - migrate remaining post-switch raw helper users to the retained final-direct-map capability and
   rerun its valid/invalid target paths;
-- connect the Host Tested fallible heap only through that final direct-map API and retained frame
-  allocator ownership;
+- rerun the heap-extended final-map probe and use observed consumers to replace its conformance
+  sizing with an explicit production policy;
 - derive the physical-address size from `ID_AA64MMFR0_EL1.PARange` before accepting RAM above
   the current 32-bit IPS envelope;
 - enable caches only after cache-maintenance and memory-ordering requirements are designed and
@@ -137,9 +144,9 @@ the ordered enter/success markers after TTBR1 publication.
 
 ## Skipped work
 
-This implementation does not provide dynamic kernel mappings, boot-integrated heap backing,
-per-CPU tables, recursive mapping, KASLR, copy-on-write, demand paging, swapping, transparent huge
-pages, 16/64 KiB granules,
+This implementation does not provide dynamic kernel mappings, general heap consumers, per-CPU
+tables, recursive mapping, KASLR, copy-on-write, demand paging, swapping, transparent huge pages,
+16/64 KiB granules,
 52-bit addresses, MTE, stage-2 translation, DMA/IOMMU mappings, or SMP TLB shootdown. It maps all
 DTB-declared RAM into an EL1-only direct map; it does not use mapping permissions as an ownership
 substitute for firmware-reserved or allocator-owned frames.

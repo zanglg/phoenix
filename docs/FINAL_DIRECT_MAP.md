@@ -38,6 +38,8 @@ The capability implements the existing private-memory interfaces for heap backin
 clearing, process-image population, user copies, and translation-table materialization. The
 loaded-init syscall path now validates user-leaf ownership first and then uses this final-map
 capability; it no longer calls the bootstrap-window raw copy helpers after TTBR1 publication.
+The focused final-map path also binds the capability only after TTBR1 activation and uses it to
+clear four allocator-owned heap frames before publishing the heap probe marker.
 
 ## Invariants
 
@@ -65,13 +67,13 @@ translation, unmanaged frames, cross-page access, empty domains, missing leaves,
 outputs, and read-only mappings.
 
 `cargo xtask check`, `cargo xtask lint`, and the complete `cargo xtask ci` build the proof,
-capability, retained runtime fields, and loaded-init user-copy adapter for AArch64. ELF inspection
-continues to verify every existing kernel variant. These checks do not execute the new target path.
+capability, retained runtime fields, loaded-init user-copy adapter, and final-map heap backend for
+AArch64. ELF inspection requires the heap marker in that focused image. These checks do not
+execute the new target paths.
 
 ## TODO
 
-- initialize the fallible kernel heap after final TTBR1 activation using this capability and the
-  retained allocator, while preserving a non-global, recoverable OOM interface;
+- rerun the final-map heap path and loaded-init copy path on the pinned target;
 - use the same capability when owned kernel-stack frames are cleared after live-map support exists;
 - remove or narrow the public raw direct-map helpers once every post-switch caller is migrated;
 - couple proof and table materialization more tightly so an unsafe caller cannot pair artifacts

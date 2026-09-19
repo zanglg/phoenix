@@ -33,6 +33,11 @@ use phoenix_kernel::platform::aarch64::qemu_virt::EarlyPl011;
     )
 ))]
 use phoenix_kernel::memory::FrameAllocator;
+#[cfg(all(
+    feature = "kernel-map-probe",
+    not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+))]
+use phoenix_kernel::memory::{HeapAllocationError, KernelHeap, PAGE_SIZE};
 #[cfg(any(
     feature = "boot-memory-probe",
     feature = "kernel-map-probe",
@@ -59,8 +64,8 @@ use phoenix_kernel::process_image::ProcessImageMemory;
 use phoenix_kernel::{
     arch::aarch64::kernel_page_table::MaterializedKernelPageTables,
     platform::aarch64::qemu_virt::{
-        FINAL_KERNEL_TABLE_CAPACITY, FinalDirectMapLayout, final_direct_map_layout,
-        final_kernel_page_table_plan,
+        FINAL_KERNEL_TABLE_CAPACITY, FinalDirectMapLayout, FinalDirectMapMemory,
+        final_direct_map_layout, final_kernel_page_table_plan,
     },
 };
 
@@ -88,8 +93,6 @@ use phoenix_kernel::elf::ElfImage;
 use phoenix_kernel::file::{FileError, ReadOnlyFileTable};
 #[cfg(feature = "loaded-init-probe")]
 use phoenix_kernel::initramfs::Initramfs;
-#[cfg(feature = "loaded-init-probe")]
-use phoenix_kernel::platform::aarch64::qemu_virt::FinalDirectMapMemory;
 #[cfg(feature = "loaded-init-probe")]
 use phoenix_kernel::process::{ExitStatus, ProcessControl, ProcessId, UserFault};
 #[cfg(feature = "loaded-init-probe")]
@@ -123,6 +126,11 @@ const KERNEL_MAP_ENTER_SENTINEL: &str = "PHOENIX_KERNEL_MAP_ENTER";
     not(any(feature = "el0-probe", feature = "loaded-init-probe"))
 ))]
 const KERNEL_MAP_SUCCESS_SENTINEL: &str = "PHOENIX_KERNEL_MAP_OK";
+#[cfg(all(
+    feature = "kernel-map-probe",
+    not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+))]
+const KERNEL_HEAP_SUCCESS_SENTINEL: &str = "PHOENIX_KERNEL_HEAP_OK";
 #[cfg(all(feature = "el0-probe", not(feature = "loaded-init-probe")))]
 const EL0_ENTER_SENTINEL: &str = "PHOENIX_EL0_ENTER";
 #[cfg(all(feature = "el0-probe", not(feature = "loaded-init-probe")))]
@@ -256,6 +264,16 @@ static INIT_WROTE_OUTPUT: AtomicBool = AtomicBool::new(false);
     not(any(feature = "el0-probe", feature = "loaded-init-probe"))
 ))]
 const KERNEL_MAP_MEMORY_RANGES: usize = 16;
+#[cfg(all(
+    feature = "kernel-map-probe",
+    not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+))]
+const KERNEL_HEAP_BACKING_FRAMES: usize = 4;
+#[cfg(all(
+    feature = "kernel-map-probe",
+    not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+))]
+const KERNEL_HEAP_ALLOCATIONS: usize = 4;
 #[cfg(any(
     feature = "loaded-init-probe",
     all(
@@ -270,8 +288,19 @@ type FinalKernelTables = MaterializedKernelPageTables<FINAL_KERNEL_TABLE_CAPACIT
 ))]
 struct KernelMapRuntime {
     tables: FinalKernelTables,
-    _direct_map_layout: FinalDirectMapLayout<KERNEL_MAP_MEMORY_RANGES>,
-    _allocator: FrameAllocator<KERNEL_MAP_MEMORY_RANGES>,
+    direct_map_layout: FinalDirectMapLayout<KERNEL_MAP_MEMORY_RANGES>,
+    allocator: FrameAllocator<KERNEL_MAP_MEMORY_RANGES>,
+    heap: KernelHeap<KERNEL_HEAP_ALLOCATIONS>,
+}
+#[cfg(all(
+    feature = "kernel-map-probe",
+    not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+))]
+struct KernelMapRuntimeAccess {
+    tables: &'static FinalKernelTables,
+    direct_map_layout: FinalDirectMapLayout<KERNEL_MAP_MEMORY_RANGES>,
+    allocator: &'static mut FrameAllocator<KERNEL_MAP_MEMORY_RANGES>,
+    heap: &'static mut KernelHeap<KERNEL_HEAP_ALLOCATIONS>,
 }
 #[cfg(all(
     feature = "kernel-map-probe",
@@ -447,11 +476,12 @@ fn run_kernel_map_probe(boot_argument: usize, console: &mut Console<EarlyPl011>)
     let root = materialized.root_frame().start_address().as_usize();
     // SAFETY: the probe initializes this single global owner exactly once on
     // the boot CPU and never replaces or frees it afterward.
-    let tables = unsafe {
+    let runtime = unsafe {
         install_kernel_map_runtime(KernelMapRuntime {
             tables: materialized,
-            _direct_map_layout: direct_map_layout,
-            _allocator: allocator,
+            direct_map_layout,
+            allocator,
+            heap: KernelHeap::new(),
         })
     };
 
@@ -467,8 +497,16 @@ fn run_kernel_map_probe(boot_argument: usize, console: &mut Console<EarlyPl011>)
     // table, maps all pinned QEMU RAM, and provides the PL011 device page. The
     // static runtime permanently retains the hierarchy on the single boot CPU.
     unsafe {
-        tables.activate();
+        runtime.tables.activate();
     }
+
+    initialize_and_exercise_kernel_heap(
+        runtime.tables,
+        runtime.direct_map_layout,
+        runtime.allocator,
+        runtime.heap,
+        console,
+    );
 
     let _ = writeln!(console, "{KERNEL_MAP_SUCCESS_SENTINEL}");
     console.sink_mut().flush();
@@ -479,15 +517,101 @@ fn run_kernel_map_probe(boot_argument: usize, console: &mut Console<EarlyPl011>)
     feature = "kernel-map-probe",
     not(any(feature = "el0-probe", feature = "loaded-init-probe"))
 ))]
-unsafe fn install_kernel_map_runtime(runtime: KernelMapRuntime) -> &'static FinalKernelTables {
+unsafe fn install_kernel_map_runtime(runtime: KernelMapRuntime) -> KernelMapRuntimeAccess {
     let slot = &raw mut KERNEL_MAP_RUNTIME;
     // SAFETY: the caller guarantees one-time initialization and permanent
-    // retention. The raw pointer avoids a reference to uninitialized storage.
+    // retention without any competing reference. The returned shared table
+    // reference and mutable allocator/heap references point to disjoint fields,
+    // and the copied layout does not borrow the owner. Raw pointers avoid a
+    // reference to uninitialized storage.
     unsafe {
         (*slot).write(runtime);
-        let runtime = (*slot).as_ptr();
-        &*core::ptr::addr_of!((*runtime).tables)
+        let runtime = (*slot).as_mut_ptr();
+        KernelMapRuntimeAccess {
+            tables: &*core::ptr::addr_of!((*runtime).tables),
+            direct_map_layout: *core::ptr::addr_of!((*runtime).direct_map_layout),
+            allocator: &mut *core::ptr::addr_of_mut!((*runtime).allocator),
+            heap: &mut *core::ptr::addr_of_mut!((*runtime).heap),
+        }
     }
+}
+
+#[cfg(all(
+    feature = "kernel-map-probe",
+    not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+))]
+fn initialize_and_exercise_kernel_heap(
+    tables: &'static FinalKernelTables,
+    direct_map_layout: FinalDirectMapLayout<KERNEL_MAP_MEMORY_RANGES>,
+    allocator: &mut FrameAllocator<KERNEL_MAP_MEMORY_RANGES>,
+    heap: &mut KernelHeap<KERNEL_HEAP_ALLOCATIONS>,
+    console: &mut Console<EarlyPl011>,
+) {
+    let free_before = allocator.total_free_frames();
+    // SAFETY: `tables` is the retained hierarchy materialized from
+    // `direct_map_layout`'s proved plan and was activated immediately before
+    // this call. The boot CPU is single-threaded with exceptions masked; the
+    // allocator grants the heap unique ownership of every mutated frame.
+    let mut direct_map = unsafe { FinalDirectMapMemory::assume_active(tables, direct_map_layout) };
+    heap.initialize(allocator, &mut direct_map, KERNEL_HEAP_BACKING_FRAMES, 1)
+        .unwrap_or_else(|error| panic!("could not initialize kernel heap: {error:?}"));
+    assert_eq!(
+        allocator.total_free_frames(),
+        free_before - KERNEL_HEAP_BACKING_FRAMES,
+        "kernel heap did not retain its exact backing frames"
+    );
+
+    let first = heap
+        .allocate(64, 64)
+        .unwrap_or_else(|error| panic!("could not allocate aligned heap probe: {error:?}"));
+    assert_eq!(first.address().as_usize() % 64, 0);
+    heap.deallocate(first)
+        .unwrap_or_else(|error| panic!("could not release aligned heap probe: {error:?}"));
+    let reused = heap
+        .allocate(64, 64)
+        .unwrap_or_else(|error| panic!("could not reuse released heap bytes: {error:?}"));
+    assert_eq!(reused.address(), first.address());
+    heap.deallocate(reused)
+        .unwrap_or_else(|error| panic!("could not release reused heap probe: {error:?}"));
+
+    assert_eq!(
+        heap.allocate(heap.capacity() + 1, 1),
+        Err(HeapAllocationError::OutOfMemory),
+        "oversized heap request did not report byte exhaustion"
+    );
+    let mut metadata_probes = [None; KERNEL_HEAP_ALLOCATIONS];
+    for allocation in &mut metadata_probes {
+        *allocation = Some(
+            heap.allocate(1, 1)
+                .unwrap_or_else(|error| panic!("could not fill heap metadata: {error:?}")),
+        );
+    }
+    assert_eq!(
+        heap.allocate(1, 1),
+        Err(HeapAllocationError::MetadataExhausted),
+        "full heap metadata did not report exhaustion"
+    );
+    for allocation in metadata_probes.into_iter().flatten() {
+        heap.deallocate(allocation)
+            .unwrap_or_else(|error| panic!("could not release metadata probe: {error:?}"));
+    }
+    assert_eq!(heap.free_bytes(), heap.capacity());
+
+    let backing = heap.backing_frames().expect("initialized heap backing");
+    let backing_start = backing
+        .start_frame_number()
+        .checked_mul(PAGE_SIZE)
+        .expect("managed heap frame address");
+    let _ = writeln!(
+        console,
+        "kernel-heap: start={:#018x} frames={} bytes={} records={}",
+        backing_start,
+        backing.len(),
+        heap.capacity(),
+        KERNEL_HEAP_ALLOCATIONS
+    );
+    let _ = writeln!(console, "{KERNEL_HEAP_SUCCESS_SENTINEL}");
+    console.sink_mut().flush();
 }
 
 #[cfg(feature = "loaded-init-probe")]
