@@ -25,6 +25,13 @@ use phoenix_kernel::console::ByteSink;
 use phoenix_kernel::console::Console;
 use phoenix_kernel::platform::aarch64::qemu_virt::EarlyPl011;
 
+#[cfg(all(
+    feature = "kernel-map-probe",
+    not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+))]
+use phoenix_kernel::arch::aarch64::kernel_page_table::{
+    Aarch64KernelLeafTlb, Aarch64KernelStackMapper,
+};
 #[cfg(any(
     feature = "loaded-init-probe",
     all(
@@ -37,7 +44,9 @@ use phoenix_kernel::memory::FrameAllocator;
     feature = "kernel-map-probe",
     not(any(feature = "el0-probe", feature = "loaded-init-probe"))
 ))]
-use phoenix_kernel::memory::{HeapAllocationError, KernelHeap, PAGE_SIZE};
+use phoenix_kernel::memory::{
+    HeapAllocationError, KernelHeap, KernelStackKind, KernelStackMemory, PAGE_SIZE,
+};
 #[cfg(any(
     feature = "boot-memory-probe",
     feature = "kernel-map-probe",
@@ -132,6 +141,11 @@ const KERNEL_MAP_SUCCESS_SENTINEL: &str = "PHOENIX_KERNEL_MAP_OK";
     not(any(feature = "el0-probe", feature = "loaded-init-probe"))
 ))]
 const KERNEL_HEAP_SUCCESS_SENTINEL: &str = "PHOENIX_KERNEL_HEAP_OK";
+#[cfg(all(
+    feature = "kernel-map-probe",
+    not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+))]
+const KERNEL_STACK_SUCCESS_SENTINEL: &str = "PHOENIX_KERNEL_STACK_OK";
 #[cfg(all(feature = "el0-probe", not(feature = "loaded-init-probe")))]
 const EL0_ENTER_SENTINEL: &str = "PHOENIX_EL0_ENTER";
 #[cfg(all(feature = "el0-probe", not(feature = "loaded-init-probe")))]
@@ -293,7 +307,7 @@ struct KernelMapRuntime {
     direct_map_layout: FinalDirectMapLayout<KERNEL_MAP_MEMORY_RANGES>,
     allocator: FrameAllocator<KERNEL_MAP_MEMORY_RANGES>,
     heap: KernelHeap<KERNEL_HEAP_ALLOCATIONS>,
-    _kernel_stack_pool: QemuVirtKernelStackPool,
+    kernel_stack_pool: QemuVirtKernelStackPool,
 }
 #[cfg(all(
     feature = "kernel-map-probe",
@@ -304,6 +318,7 @@ struct KernelMapRuntimeAccess {
     direct_map_layout: FinalDirectMapLayout<KERNEL_MAP_MEMORY_RANGES>,
     allocator: &'static mut FrameAllocator<KERNEL_MAP_MEMORY_RANGES>,
     heap: &'static mut KernelHeap<KERNEL_HEAP_ALLOCATIONS>,
+    kernel_stack_pool: &'static mut QemuVirtKernelStackPool,
 }
 #[cfg(all(
     feature = "kernel-map-probe",
@@ -485,7 +500,7 @@ fn run_kernel_map_probe(boot_argument: usize, console: &mut Console<EarlyPl011>)
             direct_map_layout,
             allocator,
             heap: KernelHeap::new(),
-            _kernel_stack_pool: runtime_kernel_stack_pool()
+            kernel_stack_pool: runtime_kernel_stack_pool()
                 .unwrap_or_else(|error| panic!("could not reserve kernel-stack arena: {error:?}")),
         })
     };
@@ -512,6 +527,13 @@ fn run_kernel_map_probe(boot_argument: usize, console: &mut Console<EarlyPl011>)
         runtime.heap,
         console,
     );
+    exercise_runtime_kernel_stack(
+        runtime.tables,
+        runtime.direct_map_layout,
+        runtime.allocator,
+        runtime.kernel_stack_pool,
+        console,
+    );
 
     let _ = writeln!(console, "{KERNEL_MAP_SUCCESS_SENTINEL}");
     console.sink_mut().flush();
@@ -526,9 +548,9 @@ unsafe fn install_kernel_map_runtime(runtime: KernelMapRuntime) -> KernelMapRunt
     let slot = &raw mut KERNEL_MAP_RUNTIME;
     // SAFETY: the caller guarantees one-time initialization and permanent
     // retention without any competing reference. The returned shared table
-    // reference and mutable allocator/heap references point to disjoint fields,
-    // and the copied layout does not borrow the owner. Raw pointers avoid a
-    // reference to uninitialized storage.
+    // reference and mutable allocator/heap/pool references point to disjoint
+    // fields, and the copied layout does not borrow the owner. Raw pointers
+    // avoid a reference to uninitialized storage.
     unsafe {
         (*slot).write(runtime);
         let runtime = (*slot).as_mut_ptr();
@@ -537,6 +559,7 @@ unsafe fn install_kernel_map_runtime(runtime: KernelMapRuntime) -> KernelMapRunt
             direct_map_layout: *core::ptr::addr_of!((*runtime).direct_map_layout),
             allocator: &mut *core::ptr::addr_of_mut!((*runtime).allocator),
             heap: &mut *core::ptr::addr_of_mut!((*runtime).heap),
+            kernel_stack_pool: &mut *core::ptr::addr_of_mut!((*runtime).kernel_stack_pool),
         }
     }
 }
@@ -616,6 +639,99 @@ fn initialize_and_exercise_kernel_heap(
         KERNEL_HEAP_ALLOCATIONS
     );
     let _ = writeln!(console, "{KERNEL_HEAP_SUCCESS_SENTINEL}");
+    console.sink_mut().flush();
+}
+
+#[cfg(all(
+    feature = "kernel-map-probe",
+    not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+))]
+fn exercise_runtime_kernel_stack(
+    tables: &'static FinalKernelTables,
+    direct_map_layout: FinalDirectMapLayout<KERNEL_MAP_MEMORY_RANGES>,
+    allocator: &mut FrameAllocator<KERNEL_MAP_MEMORY_RANGES>,
+    pool: &mut QemuVirtKernelStackPool,
+    console: &mut Console<EarlyPl011>,
+) {
+    const PROBE: &[u8] = b"Phoenix mapped kernel stack";
+
+    let free_before = allocator.total_free_frames();
+    // SAFETY: `tables` is the retained active hierarchy that produced this
+    // direct-map proof. The single boot CPU has exceptions masked and owns the
+    // allocator, pool, and every table descriptor touched below.
+    let mut direct_map = unsafe { FinalDirectMapMemory::assume_active(tables, direct_map_layout) };
+    let stack = pool
+        .allocate(allocator, &mut direct_map, KernelStackKind::Thread)
+        .unwrap_or_else(|error| panic!("could not allocate kernel-stack probe: {error:?}"));
+    let first_mapping = stack
+        .mappings()
+        .next()
+        .expect("runtime stack has usable pages");
+    let layout = stack.layout();
+    assert_eq!(
+        allocator.total_free_frames(),
+        free_before - phoenix_kernel::platform::aarch64::qemu_virt::KERNEL_STACK_USABLE_PAGES,
+        "kernel stack did not retain its exact frames"
+    );
+
+    let stack = {
+        let mut maintenance = Aarch64KernelLeafTlb;
+        // SAFETY: the final hierarchy is active and permanently retained;
+        // `direct_map` uniquely accesses its table frames, while this boot
+        // path is single-CPU with exceptions unable to mutate descriptors.
+        let mut mapper =
+            unsafe { Aarch64KernelStackMapper::new(tables, &mut direct_map, &mut maintenance) };
+        let mapped = stack
+            .publish(&mut mapper)
+            .unwrap_or_else(|(_stack, error)| panic!("could not publish kernel stack: {error:?}"));
+        assert_eq!(mapped.initial_stack_pointer(), layout.usable().end());
+
+        let virtual_page = first_mapping.0.as_usize() as *mut u8;
+        // SAFETY: `mapped` owns the exact newly published RW/NX L3 leaves;
+        // `PROBE` fits inside the first usable page and no other code can
+        // access this unentered stack slot.
+        unsafe {
+            for (offset, byte) in PROBE.iter().copied().enumerate() {
+                core::ptr::write_volatile(virtual_page.add(offset), byte);
+            }
+            for (offset, expected) in PROBE.iter().copied().enumerate() {
+                assert_eq!(core::ptr::read_volatile(virtual_page.add(offset)), expected);
+            }
+        }
+
+        match mapped.unpublish(&mut mapper) {
+            Ok(stack) => stack,
+            Err((_mapped, error)) => panic!("could not retire kernel stack: {error:?}"),
+        }
+    };
+
+    let mut observed = [0_u8; PROBE.len()];
+    direct_map
+        .read_frame(first_mapping.1, 0, &mut observed)
+        .unwrap_or_else(|error| panic!("could not verify kernel-stack frame: {error:?}"));
+    assert_eq!(observed, PROBE, "kernel-stack virtual alias mismatch");
+    for frame in stack.frames() {
+        KernelStackMemory::clear_frame(&mut direct_map, frame)
+            .unwrap_or_else(|error| panic!("could not scrub kernel-stack frame: {error:?}"));
+    }
+    stack
+        .release_unpublished(pool, allocator)
+        .unwrap_or_else(|(_stack, error)| panic!("could not release kernel stack: {error:?}"));
+    assert_eq!(
+        allocator.total_free_frames(),
+        free_before,
+        "kernel-stack probe did not restore its frames"
+    );
+    assert_eq!(pool.allocated_slots(), 0);
+
+    let _ = writeln!(
+        console,
+        "kernel-stack: start={:#018x} pages={} sp={:#018x}",
+        layout.usable().start().as_usize(),
+        phoenix_kernel::platform::aarch64::qemu_virt::KERNEL_STACK_USABLE_PAGES,
+        layout.initial_stack_pointer().as_usize(),
+    );
+    let _ = writeln!(console, "{KERNEL_STACK_SUCCESS_SENTINEL}");
     console.sink_mut().flush();
 }
 

@@ -49,7 +49,8 @@ exact tables and transactionally acquire four contiguous frames. The probe check
 aligned allocation, release to the same first-fit address, recoverable byte exhaustion,
 recoverable four-record metadata exhaustion, complete token release, exact physical-frame
 retention, and continued progress. It then emits `PHOENIX_KERNEL_HEAP_OK`; the existing
-`PHOENIX_KERNEL_MAP_OK` remains terminal and is accepted only after the heap marker.
+`PHOENIX_KERNEL_MAP_OK` remains terminal and is accepted only after the subsequent runtime-stack
+probe also emits `PHOENIX_KERNEL_STACK_OK`.
 
 Four frames and four live records are deliberately a conformance bound, not a production sizing
 claim. No other boot variant or subsystem consumes heap allocations yet.
@@ -118,8 +119,9 @@ remain returned values that the probe checks without panicking.
 ## Runtime status
 
 `RUN-KHEAP-001` is Runtime Pending. The required boot path and ordered
-`PHOENIX_KERNEL_HEAP_OK`/`PHOENIX_KERNEL_MAP_OK` protocol now exist, but have only been Cross
-Compiled and ELF Inspected. Closing the item requires `cargo xtask test-kernel-map` to demonstrate
+`PHOENIX_KERNEL_HEAP_OK`/`PHOENIX_KERNEL_STACK_OK`/`PHOENIX_KERNEL_MAP_OK` protocol now exists,
+but has only been Cross Compiled and ELF Inspected. Closing the item requires
+`cargo xtask test-kernel-map` to demonstrate
 post-TTBR1 initialization, exact frame retention, aligned success, recoverable byte and metadata
 exhaustion, release/reuse, and continued kernel progress. The earlier positive final-map transcript
 predates this path and supplies none of that evidence.

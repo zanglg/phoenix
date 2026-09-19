@@ -1236,16 +1236,20 @@ fn inspect_kernel_variant(variant: KernelVariant) -> bool {
     if variant.expects_kernel_heap()
         && let Some(bytes) = kernel_bytes.as_deref()
     {
-        let sentinel = qemu::KERNEL_HEAP_SUCCESS_SENTINEL;
-        if bytes
-            .windows(sentinel.len())
-            .all(|window| window != sentinel.as_bytes())
-        {
-            errors.push(format!(
-                "kernel-map ELF does not contain required heap sentinel: {sentinel}"
-            ));
-        } else {
-            println!("ok: kernel-map heap sentinel is embedded: {sentinel}");
+        for (label, sentinel) in [
+            ("heap", qemu::KERNEL_HEAP_SUCCESS_SENTINEL),
+            ("stack", qemu::KERNEL_STACK_SUCCESS_SENTINEL),
+        ] {
+            if bytes
+                .windows(sentinel.len())
+                .all(|window| window != sentinel.as_bytes())
+            {
+                errors.push(format!(
+                    "kernel-map ELF does not contain required {label} sentinel: {sentinel}"
+                ));
+            } else {
+                println!("ok: kernel-map {label} sentinel is embedded: {sentinel}");
+            }
         }
     }
 

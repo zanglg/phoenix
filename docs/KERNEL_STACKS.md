@@ -78,8 +78,8 @@ are an initial bounded policy for integration, not measured production stack siz
 
 The owned stack can supply page-by-page pairs to an offline architecture page-table plan. Host
 tests use the real AArch64 planner to map only usable pages with `kernel_data` attributes and prove
-both guards remain absent. No boot path invokes live table mutation, switches the stack pointer, or
-enters an exception on these owners yet.
+both guards remain absent. Only the opt-in final-map conformance path invokes live table mutation;
+no path switches the stack pointer or enters an exception on these owners yet.
 
 `KernelStackMappingBackend` and `MappedKernelStack` now define the ownership boundary for future
 live integration. Publishing consumes `OwnedKernelStack`; success couples it to a unique backend
@@ -111,8 +111,15 @@ of this restricted transition.
 `FinalDirectMapMemory` implements stack clearing and the active-table descriptor backend. Both are
 restricted to allocator-managed frames proved against the retained TTBR1 hierarchy. Constructing
 the mapper remains unsafe and requires the single boot CPU, masked/non-mutating exceptions,
-exclusive descriptor access, and the exact active table owner. No boot path allocates or publishes
-an owned runtime stack yet.
+exclusive descriptor access, and the exact active table owner.
+
+The opt-in `kernel-map-probe` now contains one bounded post-TTBR1 transaction. After the heap
+checks, it allocates one eight-page `Thread` stack from the retained pool and allocator, publishes
+the leaves, writes and reads a fixed byte pattern through the first stack virtual page, retires the
+mapping, verifies the same bytes through the owned physical frame's direct-map alias, clears every
+frame, releases the unpublished owner, and proves both allocator and pool counts were restored. It
+emits `PHOENIX_KERNEL_STACK_OK` only after all those steps. The probe never loads SP from the new
+stack and the path has not run on target.
 
 ## Invariants
 
@@ -183,7 +190,9 @@ leaves with guards unchanged, rejects a deliberately corrupted live descriptor w
 injects a retirement preflight failure, then retries retirement. It proves the second maintenance
 batch precedes recovery of the unpublished owner and only that state can release frames. The
 target-specific barrier/TLBI implementation and final-direct-map descriptor backend Cross Compile;
-neither has executed on QEMU.
+neither has executed on QEMU. Static inspection also requires the bounded final-map image to contain
+the stack success marker, and the QEMU classifier will accept terminal map success only after the
+ordered map-enter, heap, and stack markers. Marker presence is not runtime evidence.
 
 The recorded final-map and loaded-init probes crossed final TTBR1 publication while using the
 1 MiB construction stack. This validates the positive live-stack mapping, but not an intentional
@@ -203,7 +212,8 @@ recorded positive final-map and loaded-init runs validate only the linker-owned 
 and do not close either negative or dynamic-stack boundary. Those runs also predate the current
 seven-table hierarchy; the empty arena topology is Host Tested, Cross Compiled, and Runtime
 Pending rather than inferred from the older five-table output. The live leaf mapper is likewise
-Host Tested and Cross Compiled but has not been instantiated by a boot path.
+Host Tested and Cross Compiled. Its bounded `kernel-map-probe` instantiation is Cross Compiled and
+ELF Inspected but has not executed on target.
 
 ## TODO
 
@@ -213,8 +223,7 @@ Host Tested and Cross Compiled but has not been instantiated by a boot path.
 - move bulky boot plans into explicitly owned scratch memory so the temporary stack can shrink;
 - replace the provisional 16-slot/eight-page policy with measured thread and exception call-depth
   requirements before relying on it as production sizing;
-- integrate the AArch64 mapper with one boot-owned stack allocation, keep exceptions unable to
-  mutate the hierarchy, and validate publication/retirement on target before switching SP;
+- execute the bounded publication/alias/retirement probe on target before switching SP;
 - define break-before-make separately before allowing any valid-to-valid descriptor replacement;
 - define separate exception and emergency-stack sizing, nesting, and double-fault policy before
   asynchronous interrupts or recoverable current-EL faults;
@@ -225,9 +234,9 @@ Host Tested and Cross Compiled but has not been instantiated by a boot path.
 
 ## Skipped work
 
-Phoenix reserves and owns the virtual pool metadata and implements a restricted AArch64 leaf
-mapper, but does not yet allocate runtime-stack frames during boot, instantiate that mapper against
-the active hierarchy, switch between kernel threads, recover from kernel stack faults, enter a
-dedicated exception stack, maintain per-CPU emergency stacks, unwind stack traces, randomize stack
-locations, or reclaim a mapping on target. The Host Tested mapping evidence must not be described
-as a running kernel-stack subsystem.
+Phoenix reserves and owns the virtual pool metadata, implements a restricted AArch64 leaf mapper,
+and Cross Compiles one opt-in allocation/publication/retirement probe. It does not switch SP, keep a
+runtime stack published for a thread, switch between kernel threads, recover from kernel stack
+faults, enter a dedicated exception stack, maintain per-CPU emergency stacks, unwind stack traces,
+randomize stack locations, or demonstrate reclamation on target. The Host Tested and static
+mapping evidence must not be described as a running kernel-stack subsystem.

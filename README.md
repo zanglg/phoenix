@@ -46,12 +46,13 @@ narrow support claim:
   owners retain a provisional 16-slot/eight-page platform arena with prelinked L2/L3 tables and
   invalid leaves, while mapped ownership type state prevents frame release before transactional
   mapping retirement; a Host Tested/Cross Compiled AArch64 mapper performs exact L3 leaf batches
-  and TLB maintenance, but it is not boot-instantiated and the seven-table image is not target rerun;
+  and TLB maintenance; the final-map image Cross Compiles a bounded publish/alias/retire/release
+  probe without switching SP, but the seven-table image is not target rerun;
 - an opt-in boot-memory probe cross-links the real DTB-to-allocation-to-readback path;
 - an opt-in final-kernel-map image builds allocator-owned TTBR1 tables with RX text, RO/NX
   rodata, RW/NX RAM, an unmapped boot-stack guard, and a page-granular PL011 mapping, then
   publishes them with barriers and TLB invalidation; that base path passed previously, while the
-  newly heap-extended image requires a target rerun;
+  newly heap-and-stack-extended image requires a target rerun;
 - final-map builders retain a Host Tested managed-RAM proof beside their table owner, and the
   loaded-init user-copy adapter is Cross Compiled against that bounded capability;
 - early PL011 output and the bounded boot smoke test have been verified on QEMU 9.1.3; deliberate

@@ -86,8 +86,9 @@ Both final-map runtime owner variants also retain one platform-created runtime-s
 reserved arena. This establishes virtual-slot ownership but does not allocate stack frames or
 by itself authorize live descriptor mutation. A separate unsafe AArch64 mapper can bind the exact
 retained table owner, its final-direct-map descriptor access, and serialized TLB maintenance. It
-changes only prelinked L3 leaves after completing all fallible checks, and no boot path constructs
-that mapper yet.
+changes only prelinked L3 leaves after completing all fallible checks. The focused final-map path
+constructs it for one bounded publish/alias/retire/release probe; loaded init and the default path
+do not.
 
 This replaces the coarse higher-half bootstrap hierarchy. The standalone final-map probe
 intentionally leaves `TTBR0_EL1` unchanged, so its temporary low device and RAM aliases remain.
@@ -111,7 +112,9 @@ The `kernel-map-probe` image uses the real boot DTB, kernel linker bounds, reser
 allocator, and bootstrap physical-memory backend. Before publication it emits
 `PHOENIX_KERNEL_MAP_ENTER`. After the TTBR1 switch it reuses the mapped kernel text, rodata, stack,
 data, and PL011 device page, initializes and exercises the bounded heap, emits
-`PHOENIX_KERNEL_HEAP_OK`, then emits `PHOENIX_KERNEL_MAP_OK` and halts.
+`PHOENIX_KERNEL_HEAP_OK`, publishes and retires one owned stack, verifies its virtual/physical
+alias, scrubs and releases it, emits `PHOENIX_KERNEL_STACK_OK`, then emits
+`PHOENIX_KERNEL_MAP_OK` and halts.
 
 When QEMU is available, run:
 
@@ -119,9 +122,9 @@ When QEMU is available, run:
 cargo xtask test-kernel-map
 ```
 
-The bounded harness cannot pass on the earlier boot, enter, or heap marker; both progress markers
-must precede terminal success. Panic, exception, early exit, timeout, and excessive output are
-failures. Output is retained in
+The bounded harness cannot pass on the earlier boot, enter, heap, or stack marker; map-enter, heap,
+and stack progress markers must appear in order before terminal success. Panic, exception, early
+exit, timeout, and excessive output are failures. Output is retained in
 `target/phoenix/aarch64-unknown-none-softfloat/debug/qemu-kernel-map.log`.
 
 The `loaded-init-probe` uses the same builder and owner in its end-to-end path. It constructs both
@@ -140,28 +143,30 @@ and injected mapping conflicts. Planner tests also cover reservations crossing a
 boundary plus transactional alignment, half, capacity, and leaf/topology conflict failures. A live
 mapper model injects publication and retirement reads, verifies zero partial writes on errors,
 rejects an altered live descriptor, and requires a completed maintenance batch before frame release.
+The Cross Compiled/ELF Inspected focused image includes a bounded real-backend stack transaction and
+its required marker, but static inclusion does not prove execution.
 
 The focused kernel image is Cross Compiled and ELF Inspected. Static checks require every
 permission-domain symbol, page alignment and ordering, the first-2-MiB image bound, the expected
-load addresses, and the heap and final success sentinels. On the recorded QEMU 9.1.3 `virt-9.1` run,
+load addresses, and the heap, stack, and final success sentinels. On the recorded QEMU 9.1.3 `virt-9.1` run,
 `cargo xtask test-kernel-map` reported root `0x0000000040000000`, five tables, 767 leaves, and
 the ordered enter/success markers after TTBR1 publication. That run predates the new heap marker,
 and also predates the two empty runtime-stack tables. It remains historical final-table evidence
-but does not validate the current seven-table extended probe.
+but does not validate the current seven-table heap-and-stack extended probe.
 
 ## TODO
 
 - remove the temporary TTBR0 aliases when no low virtual pointer or bootstrap handle survives;
 - migrate remaining post-switch raw helper users to the retained final-direct-map capability and
   rerun its valid/invalid target paths;
-- rerun the heap-extended final-map probe and use observed consumers to replace its conformance
+- rerun the heap-and-stack-extended final-map probe and use observed consumers to replace its conformance
   sizing with an explicit production policy;
 - derive the physical-address size from `ID_AA64MMFR0_EL1.PARange` before accepting RAM above
   the current 32-bit IPS envelope;
 - enable caches only after cache-maintenance and memory-ordering requirements are designed and
   runtime tested;
 - replace the provisional stack arena sizing with measured policy, then implement the AArch64
-  mapper integration under the ownership contract for thread and exception stacks;
+  stack-entry integration under the ownership contract for thread and exception stacks;
 - define general live mapping updates with break-before-make, local versus broadcast TLB policy,
   rollback, and SMP synchronization beyond the restricted stack leaf transitions;
 

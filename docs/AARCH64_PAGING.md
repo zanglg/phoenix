@@ -116,7 +116,9 @@ ELF Inspected with the configured AArch64 bare-metal target. The recorded probe 
 earlier five-table TTBR1 and continued through its success marker; the current seven-table image,
 live stack-leaf mapper, permission cases, and guard-fault negative cases remain pending. Host
 failure injection proves mapper errors precede all writes and successful retirement completes a
-second maintenance batch before ownership becomes releasable.
+second maintenance batch before ownership becomes releasable. The focused final-map image Cross
+Compiles and ELF Inspects one real-backend publish/alias/retire/release transaction, but it has not
+executed on target.
 
 Runtime installation is verified by `RUN-MMU-001`; low-alias retirement and the guard-fault probe
 remain tracked by `RUN-MMU-002` and `RUN-KSTACK-001` in `docs/RUNTIME_VALIDATION.md`.
@@ -126,8 +128,8 @@ remain tracked by `RUN-MMU-002` and `RUN-KSTACK-001` in `docs/RUNTIME_VALIDATION
 - derive supported physical-address size from `ID_AA64MMFR0_EL1.PARange`;
 - replace the bootstrap private-table backend and retained ASID-1 activation with process-table
   address-space ownership;
-- rerun the bounded fallible-heap final-map integration and instantiate the AArch64 stack mapper
-  under the Host Tested ownership contract; switching and exception-stack policy remain;
+- rerun the heap-and-stack final-map integration and validate the AArch64 stack mapper on target;
+  actual stack switching and exception-stack policy remain;
 - define live table-update locking and break-before-make beyond restricted invalid/valid stack
   leaf transitions;
 - define safe ASID retirement, epochs, and reuse after TTBR0 lifetime ends;

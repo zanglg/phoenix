@@ -36,6 +36,9 @@ numbers and remains explicitly unstable before 1.0.0. During construction, chang
 - A restricted AArch64 runtime-stack leaf mapper with retained-table identity, fallible preflight,
   exact descriptor/token validation, infallible batch commit, final-direct-map descriptor access,
   and per-page all-ASID TLB maintenance before mapping use or frame release.
+- A bounded final-map runtime-stack conformance path that publishes one owned stack, round-trips
+  bytes through its live virtual alias, retires it, verifies and scrubs physical backing, restores
+  allocator/pool ownership, and gates terminal success on a dedicated marker.
 - Reservation-filtered managed-frame snapshots, full-leaf final-direct-map proof, a retained-table
   RAM access capability, and loaded-init user copies no longer dependent on bootstrap raw helpers.
 - Bounded final-map heap initialization after TTBR1 publication, with retained frame ownership,

@@ -68,13 +68,13 @@ outputs, and read-only mappings.
 
 `cargo xtask check`, `cargo xtask lint`, and the complete `cargo xtask ci` build the proof,
 capability, retained runtime fields, loaded-init user-copy adapter, and final-map heap backend for
-AArch64. ELF inspection requires the heap marker in that focused image. These checks do not
-execute the new target paths.
+AArch64. The same capability now backs the focused runtime-stack clear, descriptor access, physical
+verification, and scrub path. ELF inspection requires both heap and stack markers in that focused
+image. These checks do not execute the new target paths.
 
 ## TODO
 
-- rerun the final-map heap path and loaded-init copy path on the pinned target;
-- use the same capability when owned kernel-stack frames are cleared after live-map support exists;
+- rerun the final-map heap/stack path and loaded-init copy path on the pinned target;
 - remove or narrow the public raw direct-map helpers once every post-switch caller is migrated;
 - couple proof and table materialization more tightly so an unsafe caller cannot pair artifacts
   derived from different plans;
