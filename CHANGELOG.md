@@ -18,6 +18,9 @@ numbers and remains explicitly unstable before 1.0.0. During construction, chang
 - Config-file-driven rust-analyzer target selection.
 - Standalone host-side xtask commands for environment checks, tests, builds, and validation.
 - Explicit Host Tested, Cross Compiled, ELF Inspected, Runtime Pending, and Runtime Verified states.
+- Allocation-free monotonic raw-tick values and a deterministic fixed-capacity timer queue with
+  checked regression/overflow, absolute deadlines, explicit exhaustion, generation-safe
+  cancellation, failure atomicity, and callback-free due-event removal.
 - Checked architecture-neutral physical/virtual addresses, pages, frames, and half-open ranges.
 - Strict allocation-free DTB parsing with boot CPU, bootargs, memory-region, and reservation extraction.
 - Fixed-capacity physical memory normalization, conservative reservation, and first-fit frame allocation.
