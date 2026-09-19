@@ -69,8 +69,9 @@ the success status.
 - a one-time static runtime retains the address-space owner, final kernel tables, file table, and
   remaining allocator state forever;
 - the bootstrap-memory capability has an explicit destructor and is revoked before TTBR1 changes;
-- final kernel tables cover every allocator frame, but active user-copy backends additionally
-  reject any frame not owned by the retained user address space before an unsafe direct-map copy;
+- final kernel tables carry an offline proof covering every allocator-managed frame, while active
+  user-copy backends additionally reject frames not owned by the retained user address space and
+  bind access to the exact active table owner;
 - the activation API requires a `'static` borrow of that complete owner;
 - executable pages are user RX and never writable; stack pages are user RW and never executable;
 - the guard page has no mapping;
@@ -108,8 +109,9 @@ stack, allocator, dynamic table topology/materialization, combined ownership, bo
 validation, bidirectional cross-page user copying, file-table transactions, syscall decoding, and
 QEMU terminal-output classification.
 Target compilation validates the complete concrete composition, `include_bytes` artifact handoff,
-bootstrap and ownership-checked final direct-map backends, both activation sequences, syscall and
-terminal-fault dispatch, and process lifecycle transitions. Static inspection proves that the
+bootstrap and retained-table/ownership-checked final direct-map backends, both activation
+sequences, syscall and terminal-fault dispatch, and process lifecycle transitions. Static
+inspection proves that the
 built kernel contains the exact initramfs whose `init` entry was accepted by the loader plus every
 required translation, terminal success, and user-fault failure sentinel.
 

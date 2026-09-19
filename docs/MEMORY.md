@@ -41,6 +41,10 @@ The fixed range capacity is an explicit early-boot resource. Metadata exhaustion
 physical memory exhaustion. This makes failure testable without requiring a heap before the frame
 allocator exists.
 
+`managed_frames()` returns a read-only snapshot of the complete reservation-filtered domain. The
+snapshot remains stable while individual frames move between free and allocated states. It is used
+to prove final direct-map coverage but never grants allocation or mutation ownership by itself.
+
 ## Invariants
 
 - only complete 4 KiB frames are returned;
@@ -53,8 +57,8 @@ allocator exists.
 
 Host tests cover alignment, overflow, half-open boundaries, sorting, merging, splitting,
 capacity exhaustion, deterministic allocation, aligned contiguous allocation, physical
-exhaustion, foreign release, double free, and coalescing. The same module is Cross Compiled for
-AArch64 by `cargo xtask ci`.
+exhaustion, foreign release, double free, coalescing, and managed-snapshot stability. The same
+module is Cross Compiled for AArch64 by `cargo xtask ci`.
 
 ## TODO and skipped work
 

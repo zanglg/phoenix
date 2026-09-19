@@ -16,7 +16,9 @@ pub use kernel_stack::{
     KernelStackAllocationError, KernelStackKind, KernelStackLayout, KernelStackMemory,
     KernelStackPool, KernelStackPoolError, KernelStackReleaseError, OwnedKernelStack,
 };
-pub use physical::{AllocationError, FrameAllocator, FrameRange, MemoryMap, MemoryMapError};
+pub use physical::{
+    AllocationError, FrameAllocator, FrameRange, ManagedFrameSet, MemoryMap, MemoryMapError,
+};
 
 /// Phoenix's base page size in bytes.
 pub const PAGE_SIZE: usize = 4096;

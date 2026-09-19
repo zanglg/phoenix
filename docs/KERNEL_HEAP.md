@@ -32,9 +32,10 @@ The current API is deliberately fallible and explicit:
 
 `HeapBackingMemory` is the only memory-access boundary. It supplies the virtual start of the exact
 owned frame range and clears one private frame at a time. A host backend can use ordinary test
-storage; a future AArch64 backend may use only RAM already covered by the retained final TTBR1
-direct map. Merely having a direct-map descriptor does not confer ownership: the frames must first
-have been removed from the reservation-aware physical allocator by `KernelHeap::initialize`.
+storage. The AArch64 `FinalDirectMapMemory` backend is now Cross Compiled and accepts only the
+reservation-filtered managed domain proved against the retained final TTBR1 owner. Merely having a
+direct-map descriptor does not confer ownership: the frames must first have been removed from the
+physical allocator by `KernelHeap::initialize`.
 
 The heap returns `HeapAllocation` tokens rather than raw references or pointers. The address in a
 token is useful only while that token and the heap backing remain live. Higher-level owning types
@@ -76,8 +77,8 @@ has initialized or used the heap.
 
 ## TODO
 
-- add an AArch64 final-direct-map backing implementation whose construction requires retained
-  final-TTBR1 ownership and the remaining physical allocator;
+- initialize a bounded heap after final TTBR1 publication using the implemented
+  `FinalDirectMapMemory` backend and the retained physical allocator;
 - select backing size and fixed live-allocation capacity from observed kernel consumers;
 - move suitable fixed boot plans and later VFS/process/scheduler ownership into explicit heap
   allocations while preserving their recoverable OOM paths;

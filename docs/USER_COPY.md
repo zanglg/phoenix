@@ -3,8 +3,9 @@
 This document describes Phoenix's first `copy_from_user` and `copy_to_user` boundaries plus their
 bounded syscall consumers. The generic range walks and ABI request validation are Host Tested. The
 concrete AArch64 bootstrap/final-direct-map backends, active-address-space retention, syscall
-paths, and userspace calls are Cross Compiled; the positive loaded-init write/read path is Runtime
-Verified, while boundary and failure injection on target remain Runtime Pending.
+paths, and userspace calls are Cross Compiled. The earlier positive loaded-init write/read path is
+recorded Runtime Verified; the new retained-table capability and boundary/failure injection remain
+Runtime Pending.
 
 ## Current implementation
 
@@ -26,8 +27,10 @@ validates pointer width and the user-region boundary but requires no mapped page
 
 The QEMU `virt` bootstrap backend populates frames while the temporary high-RAM alias is active.
 The loaded-init probe then publishes the final physical direct map and uses a narrower active
-adapter: it first rejects any frame not owned by the retained prepared address space, then performs
-the exact checked copy through the permanent higher-half offset. Lower-EL syscall dispatch may
+adapter: it first rejects any frame not owned by the retained prepared address space, then binds a
+managed-frame proof to the exact active table owner before copying through the permanent
+higher-half offset. It no longer calls the bootstrap-window raw helpers after publication.
+Lower-EL syscall dispatch may
 borrow that immutable ownership metadata while EL0 is stopped in the exception; the address space
 is never replaced or reclaimed, while its disjoint file-table field has exclusive single-core
 mutation.

@@ -58,7 +58,10 @@ use phoenix_kernel::process_image::ProcessImageMemory;
 ))]
 use phoenix_kernel::{
     arch::aarch64::kernel_page_table::MaterializedKernelPageTables,
-    platform::aarch64::qemu_virt::{FINAL_KERNEL_TABLE_CAPACITY, final_kernel_page_table_plan},
+    platform::aarch64::qemu_virt::{
+        FINAL_KERNEL_TABLE_CAPACITY, FinalDirectMapLayout, final_direct_map_layout,
+        final_kernel_page_table_plan,
+    },
 };
 
 #[cfg(feature = "loaded-init-probe")]
@@ -86,9 +89,7 @@ use phoenix_kernel::file::{FileError, ReadOnlyFileTable};
 #[cfg(feature = "loaded-init-probe")]
 use phoenix_kernel::initramfs::Initramfs;
 #[cfg(feature = "loaded-init-probe")]
-use phoenix_kernel::platform::aarch64::qemu_virt::{
-    BootstrapMemoryError, read_direct_mapped_frame, write_direct_mapped_frame,
-};
+use phoenix_kernel::platform::aarch64::qemu_virt::FinalDirectMapMemory;
 #[cfg(feature = "loaded-init-probe")]
 use phoenix_kernel::process::{ExitStatus, ProcessControl, ProcessId, UserFault};
 #[cfg(feature = "loaded-init-probe")]
@@ -175,6 +176,7 @@ struct InitRuntime {
     _init_asid: AddressSpaceId,
     address_space: InitAddressSpace,
     kernel_tables: FinalKernelTables,
+    direct_map_layout: FinalDirectMapLayout<INIT_MEMORY_RANGES>,
     files: ReadOnlyFileTable<'static, INIT_OPEN_FILES>,
     _allocator: FrameAllocator<INIT_MEMORY_RANGES>,
     _asids: AsidAllocator,
@@ -188,11 +190,18 @@ enum ActiveInitMemoryError {
 #[cfg(feature = "loaded-init-probe")]
 struct ActiveInitMemory {
     address_space: &'static InitAddressSpace,
+    direct_map: FinalDirectMapMemory<'static, FINAL_KERNEL_TABLE_CAPACITY, INIT_MEMORY_RANGES>,
 }
 #[cfg(feature = "loaded-init-probe")]
 impl ActiveInitMemory {
-    const fn new(address_space: &'static InitAddressSpace) -> Self {
-        Self { address_space }
+    fn new(
+        address_space: &'static InitAddressSpace,
+        direct_map: FinalDirectMapMemory<'static, FINAL_KERNEL_TABLE_CAPACITY, INIT_MEMORY_RANGES>,
+    ) -> Self {
+        Self {
+            address_space,
+            direct_map,
+        }
     }
 
     fn validate_frame(
@@ -217,11 +226,9 @@ impl UserMemoryReader for ActiveInitMemory {
         output: &mut [u8],
     ) -> Result<(), Self::Error> {
         self.validate_frame(frame)?;
-        // SAFETY: the retained address-space owner proves this exact frame is
-        // a live private user leaf. The final TTBR1 plan maps every allocator
-        // frame through the fixed normal-memory direct map.
-        unsafe { read_direct_mapped_frame(frame, offset, output) }
-            .map_err(|_error: BootstrapMemoryError| ActiveInitMemoryError::Platform)
+        self.direct_map
+            .read_frame(frame, offset, output)
+            .map_err(|_error| ActiveInitMemoryError::Platform)
     }
 }
 #[cfg(feature = "loaded-init-probe")]
@@ -235,10 +242,8 @@ impl UserMemoryWriter for ActiveInitMemory {
         input: &[u8],
     ) -> Result<(), Self::Error> {
         self.validate_frame(frame)?;
-        // SAFETY: the retained owner proves this exact frame is a live private
-        // user leaf; copy_to_user separately proves its user mapping is writable.
-        unsafe { write_direct_mapped_frame(frame, offset, input) }
-            .map_err(|_error: BootstrapMemoryError| ActiveInitMemoryError::Platform)
+        UserMemoryWriter::write_frame(&mut self.direct_map, frame, offset, input)
+            .map_err(|_error| ActiveInitMemoryError::Platform)
     }
 }
 #[cfg(feature = "loaded-init-probe")]
@@ -265,6 +270,7 @@ type FinalKernelTables = MaterializedKernelPageTables<FINAL_KERNEL_TABLE_CAPACIT
 ))]
 struct KernelMapRuntime {
     tables: FinalKernelTables,
+    _direct_map_layout: FinalDirectMapLayout<KERNEL_MAP_MEMORY_RANGES>,
     _allocator: FrameAllocator<KERNEL_MAP_MEMORY_RANGES>,
 }
 #[cfg(all(
@@ -421,6 +427,8 @@ fn run_kernel_map_probe(boot_argument: usize, console: &mut Console<EarlyPl011>)
     let mapping_count = plan.mappings().len();
     let table_count = plan.required_table_frames();
     let mut allocator = map.into_allocator();
+    let direct_map_layout = final_direct_map_layout(&plan, allocator.managed_frames())
+        .unwrap_or_else(|error| panic!("could not prove final RAM direct map: {error:?}"));
     let allocated = plan
         .allocate(&mut allocator)
         .unwrap_or_else(|error| panic!("could not allocate final kernel tables: {error:?}"));
@@ -442,6 +450,7 @@ fn run_kernel_map_probe(boot_argument: usize, console: &mut Console<EarlyPl011>)
     let tables = unsafe {
         install_kernel_map_runtime(KernelMapRuntime {
             tables: materialized,
+            _direct_map_layout: direct_map_layout,
             _allocator: allocator,
         })
     };
@@ -570,6 +579,8 @@ fn run_loaded_init_probe(boot_argument: usize, console: &mut Console<EarlyPl011>
     });
     let kernel_mapping_count = kernel_plan.mappings().len();
     let kernel_table_count = kernel_plan.required_table_frames();
+    let direct_map_layout = final_direct_map_layout(&kernel_plan, allocator.managed_frames())
+        .unwrap_or_else(|error| panic!("could not prove final RAM direct map: {error:?}"));
     let allocated_kernel_tables = kernel_plan
         .allocate(&mut allocator)
         .unwrap_or_else(|error| panic!("could not allocate final kernel tables: {error:?}"));
@@ -603,6 +614,7 @@ fn run_loaded_init_probe(boot_argument: usize, console: &mut Console<EarlyPl011>
             _init_asid: init_asid,
             address_space: prepared,
             kernel_tables,
+            direct_map_layout,
             files: ReadOnlyFileTable::new(initramfs),
             _allocator: allocator,
             _asids: asids,
@@ -677,6 +689,22 @@ unsafe fn active_init_address_space() -> &'static InitAddressSpace {
     unsafe {
         let runtime = (*slot).as_ptr();
         &*core::ptr::addr_of!((*runtime).address_space)
+    }
+}
+
+#[cfg(feature = "loaded-init-probe")]
+unsafe fn active_init_direct_map()
+-> FinalDirectMapMemory<'static, FINAL_KERNEL_TABLE_CAPACITY, INIT_MEMORY_RANGES> {
+    let slot = &raw const INIT_RUNTIME;
+    // SAFETY: EL0 and syscall dispatch are reachable only after the runtime
+    // was installed and its exact kernel tables were activated. The retained
+    // proof was derived from the plan consumed to materialize those tables;
+    // both fields remain alive forever in this single-core probe.
+    unsafe {
+        let runtime = (*slot).as_ptr();
+        let tables = &*core::ptr::addr_of!((*runtime).kernel_tables);
+        let layout = *core::ptr::addr_of!((*runtime).direct_map_layout);
+        FinalDirectMapMemory::assume_active(tables, layout)
     }
 }
 
@@ -918,7 +946,9 @@ fn handle_init_write(frame: &mut ExceptionFrame, request: phoenix_kernel::abi::S
     // SAFETY: lower-EL dispatch is reachable only after the one-time runtime
     // installation, which retains this immutable address-space field forever.
     let address_space = unsafe { active_init_address_space() };
-    let mut memory = ActiveInitMemory::new(address_space);
+    // SAFETY: the runtime and active final-map owner precede every EL0 syscall.
+    let direct_map = unsafe { active_init_direct_map() };
+    let mut memory = ActiveInitMemory::new(address_space, direct_map);
     let result = address_space.copy_from_user(
         &mut memory,
         write.user_buffer(),
@@ -956,7 +986,9 @@ fn handle_init_open(frame: &mut ExceptionFrame, request: phoenix_kernel::abi::Sy
     // SAFETY: syscall dispatch starts only after the one-time runtime owner is
     // installed and retained permanently.
     let address_space = unsafe { active_init_address_space() };
-    let mut memory = ActiveInitMemory::new(address_space);
+    // SAFETY: the runtime and active final-map owner precede every EL0 syscall.
+    let direct_map = unsafe { active_init_direct_map() };
+    let mut memory = ActiveInitMemory::new(address_space, direct_map);
     let copied = address_space.copy_from_user(
         &mut memory,
         open.path_buffer(),
@@ -1005,7 +1037,9 @@ fn handle_init_read(frame: &mut ExceptionFrame, request: phoenix_kernel::abi::Sy
     // SAFETY: runtime publication precedes dispatch and permanently retains
     // the active user-frame owner.
     let address_space = unsafe { active_init_address_space() };
-    let mut memory = ActiveInitMemory::new(address_space);
+    // SAFETY: the runtime and active final-map owner precede every EL0 syscall.
+    let direct_map = unsafe { active_init_direct_map() };
+    let mut memory = ActiveInitMemory::new(address_space, direct_map);
     let copied = address_space.copy_to_user(&mut memory, read.user_buffer(), window.bytes());
     if copied.is_err() {
         syscall::set_return(frame, SyscallReturn::error(Errno::BadAddress));

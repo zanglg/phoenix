@@ -71,6 +71,10 @@ tests use the real AArch64 planner to map only usable pages with `kernel_data` a
 both guards remain absent. No live table mutation, stack-pointer switch, or exception entry uses
 these owners yet.
 
+`FinalDirectMapMemory` now implements the stack-clearing backend and is restricted to allocator
+managed frames proved against the retained TTBR1 hierarchy. It is not used for owned stacks until
+the separate virtual stack mappings can be published and retired safely.
+
 ## Invariants
 
 - the guard is exactly one 4 KiB frame and immediately precedes the downward-growing stack;

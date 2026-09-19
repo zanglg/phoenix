@@ -64,8 +64,8 @@ links and leaves through a private-table backend. `kernel_page_table.rs` builds 
 mixed-level upper-half hierarchy, applies ordered page-granular permission overrides or explicit
 holes to a direct map, atomically owns its table frames, and exposes publication only through a
 permanent borrow.
-See `docs/AARCH64_USER_PAGE_TABLES.md` and `docs/FINAL_KERNEL_ADDRESS_SPACE.md` for their distinct
-ownership boundaries.
+See `docs/AARCH64_USER_PAGE_TABLES.md`, `docs/FINAL_KERNEL_ADDRESS_SPACE.md`, and
+`docs/FINAL_DIRECT_MAP.md` for their distinct ownership boundaries.
 
 ## Permission policy
 

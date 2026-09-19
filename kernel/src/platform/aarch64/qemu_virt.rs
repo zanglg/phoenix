@@ -4,18 +4,21 @@ use core::ptr::{self, read_volatile, write_volatile};
 
 #[cfg(any(target_arch = "aarch64", test))]
 use crate::arch::aarch64::kernel_page_table::DirectMapOverride;
-use crate::arch::aarch64::kernel_page_table::{KernelPageTableError, KernelPageTablePlan};
-use crate::arch::aarch64::paging::Descriptor;
+use crate::arch::aarch64::kernel_page_table::{
+    KernelPageTableError, KernelPageTablePlan, MaterializedKernelPageTables,
+};
 #[cfg(any(target_arch = "aarch64", test))]
-use crate::arch::aarch64::paging::{MappingAttributes, TranslationLevel};
+use crate::arch::aarch64::paging::TranslationLevel;
+use crate::arch::aarch64::paging::{Descriptor, MappingAttributes};
 use crate::arch::aarch64::user_page_table::TranslationTableMemory;
 use crate::console::ByteSink;
 #[cfg(target_arch = "aarch64")]
 use crate::dtb::BootInfo;
 use crate::dtb::{DeviceTree, Error as DeviceTreeError};
-#[cfg(any(target_arch = "aarch64", test))]
-use crate::memory::VirtAddr;
-use crate::memory::{AddressRange, FrameRange, PAGE_SIZE, PageFrame, PhysAddr};
+use crate::memory::{
+    AddressRange, FrameRange, HeapBackingMemory, KernelStackMemory, ManagedFrameSet, PAGE_SIZE,
+    PageFrame, PhysAddr, VirtAddr,
+};
 use crate::process_image::ProcessImageMemory;
 use crate::user_copy::{UserMemoryReader, UserMemoryWriter};
 
@@ -111,6 +114,202 @@ pub enum FinalKernelMapError {
     MissingKernelSectionMapping,
     /// The fixed table topology or mapping metadata cannot represent the layout.
     PageTable(KernelPageTableError),
+}
+
+/// Failure while proving allocator-managed RAM is present in a final TTBR1 plan.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FinalDirectMapLayoutError {
+    /// The allocator has no managed frames to authorize.
+    NoManagedFrames,
+    /// Physical or virtual range arithmetic overflowed.
+    AddressOverflow,
+    /// A managed frame has no final direct-map translation.
+    MissingMapping {
+        /// First frame number not covered by a valid translation.
+        frame_number: usize,
+    },
+    /// A translation did not preserve the fixed physical-to-virtual offset.
+    WrongPhysicalAddress {
+        /// Frame whose translation was rejected.
+        frame_number: usize,
+        /// Physical address returned by the offline translation model.
+        translated_address: usize,
+    },
+    /// A managed frame is not mapped as EL1 read/write, non-executable normal memory.
+    WrongAttributes {
+        /// Frame whose translation was rejected.
+        frame_number: usize,
+        /// Attributes returned by the offline translation model.
+        attributes: MappingAttributes,
+    },
+    /// The offline translation model rejected an address.
+    PageTable(KernelPageTableError),
+}
+
+/// Failure while translating allocator-managed bytes through the active final direct map.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FinalDirectMapAccessError {
+    /// A frame is outside the reservation-filtered allocator domain.
+    UnmanagedFrame {
+        /// Rejected physical frame start.
+        address: usize,
+    },
+    /// A contiguous range is not wholly inside one managed region.
+    UnmanagedRange {
+        /// Inclusive first frame number.
+        start_frame: usize,
+        /// Exclusive final frame number.
+        end_frame: usize,
+    },
+    /// A requested byte range extends beyond one base page.
+    AccessOutOfBounds {
+        /// Offset within the frame.
+        offset: usize,
+        /// Requested byte count.
+        length: usize,
+    },
+    /// Physical or virtual address arithmetic overflowed.
+    AddressOverflow,
+}
+
+/// Offline proof that every allocator-managed frame has the final RAM mapping.
+///
+/// This copyable value authorizes address translation only. It does not prove
+/// that a caller owns any currently allocated frame.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FinalDirectMapLayout<const RANGES: usize> {
+    managed: ManagedFrameSet<RANGES>,
+}
+
+impl<const RANGES: usize> FinalDirectMapLayout<RANGES> {
+    /// Return the reservation-filtered frame domain covered by this proof.
+    pub const fn managed_frames(self) -> ManagedFrameSet<RANGES> {
+        self.managed
+    }
+
+    /// Translate a checked range within one managed frame.
+    pub fn translated_address(
+        self,
+        frame: PageFrame,
+        offset: usize,
+        length: usize,
+    ) -> Result<usize, FinalDirectMapAccessError> {
+        if !self.managed.contains(frame) {
+            return Err(FinalDirectMapAccessError::UnmanagedFrame {
+                address: frame.start_address().as_usize(),
+            });
+        }
+        let end = offset
+            .checked_add(length)
+            .ok_or(FinalDirectMapAccessError::AddressOverflow)?;
+        if offset > PAGE_SIZE || end > PAGE_SIZE {
+            return Err(FinalDirectMapAccessError::AccessOutOfBounds { offset, length });
+        }
+        frame
+            .start_address()
+            .as_usize()
+            .checked_add(offset)
+            .and_then(|physical| physical.checked_add(KERNEL_VIRTUAL_OFFSET))
+            .ok_or(FinalDirectMapAccessError::AddressOverflow)
+    }
+
+    /// Return the virtual start of one wholly managed contiguous range.
+    pub fn range_virtual_start(
+        self,
+        frames: FrameRange,
+    ) -> Result<VirtAddr, FinalDirectMapAccessError> {
+        if !self.managed.contains_range(frames) {
+            return Err(FinalDirectMapAccessError::UnmanagedRange {
+                start_frame: frames.start_frame_number(),
+                end_frame: frames.end_frame_number(),
+            });
+        }
+        let physical = frames
+            .start_frame_number()
+            .checked_mul(PAGE_SIZE)
+            .ok_or(FinalDirectMapAccessError::AddressOverflow)?;
+        let virtual_start = physical
+            .checked_add(KERNEL_VIRTUAL_OFFSET)
+            .ok_or(FinalDirectMapAccessError::AddressOverflow)?;
+        Ok(VirtAddr::new(virtual_start))
+    }
+}
+
+/// RAM access capability tied to a permanently retained active TTBR1 owner.
+pub struct FinalDirectMapMemory<'a, const TABLES: usize, const RANGES: usize> {
+    _tables: &'a MaterializedKernelPageTables<TABLES>,
+    layout: FinalDirectMapLayout<RANGES>,
+}
+
+impl<'a, const TABLES: usize, const RANGES: usize> FinalDirectMapMemory<'a, TABLES, RANGES> {
+    /// Bind an offline direct-map proof to the exact retained active hierarchy.
+    ///
+    /// # Safety
+    ///
+    /// `tables` must have been materialized from the plan that produced
+    /// `layout`, must already be active in `TTBR1_EL1`, and must outlive this
+    /// capability. The caller must separately prove unique ownership before
+    /// mutating any accepted frame. No concurrent CPU may access those bytes.
+    pub const unsafe fn assume_active(
+        tables: &'a MaterializedKernelPageTables<TABLES>,
+        layout: FinalDirectMapLayout<RANGES>,
+    ) -> Self {
+        Self {
+            _tables: tables,
+            layout,
+        }
+    }
+
+    /// Copy bytes from one caller-owned managed frame.
+    pub fn read_frame(
+        &self,
+        frame: PageFrame,
+        offset: usize,
+        output: &mut [u8],
+    ) -> Result<(), FinalDirectMapAccessError> {
+        let source = self
+            .layout
+            .translated_address(frame, offset, output.len())? as *const u8;
+        if output.is_empty() {
+            return Ok(());
+        }
+        // SAFETY: capability construction proves the final translation and
+        // the caller-facing contract requires readable ownership. Range
+        // validation keeps the copy inside one mapped frame.
+        unsafe {
+            ptr::copy(source, output.as_mut_ptr(), output.len());
+        }
+        Ok(())
+    }
+
+    fn write_frame_bytes(
+        &mut self,
+        frame: PageFrame,
+        offset: usize,
+        input: &[u8],
+    ) -> Result<(), FinalDirectMapAccessError> {
+        let destination = self.layout.translated_address(frame, offset, input.len())? as *mut u8;
+        if input.is_empty() {
+            return Ok(());
+        }
+        // SAFETY: capability construction proves the final writable mapping;
+        // the caller-facing trait contracts require unique frame ownership,
+        // and validation keeps the copy inside one frame.
+        unsafe {
+            ptr::copy(input.as_ptr(), destination, input.len());
+        }
+        Ok(())
+    }
+
+    fn clear_owned_frame(&mut self, frame: PageFrame) -> Result<(), FinalDirectMapAccessError> {
+        let destination = self.layout.translated_address(frame, 0, PAGE_SIZE)? as *mut u8;
+        // SAFETY: capability construction proves the complete writable final
+        // mapping, while each implementing trait requires private ownership.
+        unsafe {
+            ptr::write_bytes(destination, 0, PAGE_SIZE);
+        }
+        Ok(())
+    }
 }
 
 /// Page-aligned physical boundaries of the linked kernel permission domains.
@@ -276,6 +475,54 @@ fn validate_critical_mappings(
         return Err(FinalKernelMapError::MissingKernelSectionMapping);
     }
     Ok(())
+}
+
+/// Prove that every allocator-managed frame is present in the final RAM direct map.
+#[cfg(any(target_arch = "aarch64", test))]
+pub fn final_direct_map_layout<const RANGES: usize>(
+    plan: &QemuVirtKernelPageTablePlan,
+    managed: ManagedFrameSet<RANGES>,
+) -> Result<FinalDirectMapLayout<RANGES>, FinalDirectMapLayoutError> {
+    if managed.ranges().is_empty() {
+        return Err(FinalDirectMapLayoutError::NoManagedFrames);
+    }
+    for range in managed.ranges().iter().copied() {
+        let mut frame_number = range.start_frame_number();
+        while frame_number < range.end_frame_number() {
+            let physical = frame_number
+                .checked_mul(PAGE_SIZE)
+                .ok_or(FinalDirectMapLayoutError::AddressOverflow)?;
+            let virtual_address = physical
+                .checked_add(KERNEL_VIRTUAL_OFFSET)
+                .ok_or(FinalDirectMapLayoutError::AddressOverflow)?;
+            let translation = plan
+                .translate(VirtAddr::new(virtual_address))
+                .map_err(KernelPageTableError::Paging)
+                .map_err(FinalDirectMapLayoutError::PageTable)?
+                .ok_or(FinalDirectMapLayoutError::MissingMapping { frame_number })?;
+            if translation.physical_address != PhysAddr::new(physical) {
+                return Err(FinalDirectMapLayoutError::WrongPhysicalAddress {
+                    frame_number,
+                    translated_address: translation.physical_address.as_usize(),
+                });
+            }
+            if translation.attributes != MappingAttributes::kernel_data() {
+                return Err(FinalDirectMapLayoutError::WrongAttributes {
+                    frame_number,
+                    attributes: translation.attributes,
+                });
+            }
+
+            let leaf_size = translation.level.mapping_size();
+            let bytes_to_leaf_end = leaf_size - virtual_address % leaf_size;
+            let frames_to_leaf_end = bytes_to_leaf_end / PAGE_SIZE;
+            let remaining = range.end_frame_number() - frame_number;
+            frame_number = frame_number
+                .checked_add(frames_to_leaf_end.min(remaining))
+                .ok_or(FinalDirectMapLayoutError::AddressOverflow)?;
+        }
+    }
+    Ok(FinalDirectMapLayout { managed })
 }
 
 /// Failure while accessing a private RAM frame through the temporary TTBR1 alias.
@@ -668,16 +915,125 @@ impl TranslationTableMemory for BootstrapPhysicalMemory {
     }
 }
 
+impl<const TABLES: usize, const RANGES: usize> HeapBackingMemory
+    for FinalDirectMapMemory<'_, TABLES, RANGES>
+{
+    type Error = FinalDirectMapAccessError;
+
+    fn virtual_start(&mut self, frames: FrameRange) -> Result<VirtAddr, Self::Error> {
+        self.layout.range_virtual_start(frames)
+    }
+
+    fn clear_frame(&mut self, frame: PageFrame) -> Result<(), Self::Error> {
+        self.clear_owned_frame(frame)
+    }
+}
+
+impl<const TABLES: usize, const RANGES: usize> KernelStackMemory
+    for FinalDirectMapMemory<'_, TABLES, RANGES>
+{
+    type Error = FinalDirectMapAccessError;
+
+    fn clear_frame(&mut self, frame: PageFrame) -> Result<(), Self::Error> {
+        self.clear_owned_frame(frame)
+    }
+}
+
+impl<const TABLES: usize, const RANGES: usize> ProcessImageMemory
+    for FinalDirectMapMemory<'_, TABLES, RANGES>
+{
+    type Error = FinalDirectMapAccessError;
+
+    fn clear_frame(&mut self, frame: PageFrame) -> Result<(), Self::Error> {
+        self.clear_owned_frame(frame)
+    }
+
+    fn write_frame(
+        &mut self,
+        frame: PageFrame,
+        offset: usize,
+        bytes: &[u8],
+    ) -> Result<(), Self::Error> {
+        self.write_frame_bytes(frame, offset, bytes)
+    }
+}
+
+impl<const TABLES: usize, const RANGES: usize> UserMemoryReader
+    for FinalDirectMapMemory<'_, TABLES, RANGES>
+{
+    type Error = FinalDirectMapAccessError;
+
+    fn read_frame(
+        &mut self,
+        frame: PageFrame,
+        offset: usize,
+        output: &mut [u8],
+    ) -> Result<(), Self::Error> {
+        FinalDirectMapMemory::read_frame(self, frame, offset, output)
+    }
+}
+
+impl<const TABLES: usize, const RANGES: usize> UserMemoryWriter
+    for FinalDirectMapMemory<'_, TABLES, RANGES>
+{
+    type Error = FinalDirectMapAccessError;
+
+    fn write_frame(
+        &mut self,
+        frame: PageFrame,
+        offset: usize,
+        input: &[u8],
+    ) -> Result<(), Self::Error> {
+        self.write_frame_bytes(frame, offset, input)
+    }
+}
+
+impl<const TABLES: usize, const RANGES: usize> TranslationTableMemory
+    for FinalDirectMapMemory<'_, TABLES, RANGES>
+{
+    type Error = FinalDirectMapAccessError;
+
+    fn clear_table(&mut self, frame: PageFrame) -> Result<(), Self::Error> {
+        self.clear_owned_frame(frame)
+    }
+
+    fn write_descriptor(
+        &mut self,
+        frame: PageFrame,
+        index: usize,
+        descriptor: Descriptor,
+    ) -> Result<(), Self::Error> {
+        let offset = index
+            .checked_mul(core::mem::size_of::<u64>())
+            .ok_or(FinalDirectMapAccessError::AddressOverflow)?;
+        let destination =
+            self.layout
+                .translated_address(frame, offset, size_of::<u64>())? as *mut u64;
+        // SAFETY: the capability proves the active writable final mapping;
+        // the trait contract requires a private table frame, and the checked
+        // descriptor index preserves u64 alignment inside the frame.
+        unsafe {
+            ptr::write(destination, descriptor.raw());
+        }
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         BOOTSTRAP_RAM_PHYSICAL_END, BOOTSTRAP_RAM_PHYSICAL_START, BootstrapMemoryError,
-        BootstrapPhysicalMemory, FinalKernelMapError, KERNEL_VIRTUAL_OFFSET, PL011_VIRTUAL_BASE,
+        BootstrapPhysicalMemory, FinalDirectMapAccessError, FinalDirectMapLayoutError,
+        FinalKernelMapError, KERNEL_VIRTUAL_OFFSET, PL011_VIRTUAL_BASE,
+        QemuVirtKernelPageTablePlan, final_direct_map_layout,
         final_kernel_page_table_plan_from_regions, linked_kernel_image_layout,
         physical_kernel_range,
     };
+    use crate::arch::aarch64::kernel_page_table::DirectMapOverride;
     use crate::arch::aarch64::paging::{MappingAttributes, TranslationLevel};
-    use crate::memory::{AddressRange, PAGE_SIZE, PageFrame, PhysAddr, VirtAddr};
+    use crate::memory::{
+        AddressRange, FrameRange, MemoryMap, PAGE_SIZE, PageFrame, PhysAddr, VirtAddr,
+    };
 
     #[test]
     fn translates_only_complete_frames_in_the_bootstrap_ram_window() {
@@ -831,6 +1187,142 @@ mod tests {
             .unwrap();
         assert_eq!(uart.level, TranslationLevel::L3);
         assert_eq!(uart.attributes, MappingAttributes::kernel_device());
+
+        let mut memory = MemoryMap::<4>::new();
+        memory.add_usable(ram).unwrap();
+        memory.reserve(layout.image()).unwrap();
+        let managed = memory.into_allocator().managed_frames();
+        let proof = final_direct_map_layout(&plan, managed).expect("actual final-plan proof");
+        assert_eq!(proof.managed_frames(), managed);
+    }
+
+    #[test]
+    fn proves_only_allocator_managed_final_ram_mappings() {
+        let ram_start = BOOTSTRAP_RAM_PHYSICAL_START;
+        let ram_end = ram_start + 2 * 1024 * 1024;
+        let ram = AddressRange::new(PhysAddr::new(ram_start), PhysAddr::new(ram_end)).unwrap();
+        let mut plan = QemuVirtKernelPageTablePlan::new().unwrap();
+        plan.map_direct_frames(
+            FrameRange::from_usable_bytes(ram),
+            KERNEL_VIRTUAL_OFFSET,
+            MappingAttributes::kernel_data(),
+            &[],
+        )
+        .unwrap();
+
+        let mut map = MemoryMap::<4>::new();
+        map.add_usable(ram).unwrap();
+        map.reserve(
+            AddressRange::new(
+                PhysAddr::new(ram_start),
+                PhysAddr::new(ram_start + PAGE_SIZE),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        map.reserve(
+            AddressRange::new(
+                PhysAddr::new(ram_start + 7 * PAGE_SIZE),
+                PhysAddr::new(ram_start + 9 * PAGE_SIZE),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let managed = map.into_allocator().managed_frames();
+        let layout = final_direct_map_layout(&plan, managed).expect("direct-map proof");
+
+        let first = frame(ram_start + PAGE_SIZE);
+        assert_eq!(
+            layout.translated_address(first, PAGE_SIZE - 1, 1),
+            Ok(KERNEL_VIRTUAL_OFFSET + ram_start + 2 * PAGE_SIZE - 1)
+        );
+        assert_eq!(
+            layout.translated_address(frame(ram_start), 0, 1),
+            Err(FinalDirectMapAccessError::UnmanagedFrame { address: ram_start })
+        );
+        assert_eq!(
+            layout.translated_address(first, PAGE_SIZE - 1, 2),
+            Err(FinalDirectMapAccessError::AccessOutOfBounds {
+                offset: PAGE_SIZE - 1,
+                length: 2,
+            })
+        );
+        assert_eq!(layout.managed_frames(), managed);
+    }
+
+    #[test]
+    fn direct_map_proof_rejects_holes_permissions_and_wrong_outputs() {
+        let start = BOOTSTRAP_RAM_PHYSICAL_START;
+        let bytes =
+            AddressRange::new(PhysAddr::new(start), PhysAddr::new(start + 2 * PAGE_SIZE)).unwrap();
+        let frames = FrameRange::from_usable_bytes(bytes);
+        let mut map = MemoryMap::<1>::new();
+        map.add_usable(bytes).unwrap();
+        let managed = map.into_allocator().managed_frames();
+
+        let mut missing = QemuVirtKernelPageTablePlan::new().unwrap();
+        missing
+            .map_direct_frames(
+                frames,
+                KERNEL_VIRTUAL_OFFSET,
+                MappingAttributes::kernel_data(),
+                &[DirectMapOverride::unmapped(
+                    FrameRange::new(frame(start + PAGE_SIZE), 1).unwrap(),
+                )
+                .unwrap()],
+            )
+            .unwrap();
+        assert_eq!(
+            final_direct_map_layout(&missing, managed),
+            Err(FinalDirectMapLayoutError::MissingMapping {
+                frame_number: start / PAGE_SIZE + 1,
+            })
+        );
+
+        let mut read_only = QemuVirtKernelPageTablePlan::new().unwrap();
+        read_only
+            .map_direct_frames(
+                frames,
+                KERNEL_VIRTUAL_OFFSET,
+                MappingAttributes::kernel_rodata(),
+                &[],
+            )
+            .unwrap();
+        assert_eq!(
+            final_direct_map_layout(&read_only, managed),
+            Err(FinalDirectMapLayoutError::WrongAttributes {
+                frame_number: start / PAGE_SIZE,
+                attributes: MappingAttributes::kernel_rodata(),
+            })
+        );
+
+        let mut wrong_output = QemuVirtKernelPageTablePlan::new().unwrap();
+        wrong_output
+            .map(
+                VirtAddr::new(KERNEL_VIRTUAL_OFFSET + start),
+                PhysAddr::new(start + PAGE_SIZE),
+                TranslationLevel::L3,
+                MappingAttributes::kernel_data(),
+            )
+            .unwrap();
+        assert_eq!(
+            final_direct_map_layout(&wrong_output, managed),
+            Err(FinalDirectMapLayoutError::WrongPhysicalAddress {
+                frame_number: start / PAGE_SIZE,
+                translated_address: start + PAGE_SIZE,
+            })
+        );
+    }
+
+    #[test]
+    fn direct_map_proof_rejects_an_empty_managed_domain() {
+        let plan = QemuVirtKernelPageTablePlan::new().unwrap();
+        let managed = MemoryMap::<1>::new().into_allocator().managed_frames();
+
+        assert_eq!(
+            final_direct_map_layout(&plan, managed),
+            Err(FinalDirectMapLayoutError::NoManagedFrames)
+        );
     }
 
     #[test]

@@ -45,6 +45,8 @@ narrow support claim:
 - an opt-in final-kernel-map image builds allocator-owned TTBR1 tables with RX text, RO/NX
   rodata, RW/NX RAM, an unmapped boot-stack guard, and a page-granular PL011 mapping, then
   publishes them with barriers and TLB invalidation; the focused runtime probe has passed;
+- final-map builders retain a Host Tested managed-RAM proof beside their table owner, and the
+  loaded-init user-copy adapter is Cross Compiled against that bounded capability;
 - early PL011 output and the bounded boot smoke test have been verified on QEMU 9.1.3; deliberate
   panic, fault, guard, and permission-negative probes remain Runtime Pending.
 
@@ -121,6 +123,8 @@ is in [`docs/AARCH64_ASIDS.md`](docs/AARCH64_ASIDS.md), and the current terminal
 is in [`docs/USER_FAULTS.md`](docs/USER_FAULTS.md). The heap's ownership, failure,
 synchronization, and Runtime Pending boot-integration boundary is defined in
 [`docs/KERNEL_HEAP.md`](docs/KERNEL_HEAP.md).
+The reservation-filtered final RAM proof and retained-table access boundary are documented in
+[`docs/FINAL_DIRECT_MAP.md`](docs/FINAL_DIRECT_MAP.md).
 
 ## LSP target
 

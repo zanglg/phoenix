@@ -77,6 +77,13 @@ intentionally leaves `TTBR0_EL1` unchanged, so its temporary low device and RAM 
 The loaded-init path immediately replaces TTBR0 with its owned user hierarchy. General low-alias
 retirement outside that path remains a separate runtime-sensitive operation.
 
+Before the offline plan is consumed, both final-map builders now prove that every
+reservation-filtered allocator frame is continuously mapped at the fixed offset with EL1 RW/NX
+normal-memory attributes. They retain that compact proof beside the materialized tables and
+allocator. `FinalDirectMapMemory` can be constructed only under an unsafe contract tying the proof
+to those active retained tables. The loaded-init syscall adapter uses this capability after first
+checking exact user-leaf ownership. Its post-refactor target execution is `RUN-MMU-003` Pending.
+
 ## Focused QEMU probe
 
 The `kernel-map-probe` image uses the real boot DTB, kernel linker bounds, reservation-aware frame
@@ -115,7 +122,8 @@ the ordered enter/success markers after TTBR1 publication.
 ## TODO
 
 - remove the temporary TTBR0 aliases when no low virtual pointer or bootstrap handle survives;
-- replace the bootstrap-only physical-memory handle with a final direct-map API and lifetime;
+- migrate remaining post-switch raw helper users to the retained final-direct-map capability and
+  rerun its valid/invalid target paths;
 - connect the Host Tested fallible heap only through that final direct-map API and retained frame
   allocator ownership;
 - derive the physical-address size from `ID_AA64MMFR0_EL1.PARange` before accepting RAM above
@@ -139,4 +147,5 @@ substitute for firmware-reserved or allocator-owned frames.
 ## Runtime status
 
 `RUN-MMU-001` is Runtime Verified by the recorded focused probe. `RUN-MMU-002` remains open for
-final TTBR0 alias retirement, and controlled permission/guard faults remain separate Pending work.
+final TTBR0 alias retirement, `RUN-MMU-003` covers the new final-map access capability, and
+controlled permission/guard faults remain separate Pending work.

@@ -225,6 +225,38 @@ impl<const CAPACITY: usize> RegionSet<CAPACITY> {
     }
 }
 
+/// Read-only snapshot of every frame an allocator is permitted to own.
+///
+/// This set includes both free and allocated frames. Membership proves only
+/// that a frame came from the allocator's reservation-filtered domain; it does
+/// not prove that the caller currently owns that frame.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ManagedFrameSet<const CAPACITY: usize> {
+    regions: RegionSet<CAPACITY>,
+}
+
+impl<const CAPACITY: usize> ManagedFrameSet<CAPACITY> {
+    /// Return normalized managed ranges in ascending order.
+    pub fn ranges(&self) -> &[FrameRange] {
+        self.regions.as_slice()
+    }
+
+    /// Return whether one frame belongs to the managed domain.
+    pub fn contains(&self, frame: PageFrame) -> bool {
+        self.regions.contains(frame)
+    }
+
+    /// Return whether one nonempty contiguous range belongs to one managed region.
+    pub fn contains_range(&self, frames: FrameRange) -> bool {
+        self.regions.contains_range(frames)
+    }
+
+    /// Return the total number of frames in the managed domain.
+    pub fn total_frames(&self) -> usize {
+        self.regions.total_frames()
+    }
+}
+
 fn push_merged<const CAPACITY: usize>(
     output: &mut [FrameRange; CAPACITY],
     len: &mut usize,
@@ -309,6 +341,13 @@ pub struct FrameAllocator<const CAPACITY: usize> {
 }
 
 impl<const CAPACITY: usize> FrameAllocator<CAPACITY> {
+    /// Snapshot the complete reservation-filtered ownership domain.
+    pub const fn managed_frames(&self) -> ManagedFrameSet<CAPACITY> {
+        ManagedFrameSet {
+            regions: self.managed,
+        }
+    }
+
     /// Allocate one physical frame using deterministic first fit.
     pub fn allocate(&mut self) -> Result<Option<PageFrame>, AllocationError> {
         Ok(self
@@ -576,5 +615,33 @@ mod tests {
             Err(AllocationError::NotManaged)
         );
         assert_eq!(allocator, before);
+    }
+
+    #[test]
+    fn managed_snapshot_is_stable_across_allocation_and_release() {
+        let mut map = MemoryMap::<3>::new();
+        map.add_usable(bytes(PAGE_SIZE, 5 * PAGE_SIZE))
+            .expect("usable region");
+        map.reserve(bytes(2 * PAGE_SIZE, 3 * PAGE_SIZE))
+            .expect("reserved frame");
+        let mut allocator = map.into_allocator();
+        let managed = allocator.managed_frames();
+
+        assert_eq!(managed.ranges(), allocator.free_ranges());
+        assert_eq!(managed.total_frames(), 3);
+        assert!(managed.contains(frame(1)));
+        assert!(!managed.contains(frame(2)));
+        let allocated = allocator.allocate().unwrap().unwrap();
+        assert!(managed.contains(allocated));
+        assert!(allocator.managed_frames().contains(allocated));
+        assert!(
+            !allocator
+                .free_ranges()
+                .iter()
+                .any(|range| range.contains(allocated))
+        );
+
+        allocator.deallocate(allocated).expect("release frame");
+        assert_eq!(allocator.managed_frames(), managed);
     }
 }

@@ -105,7 +105,9 @@ permanently retains the tables, and publishes TTBR1 with barriers and TLB invali
 QEMU probe has passed. A fixed-metadata fallible heap core now transactionally owns, clears, and
 returns contiguous physical backing; alignment, overflow, byte and metadata exhaustion, release,
 coalescing, stale tokens, and injected backing failures are Host Tested. Final-direct-map boot
-integration still remains. Guarded runtime-stack slots, transactional frame ownership, clearing,
+integration now retains a Host Tested proof that every reservation-filtered allocator frame has
+the exact EL1 RW/NX mapping and routes loaded-init user copies through a table-owner-bound
+capability; heap initialization and target rerun remain. Guarded runtime-stack slots, transactional frame ownership, clearing,
 failure rollback, reuse, and offline AArch64 RW/NX mapping are Host Tested; live map/unmap,
 thread switching, and exception-stack activation remain;
 the loaded-init path retires temporary TTBR0 aliases when it installs its user hierarchy.

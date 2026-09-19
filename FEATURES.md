@@ -63,7 +63,7 @@ _No unclassified entries._
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
 | MM-001 | Physical page allocator | In Progress | 0.1.0 | QEMU boot-memory probe validated DTB derivation and one allocate/readback/scrub/release cycle; boundary-negative probes remain |
-| MM-002 | Virtual memory and kernel address space | In Progress | 0.1.0 | Final TTBR1 publication passed on QEMU (five tables, 767 leaves); guard/permission-negative probes, low-alias retirement, and dynamic mappings remain |
+| MM-002 | Virtual memory and kernel address space | In Progress | 0.1.0 | Final TTBR1 publication passed on QEMU; a managed-RAM proof and retained-table access capability are Host Tested/Cross Compiled, while their rerun, guard/permission negatives, low-alias retirement, and dynamic mappings remain |
 | MM-003 | Kernel heap and fallible allocation policy | In Progress | 0.1.0 | Fixed-metadata allocator core, transactional backing ownership, clearing, alignment, OOM, coalescing, and invalid-release behavior are Host Tested; final-map boot integration remains |
 | MM-004 | Kernel stacks and guard pages | In Progress | 0.1.0 | Boot guard plus transactional owned runtime-slot/frame plans with two guards are Host Tested; live mapping, switching, and exception-stack policy remain |
 | MM-005 | User address spaces and safe user copies | In Progress | 0.1.0 | Plans/materialization/ownership and bidirectional copies are Host Tested; loaded init uses an ownership-checked final-direct-map adapter; general fault recovery, lifecycle, and runtime evidence remain |
