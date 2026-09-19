@@ -116,7 +116,7 @@ _No unclassified entries._
 | --- | --- | --- | --- | --- |
 | DEV-001 | Minimal device and driver lifecycle | Deferred | Unscheduled | Do not build a framework before two users exist |
 | DEV-002 | Early and runtime console | In Progress | 0.1.0 | Polled PL011 positive output/flush passed on QEMU; panic and interrupt-era behavior remain |
-| IRQ-001 | Interrupt controller abstraction and GIC | Planned | 0.1.0 | Initial AArch64 controller |
+| IRQ-001 | Interrupt controller abstraction and GIC | In Progress | 0.1.0 | Strict QEMU `virt` GICv3 range/phandle and architected-timer PPI discovery is Host Tested/Cross Compiled; MMIO mapping, initialized ownership, CPU interface, dispatch, and runtime evidence remain |
 | FW-001 | PSCI integration | Deferred | Unscheduled | Power and SMP services |
 | VIRTIO-001 | VirtIO transport and device discovery | Deferred | Unscheduled | MMIO first; PCI may follow |
 | PCI-001 | PCI discovery and configuration | Deferred | Unscheduled | Important for x86_64 and future platforms |

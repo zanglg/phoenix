@@ -146,8 +146,11 @@ Host-verifiable foundation now available:
   generation-checked cancellation, explicit exhaustion, and no in-lock callbacks;
 - an exclusive AArch64 physical-timer register owner, checked `CNTFRQ_EL0` model, and
   nanosecond-to-tick round-up are Host Tested/Cross Compiled but not connected to boot;
-- host tests cover boundary and failure atomicity, while GIC routing, IRQ-safe synchronization,
-  boot integration, sleep integration, and all target execution remain pending.
+- strict platform-layer DTB discovery validates the GICv3 distributor/redistributor ranges,
+  controller phandle, and all four architected-timer PPIs without mapping or touching MMIO;
+- host tests cover boundary and failure atomicity, while GIC register ownership and routing,
+  IRQ-safe synchronization, boot integration, sleep integration, and all target execution remain
+  pending.
 
 Observable result: timer interrupts advance a monotonic time source and scheduled callbacks fire
 under an automated QEMU test.

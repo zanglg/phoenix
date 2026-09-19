@@ -1,5 +1,7 @@
 //! Early devices on QEMU's AArch64 `virt` machine.
 
+pub mod interrupts;
+
 use core::ptr::{self, read_volatile, write_volatile};
 
 #[cfg(any(target_arch = "aarch64", test))]

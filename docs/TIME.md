@@ -23,6 +23,10 @@ callbacks.
 - a target-only exclusive physical-timer owner for ordered `CNTFRQ_EL0`, `CNTPCT_EL0`,
   `CNTP_CVAL_EL0`, and `CNTP_CTL_EL0` access.
 
+The QEMU `virt` platform layer also strictly discovers all four architected-timer PPIs from the
+DTB and selects the second, non-secure physical entry for the `CNTP_*` contract. That descriptive
+topology is not yet connected to the timer owner or a GIC driver.
+
 The target owner programs an absolute compare value only while signaling is disabled and masked,
 then leaves the timer enabled but masked. Unmasking is an unsafe operation whose caller must first
 establish exception, GIC routing, timer ownership, and IRQ-safe shared-state invariants. Phoenix
@@ -80,7 +84,7 @@ compilation and static artifact contracts, not target execution.
 
 ## TODO
 
-- Add GIC discovery and timer-PPI routing for the pinned QEMU `virt` board.
+- Map and initialize the discovered GICv3 regions and route the discovered physical-timer PPI.
 - Connect the exclusive physical-timer owner to boot only after GIC and IRQ state are ready.
 - Introduce the IRQ-safe synchronization and memory-ordering contract described above.
 - Connect due events to sleeping threads and tickless scheduler wakeups.

@@ -25,6 +25,8 @@ reservation and structure blocks require 8-byte and 4-byte offsets respectively.
 - one or more `reg` entries from root-level `memory` nodes;
 - fixed memory reservation entries.
 - static `reg` entries from direct `/reserved-memory` children.
+- platform-layer discovery of the pinned QEMU `virt` GICv3 distributor/redistributor ranges,
+  interrupt-parent link, and four architected-timer PPIs.
 
 Memory ranges are returned as checked half-open physical ranges. Unsupported cell widths,
 partial `reg` entries, address overflow, and a tree without non-empty memory are rejected.
@@ -35,5 +37,6 @@ rather than silently made allocatable.
 
 The bootstrap forwards the DTB physical address, and focused memory/init paths borrow it through
 the temporary high RAM alias while reserving every page touched by the blob. The default boot path
-still does not consume it. Device-specific extraction for interrupt controllers, timers, PSCI, and
-VirtIO will be added only when their consumers exist.
+still does not consume it. GICv3/timer topology discovery now exists in the QEMU `virt` platform
+layer but is not connected to boot or MMIO access. Device-specific extraction for PSCI and VirtIO
+will be added only when their consumers exist.

@@ -24,6 +24,9 @@ numbers and remains explicitly unstable before 1.0.0. During construction, chang
 - A checked AArch64 generic-counter frequency and nanosecond conversion model plus an exclusive
   target-only physical-timer owner that programs absolute compares while interrupt signaling
   remains masked and requires an unsafe, IRQ-ready transition to unmask.
+- Strict allocation-free QEMU `virt` DTB discovery for the GICv3 distributor/redistributor,
+  controller phandle, and four unique architected-timer PPIs, with malformed, disabled,
+  misaligned, aliased, and wrong-parent topologies rejected before any MMIO access.
 - Checked architecture-neutral physical/virtual addresses, pages, frames, and half-open ranges.
 - Strict allocation-free DTB parsing with boot CPU, bootargs, memory-region, and reservation extraction.
 - Fixed-capacity physical memory normalization, conservative reservation, and first-fit frame allocation.
