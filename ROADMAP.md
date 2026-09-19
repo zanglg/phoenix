@@ -144,8 +144,10 @@ Host-verifiable foundation now available:
 - lower counter observations and duration overflow are explicit failures;
 - a fixed-capacity, allocation-free absolute-deadline queue has deterministic ordering,
   generation-checked cancellation, explicit exhaustion, and no in-lock callbacks;
-- host tests cover boundary and failure atomicity, while the AArch64 counter backend, GIC routing,
-  IRQ-safe synchronization, sleep integration, and all target execution remain pending.
+- an exclusive AArch64 physical-timer register owner, checked `CNTFRQ_EL0` model, and
+  nanosecond-to-tick round-up are Host Tested/Cross Compiled but not connected to boot;
+- host tests cover boundary and failure atomicity, while GIC routing, IRQ-safe synchronization,
+  boot integration, sleep integration, and all target execution remain pending.
 
 Observable result: timer interrupts advance a monotonic time source and scheduled callbacks fire
 under an automated QEMU test.

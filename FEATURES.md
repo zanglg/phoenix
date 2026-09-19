@@ -81,7 +81,7 @@ _No unclassified entries._
 | CONC-002 | Spinlocks and IRQ-safe synchronization | Planned | 0.1.0 | Define interrupt-context rules |
 | SCHED-001 | Kernel threads and context switching | Planned | 0.1.0 | Architecture boundary required |
 | SCHED-002 | Scheduler, preemption, and idle | Planned | 0.1.0 | Policy remains open |
-| TIME-001 | Monotonic clock and generic timer | In Progress | 0.1.0 | Checked non-wrapping raw ticks and regression rejection are Host Tested; target frequency, conversion, generic-timer access, IRQ delivery, and runtime evidence remain |
+| TIME-001 | Monotonic clock and generic timer | In Progress | 0.1.0 | Checked non-wrapping raw ticks, frequency/conversion models, and an exclusive masked-programming CNTP owner are Host Tested/Cross Compiled; boot activation, GIC delivery, observed frequency, and runtime evidence remain |
 | TIME-002 | Timer queue and sleep | In Progress | 0.1.0 | Fixed-capacity absolute deadlines, deterministic due ordering, generation-safe cancellation, and exhaustion are Host Tested; IRQ synchronization, tickless programming, sleep, and runtime evidence remain |
 | SMP-001 | Secondary CPU bring-up and per-CPU data | Deferred | Unscheduled | Preserve interfaces before enabling SMP |
 | SMP-002 | IPI and TLB shootdown | Deferred | Unscheduled | Coordinate with virtual memory design |

@@ -14,8 +14,9 @@ narrow support claim:
   BSS bounds, one-page boot-stack guard, and 1 MiB boot-construction stack;
 - rust-analyzer can use the configured kernel target from an x86_64 development host;
 - host-side unit tests and validation are available through `cargo xtask`;
-- architecture-neutral monotonic raw ticks and a fixed-capacity deadline queue are host tested,
-  while generic-timer access, GIC delivery, IRQ synchronization, and sleep remain pending;
+- architecture-neutral monotonic raw ticks, a fixed-capacity deadline queue, checked AArch64
+  frequency conversion, and masked physical-timer programming are Host Tested/Cross Compiled,
+  while boot activation, GIC delivery, IRQ synchronization, and sleep remain pending;
 - a bounded QEMU runner and boot-test harness are implemented and host tested;
 - bounded QEMU probes have verified direct boot, DTB/allocator access, final TTBR1 publication,
   the first EL0 transition, and the loaded-init/file-I/O path on the pinned board;

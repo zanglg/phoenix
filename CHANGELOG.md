@@ -21,6 +21,9 @@ numbers and remains explicitly unstable before 1.0.0. During construction, chang
 - Allocation-free monotonic raw-tick values and a deterministic fixed-capacity timer queue with
   checked regression/overflow, absolute deadlines, explicit exhaustion, generation-safe
   cancellation, failure atomicity, and callback-free due-event removal.
+- A checked AArch64 generic-counter frequency and nanosecond conversion model plus an exclusive
+  target-only physical-timer owner that programs absolute compares while interrupt signaling
+  remains masked and requires an unsafe, IRQ-ready transition to unmask.
 - Checked architecture-neutral physical/virtual addresses, pages, frames, and half-open ranges.
 - Strict allocation-free DTB parsing with boot CPU, bootargs, memory-region, and reservation extraction.
 - Fixed-capacity physical memory normalization, conservative reservation, and first-fit frame allocation.

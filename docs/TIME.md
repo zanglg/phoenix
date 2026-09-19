@@ -1,8 +1,9 @@
 # Monotonic Time and Timer Queue
 
 Phoenix currently provides an architecture-neutral, allocation-free foundation for monotonic
-time and deadline ordering. It does not yet read the AArch64 generic timer, initialize the GIC,
-deliver timer interrupts, block a thread, or run callbacks.
+time and deadline ordering plus a deliberately unintegrated AArch64 physical generic-timer
+register owner. It does not initialize the GIC, deliver timer interrupts, block a thread, or run
+callbacks.
 
 ## Current implementation
 
@@ -15,6 +16,18 @@ deliver timer interrupts, block a thread, or run callbacks.
 - generation-checked `TimerId` values for cancellation and `FiredTimer` values returned when a
   deadline is removed.
 
+`kernel/src/arch/aarch64/timer.rs` defines:
+
+- a checked nonzero 32-bit `CNTFRQ_EL0` value and nanosecond-to-tick conversion that rounds up;
+- decoded `CNTP_CTL_EL0` enable, interrupt-mask, and condition bits; and
+- a target-only exclusive physical-timer owner for ordered `CNTFRQ_EL0`, `CNTPCT_EL0`,
+  `CNTP_CVAL_EL0`, and `CNTP_CTL_EL0` access.
+
+The target owner programs an absolute compare value only while signaling is disabled and masked,
+then leaves the timer enabled but masked. Unmasking is an unsafe operation whose caller must first
+establish exception, GIC routing, timer ownership, and IRQ-safe shared-state invariants. Phoenix
+does not currently construct this owner from a boot path or unmask it.
+
 The queue performs no allocation and invokes no callback. Scheduling scans for the lowest reusable
 slot. Removing a due timer chooses the earliest deadline and then the lowest slot, so equal-deadline
 behavior is deterministic. A caller is expected to remove due records while holding the queue's
@@ -26,6 +39,9 @@ future synchronization and dispatch the returned event only after releasing that
   counter observation returns `Regression` without changing the last accepted value.
 - Instants, durations, queue deadlines, and the caller-supplied `now` must belong to the same
   fixed-frequency domain. The raw types deliberately perform no unit conversion.
+- `CNTFRQ_EL0` must be nonzero and fit its architectural 32-bit field. Nanosecond conversion uses
+  an intermediate `u128`, rounds every positive fractional tick up, and reports tick-count or
+  absolute-deadline overflow separately.
 - A deadline equal to `now` is accepted and immediately due. A deadline below `now` returns
   `DeadlineInPast` without changing the queue.
 - Capacity exhaustion, including a zero-capacity queue or slots permanently retired after
@@ -57,16 +73,15 @@ critical-section abstraction that:
 
 Host tests cover equal/increasing/regressing observations, arithmetic overflow, deadline ordering,
 equal-deadline tie breaking, cancellation, stale-generation rejection, slot reuse and retirement,
-past deadlines, zero and full capacity, and failure atomicity. Canonical CI also cross-compiles the
-module as part of every AArch64 kernel variant; this only proves compilation and static artifact
-contracts, not target execution.
+past deadlines, zero and full capacity, and failure atomicity. They also cover invalid frequency,
+round-up boundaries, conversion/deadline overflow, and control-bit decoding. Canonical CI
+cross-compiles the register access as part of every AArch64 kernel variant; this only proves
+compilation and static artifact contracts, not target execution.
 
 ## TODO
 
-- Add an AArch64 generic-timer backend for counter frequency, counter reads, compare programming,
-  enable/mask state, and acknowledged interrupt delivery.
-- Define checked tick/unit conversion and rounding once the counter frequency is observed.
 - Add GIC discovery and timer-PPI routing for the pinned QEMU `virt` board.
+- Connect the exclusive physical-timer owner to boot only after GIC and IRQ state are ready.
 - Introduce the IRQ-safe synchronization and memory-ordering contract described above.
 - Connect due events to sleeping threads and tickless scheduler wakeups.
 - Decide whether a queue-instance namespace is worth the identifier and initialization cost.
@@ -76,9 +91,9 @@ contracts, not target execution.
 ## Deliberately skipped
 
 This checkpoint does not implement wall time, calendar time, periodic timers, callback storage,
-dynamic queue growth, kernel-thread sleep, scheduler preemption, idle `WFI`, SMP, GIC access, or
-generic-timer system-register access. It also does not claim a precision or duration unit because
-no target counter frequency has been read.
+dynamic queue growth, kernel-thread sleep, scheduler preemption, idle `WFI`, SMP, GIC access,
+PPI discovery/routing, IRQ acknowledgement, or boot-time timer activation. It does not claim a
+target frequency or precision because `CNTFRQ_EL0` has not been read during target execution.
 
 ## Runtime Pending
 

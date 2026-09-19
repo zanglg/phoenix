@@ -8,6 +8,7 @@ pub mod exception;
 pub mod kernel_page_table;
 pub mod paging;
 pub mod syscall;
+pub mod timer;
 pub mod user_page_table;
 
 #[cfg(target_arch = "aarch64")]
