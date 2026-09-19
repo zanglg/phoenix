@@ -68,11 +68,13 @@ ownership and leaves the original physical allocator unchanged.
 
 The QEMU `virt` platform now assigns the previously generic pool one provisional virtual arena:
 `0xffffff9000000000..0xffffff90000a0000`. It contains 16 slots, each with eight usable pages and
-two guard pages. Every final-map build walks all 160 pages and rejects any existing translation in
-that interval. Both the focused final-map and loaded-init runtime owners retain exactly one
-`QemuVirtKernelStackPool`, so later allocation cannot accidentally construct competing pool
-metadata for that boot path. The sizes are an initial bounded policy for integration, not measured
-production stack sizing.
+two guard pages. Every final-map build walks all 160 pages and rejects any existing leaf
+translation in that interval, then reserves and materializes the arena's L2/L3 topology with every
+L3 leaf invalid. This adds one L2 and one L3 table to the pinned hierarchy so a future live mapper
+will not need to allocate or link intermediate tables after TTBR1 publication. Both the focused
+final-map and loaded-init runtime owners retain exactly one `QemuVirtKernelStackPool`, so later
+allocation cannot accidentally construct competing pool metadata for that boot path. The sizes
+are an initial bounded policy for integration, not measured production stack sizing.
 
 The owned stack can supply page-by-page pairs to an offline architecture page-table plan. Host
 tests use the real AArch64 planner to map only usable pages with `kernel_data` attributes and prove
@@ -109,8 +111,10 @@ the separate virtual stack mappings can be published and retired safely.
 - no current code intentionally probes the guard until recoverable kernel-fault testing exists;
 - each runtime slot has exactly one lower guard, one nonempty usable range, and one upper guard;
 - a pool's slot layouts are page-aligned, disjoint, adjacent, and contained by its checked arena;
-- the platform arena is canonical TTBR1 space, wholly absent from every initial final-map plan,
-  and retained by one runtime pool owner in both final-map boot paths;
+- the platform arena is canonical TTBR1 space with retained L2/L3 table topology but no valid
+  leaf descriptor, and one runtime pool owner is retained in both final-map boot paths;
+- a coarser L1/L2 leaf can never replace reserved child-table topology, while later L3 leaves may
+  populate individual usable pages;
 - an allocated owner uniquely retains every usable physical frame and its virtual slot generation;
 - physical OOM, slot exhaustion, allocator failure, and injected clear failure leave the pool and
   caller's physical allocator unchanged;
@@ -142,9 +146,13 @@ neither allocator nor slot. An integration test feeds owned page pairs to the AA
 planner and verifies EL1-only RW/NX translations plus absent guards. `cargo xtask ci` Cross
 Compiles this mechanism in all AArch64 variants and retains the existing ELF inspections. Platform
 tests verify the exact 640 KiB arena, prove every initial translation absent, and reject an injected
-mapping at its first page. A fault-injecting mapping model verifies failed publication, successful
-type-state transition, rejection by a foreign backend instance, failed unpublication with token
-retention, successful retry, and frame/slot release only after returning to the unpublished state.
+mapping at its first page. Planner tests reserve empty topology across an L3-table boundary, reject
+misalignment, lower-half input, existing leaves, coarser-leaf replacement, and capacity exhaustion
+transactionally, and materialize linked parent tables while proving the selected leaf stays
+invalid. The pinned platform model now contains seven table frames and the same 767 leaves. A
+fault-injecting mapping model verifies failed publication, successful type-state transition,
+rejection by a foreign backend instance, failed unpublication with token retention, successful
+retry, and frame/slot release only after returning to the unpublished state.
 
 The recorded final-map and loaded-init probes crossed final TTBR1 publication while using the
 1 MiB construction stack. This validates the positive live-stack mapping, but not an intentional
@@ -161,7 +169,9 @@ retired. That separate target boundary is `RUN-KSTACK-002` and remains Runtime P
 `RUN-KSTACK-001` remains Runtime Pending for an intentional fault on the existing boot guard.
 `RUN-KSTACK-002` remains Runtime Pending for owned-stack publication, entry, and retirement. The
 recorded positive final-map and loaded-init runs validate only the linker-owned construction stack
-and do not close either negative or dynamic-stack boundary.
+and do not close either negative or dynamic-stack boundary. Those runs also predate the current
+seven-table hierarchy; the empty arena topology is Host Tested, Cross Compiled, and Runtime
+Pending rather than inferred from the older five-table output.
 
 ## TODO
 
@@ -172,7 +182,8 @@ and do not close either negative or dynamic-stack boundary.
 - replace the provisional 16-slot/eight-page policy with measured thread and exception call-depth
   requirements before relying on it as production sizing;
 - implement the AArch64 live backend under the mapped-stack safety contract, including
-  break-before-make, TLB maintenance, rollback, and exact table-owner identity;
+  leaf publication inside the prelinked topology, break-before-make, TLB maintenance, rollback,
+  and exact table-owner identity;
 - define separate exception and emergency-stack sizing, nesting, and double-fault policy before
   asynchronous interrupts or recoverable current-EL faults;
 - switch stacks safely during thread creation, context switching, teardown, and CPU-local idle;

@@ -28,7 +28,8 @@ numbers and remains explicitly unstable before 1.0.0. During construction, chang
   upper guard pages, generation-safe reuse, explicit failure rollback, and Host Tested AArch64
   EL1 RW/NX offline mapping.
 - A provisional QEMU `virt` runtime-stack arena with 16 retained slots, eight usable pages per
-  slot, two guards, full initial-unmapped validation, and one pool owner in each final-TTBR1 path.
+  slot, two guards, full initial-leaf-absence validation, prelinked empty L2/L3 topology, and one
+  pool owner in each final-TTBR1 path.
 - Ownership-preserving mapped kernel-stack type state with an unsafe architecture-backend contract,
   unique publication tokens, transactional map/unmap failures, and frame release gated on
   successful mapping retirement.

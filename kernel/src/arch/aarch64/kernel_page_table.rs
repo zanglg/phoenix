@@ -31,6 +31,16 @@ pub enum KernelPageTableError {
         /// Rejected length.
         length: usize,
     },
+    /// A range start was not aligned to the 4 KiB translation granule.
+    MisalignedVirtualStart {
+        /// Rejected virtual address.
+        address: usize,
+    },
+    /// A leaf mapping and reserved intermediate-table topology would overlap.
+    TableLeafConflict {
+        /// First conflicting virtual address.
+        address: usize,
+    },
     /// The fixed topology cannot describe another intermediate table.
     TableCapacityExceeded,
     /// Direct-map overrides are empty, reversed, overlapping, or not sorted.
@@ -187,6 +197,80 @@ impl<const TABLES: usize, const MAPPINGS: usize> KernelPageTablePlan<TABLES, MAP
         let mut candidate = *self;
         candidate.map_range_inner(virtual_start, physical_start, length, attributes)?;
         *self = candidate;
+        Ok(())
+    }
+
+    /// Reserve linked L2/L3 topology for an upper-half range without mapping leaves.
+    ///
+    /// The complete reservation is committed only if every covered page is
+    /// canonical, currently unmapped, and representable by the fixed table
+    /// capacity. Existing identical empty topology is accepted. Later L3 maps
+    /// may populate individual pages, but coarser leaves cannot replace any
+    /// reserved child table.
+    pub fn reserve_l3_range(
+        &mut self,
+        virtual_start: VirtAddr,
+        length: usize,
+    ) -> Result<(), KernelPageTableError> {
+        let mut candidate = *self;
+        candidate.reserve_l3_range_inner(virtual_start, length)?;
+        *self = candidate;
+        Ok(())
+    }
+
+    /// Consume an unpublished plan and reserve empty L3 topology without a rollback copy.
+    pub fn with_l3_range_reservation(
+        mut self,
+        virtual_start: VirtAddr,
+        length: usize,
+    ) -> Result<Self, KernelPageTableError> {
+        self.reserve_l3_range_inner(virtual_start, length)?;
+        Ok(self)
+    }
+
+    fn reserve_l3_range_inner(
+        &mut self,
+        virtual_start: VirtAddr,
+        length: usize,
+    ) -> Result<(), KernelPageTableError> {
+        if length == 0 {
+            return Err(KernelPageTableError::EmptyRange);
+        }
+        if !length.is_multiple_of(PAGE_SIZE) {
+            return Err(KernelPageTableError::MisalignedLength { length });
+        }
+        let start = virtual_start.as_usize();
+        if !start.is_multiple_of(PAGE_SIZE) {
+            return Err(KernelPageTableError::MisalignedVirtualStart { address: start });
+        }
+        let end = start
+            .checked_add(length)
+            .ok_or(KernelPageTableError::Paging(PagingError::AddressOverflow))?;
+
+        let mut address = start;
+        while address < end {
+            let virtual_address = VirtAddr::new(address);
+            let indices =
+                TranslationIndices::new(virtual_address).map_err(KernelPageTableError::Paging)?;
+            if indices.half() != AddressSpaceHalf::Upper {
+                return Err(KernelPageTableError::LowerHalfMapping { address });
+            }
+            if self
+                .translate(virtual_address)
+                .map_err(KernelPageTableError::Paging)?
+                .is_some()
+            {
+                return Err(KernelPageTableError::TableLeafConflict { address });
+            }
+            self.ensure_table(KernelTranslationTableRole::Level2 { l1: indices.l1() })?;
+            self.ensure_table(KernelTranslationTableRole::Level3 {
+                l1: indices.l1(),
+                l2: indices.l2(),
+            })?;
+            address = address
+                .checked_add(PAGE_SIZE)
+                .ok_or(KernelPageTableError::Paging(PagingError::AddressOverflow))?;
+        }
         Ok(())
     }
 
@@ -394,6 +478,24 @@ impl<const TABLES: usize, const MAPPINGS: usize> KernelPageTablePlan<TABLES, MAP
         }
         if attributes.access().user_accessible() {
             return Err(KernelPageTableError::UserAccessibleMapping);
+        }
+        let topology_conflict = match level {
+            TranslationLevel::L1 => self.tables().any(|role| {
+                matches!(role, KernelTranslationTableRole::Level2 { l1 } if l1 == indices.l1())
+            }),
+            TranslationLevel::L2 => self.tables().any(|role| {
+                matches!(
+                    role,
+                    KernelTranslationTableRole::Level3 { l1, l2 }
+                        if l1 == indices.l1() && l2 == indices.l2()
+                )
+            }),
+            TranslationLevel::L3 => false,
+        };
+        if topology_conflict {
+            return Err(KernelPageTableError::TableLeafConflict {
+                address: virtual_start.as_usize(),
+            });
         }
         self.mappings
             .map(virtual_start, physical_start, level, attributes)
@@ -811,6 +913,117 @@ mod tests {
     }
 
     #[test]
+    fn reserves_empty_l3_topology_across_a_table_boundary() {
+        let start = OFFSET + 0x401f_f000;
+        let mut plan = KernelPageTablePlan::<4, 1>::new().unwrap();
+        plan.reserve_l3_range(VirtAddr::new(start), 2 * PAGE_SIZE)
+            .unwrap();
+
+        assert_eq!(
+            plan.tables().collect::<Vec<_>>(),
+            [
+                KernelTranslationTableRole::RootL1,
+                KernelTranslationTableRole::Level2 { l1: 1 },
+                KernelTranslationTableRole::Level3 { l1: 1, l2: 0 },
+                KernelTranslationTableRole::Level3 { l1: 1, l2: 1 },
+            ]
+        );
+        assert_eq!(plan.translate(VirtAddr::new(start)).unwrap(), None);
+        assert_eq!(
+            plan.translate(VirtAddr::new(start + PAGE_SIZE)).unwrap(),
+            None
+        );
+
+        plan.map(
+            VirtAddr::new(start),
+            PhysAddr::new(0x5000_0000),
+            TranslationLevel::L3,
+            MappingAttributes::kernel_data(),
+        )
+        .unwrap();
+        assert_eq!(plan.required_table_frames(), 4);
+        assert_eq!(plan.mappings().len(), 1);
+        let before_coarse_leaf = plan;
+        assert_eq!(
+            plan.map(
+                VirtAddr::new(OFFSET + 0x4020_0000),
+                PhysAddr::new(0x4020_0000),
+                TranslationLevel::L2,
+                MappingAttributes::kernel_data(),
+            ),
+            Err(KernelPageTableError::TableLeafConflict {
+                address: OFFSET + 0x4020_0000,
+            })
+        );
+        assert_eq!(plan, before_coarse_leaf);
+    }
+
+    #[test]
+    fn rejects_invalid_l3_reservations_transactionally() {
+        let start = OFFSET + 0x401f_f000;
+        let mut plan = KernelPageTablePlan::<3, 1>::new().unwrap();
+        let original = plan;
+        assert_eq!(
+            plan.reserve_l3_range(VirtAddr::new(start), 2 * PAGE_SIZE),
+            Err(KernelPageTableError::TableCapacityExceeded)
+        );
+        assert_eq!(plan, original);
+        assert_eq!(
+            plan.reserve_l3_range(VirtAddr::new(start + 1), PAGE_SIZE),
+            Err(KernelPageTableError::MisalignedVirtualStart { address: start + 1 })
+        );
+        assert_eq!(plan, original);
+        assert_eq!(
+            plan.reserve_l3_range(VirtAddr::new(start), PAGE_SIZE + 1),
+            Err(KernelPageTableError::MisalignedLength {
+                length: PAGE_SIZE + 1,
+            })
+        );
+        assert_eq!(plan, original);
+        assert_eq!(
+            plan.reserve_l3_range(VirtAddr::new(start), 0),
+            Err(KernelPageTableError::EmptyRange)
+        );
+        assert_eq!(plan, original);
+        assert_eq!(
+            plan.reserve_l3_range(VirtAddr::new(0x4000_0000), PAGE_SIZE),
+            Err(KernelPageTableError::LowerHalfMapping {
+                address: 0x4000_0000,
+            })
+        );
+        assert_eq!(plan, original);
+        assert_eq!(
+            plan.reserve_l3_range(VirtAddr::new(1 << 39), PAGE_SIZE),
+            Err(KernelPageTableError::Paging(
+                PagingError::NonCanonicalVirtualAddress { address: 1 << 39 }
+            ))
+        );
+        assert_eq!(plan, original);
+        let overflow_start = usize::MAX - (PAGE_SIZE - 1);
+        assert_eq!(
+            plan.reserve_l3_range(VirtAddr::new(overflow_start), PAGE_SIZE),
+            Err(KernelPageTableError::Paging(PagingError::AddressOverflow))
+        );
+        assert_eq!(plan, original);
+
+        plan.map(
+            VirtAddr::new(OFFSET + 0x5000_0000),
+            PhysAddr::new(0x5000_0000),
+            TranslationLevel::L3,
+            MappingAttributes::kernel_data(),
+        )
+        .unwrap();
+        let before_conflict = plan;
+        assert_eq!(
+            plan.reserve_l3_range(VirtAddr::new(OFFSET + 0x5000_0000), PAGE_SIZE),
+            Err(KernelPageTableError::TableLeafConflict {
+                address: OFFSET + 0x5000_0000,
+            })
+        );
+        assert_eq!(plan, before_conflict);
+    }
+
+    #[test]
     fn direct_map_splits_permissions_and_leaves_guard_holes() {
         let text = DirectMapOverride::new(
             frame_range(0x4008_0000, 2),
@@ -1015,6 +1228,46 @@ mod tests {
         );
         materialized.release_unpublished(&mut allocator).unwrap();
         assert_eq!(allocator, original);
+    }
+
+    #[test]
+    fn materializes_reserved_l3_topology_with_invalid_leaf() {
+        let address = OFFSET + 0x5000_0000;
+        let mut plan = KernelPageTablePlan::<3, 0>::new().unwrap();
+        plan.reserve_l3_range(VirtAddr::new(address), PAGE_SIZE)
+            .unwrap();
+        let mut map = MemoryMap::<1>::new();
+        map.add_usable(range(0x6200_0000, 0x6200_3000)).unwrap();
+        let mut allocator = map.into_allocator();
+        let allocated = plan.allocate(&mut allocator).unwrap();
+        let frames: Vec<_> = allocated.tables().collect();
+        let mut memory = TestMemory::new(&frames);
+
+        let materialized = allocated.materialize(&mut memory).unwrap();
+        let indices =
+            crate::arch::aarch64::paging::TranslationIndices::new(VirtAddr::new(address)).unwrap();
+        let root = materialized.root_frame();
+        let l2 = frame_for(
+            &frames,
+            KernelTranslationTableRole::Level2 { l1: indices.l1() },
+        );
+        let l3 = frame_for(
+            &frames,
+            KernelTranslationTableRole::Level3 {
+                l1: indices.l1(),
+                l2: indices.l2(),
+            },
+        );
+        assert_eq!(
+            memory.descriptor(root, indices.l1()).output_address(),
+            l2.start_address()
+        );
+        assert_eq!(
+            memory.descriptor(l2, indices.l2()).output_address(),
+            l3.start_address()
+        );
+        assert!(!memory.descriptor(l3, indices.l3()).is_valid());
+        materialized.release_unpublished(&mut allocator).unwrap();
     }
 
     #[test]

@@ -64,7 +64,9 @@ links and leaves through a private-table backend. `kernel_page_table.rs` builds 
 mixed-level upper-half hierarchy, applies ordered page-granular permission overrides or explicit
 holes to a direct map, atomically owns its table frames, and exposes publication only through a
 permanent borrow. The QEMU platform layer additionally reserves a retained guarded-stack arena and
-rejects any initial final-plan translation inside it.
+rejects any initial final-plan leaf translation inside it. The planner then materializes prelinked
+L2/L3 topology with invalid leaves for that arena, while preventing a later L1/L2 leaf from
+overwriting the reserved child tables.
 See `docs/AARCH64_USER_PAGE_TABLES.md`, `docs/FINAL_KERNEL_ADDRESS_SPACE.md`, and
 `docs/FINAL_DIRECT_MAP.md` for their distinct ownership boundaries.
 
@@ -93,6 +95,8 @@ non-executable convenience constructor.
 - the generic offline mapping plan does not own memory;
 - materialized kernel tables own every table frame, and target publication requires their
   permanent retention;
+- reserved empty topology owns and links its intermediate tables without implying a valid leaf
+  translation, and coarser leaves cannot replace those child tables;
 - user mappings additionally retain populated leaf-frame ownership because those pages are not a
   permanent physical direct map.
 
@@ -102,9 +106,11 @@ Host tests cover canonical boundaries, table indices, mapping sizes, descriptor 
 addresses, privilege and execute bits, W^X rejection, alignment, physical width, deterministic
 ordering, overlap, capacity, translation, unmapping, mixed-level direct-map decomposition,
 permission overrides, exact guard holes, table ownership, and retry-safe materialization. The
-focused final-map image is also Cross Compiled and ELF Inspected with the configured AArch64
-bare-metal target. The recorded probe published final TTBR1 and continued through its success
-marker; permission and guard-fault negative cases remain pending.
+reserved-topology tests additionally cover range boundaries, transactional rejection, coarser-leaf
+conflicts, and materialized invalid leaves. The focused final-map image is also Cross Compiled and
+ELF Inspected with the configured AArch64 bare-metal target. The recorded probe published the
+earlier five-table TTBR1 and continued through its success marker; the current seven-table image,
+permission cases, and guard-fault negative cases remain pending.
 
 Runtime installation is verified by `RUN-MMU-001`; low-alias retirement and the guard-fault probe
 remain tracked by `RUN-MMU-002` and `RUN-KSTACK-001` in `docs/RUNTIME_VALIDATION.md`.

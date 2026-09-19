@@ -437,6 +437,13 @@ where
     .map_err(FinalKernelMapError::PageTable)?;
     validate_critical_mappings(&plan, layout)?;
     validate_runtime_stack_arena(&plan)?;
+    let stack_pool =
+        runtime_kernel_stack_pool().map_err(FinalKernelMapError::InvalidRuntimeStackArena)?;
+    let stack_arena = stack_pool.arena();
+    plan = plan
+        .with_l3_range_reservation(stack_arena.start(), stack_arena.len())
+        .map_err(FinalKernelMapError::PageTable)?;
+    validate_runtime_stack_arena(&plan)?;
     Ok(plan)
 }
 
@@ -1079,8 +1086,8 @@ mod tests {
         final_kernel_page_table_plan_from_regions, linked_kernel_image_layout,
         physical_kernel_range, runtime_kernel_stack_pool, validate_runtime_stack_arena,
     };
-    use crate::arch::aarch64::kernel_page_table::DirectMapOverride;
-    use crate::arch::aarch64::paging::{MappingAttributes, TranslationLevel};
+    use crate::arch::aarch64::kernel_page_table::{DirectMapOverride, KernelTranslationTableRole};
+    use crate::arch::aarch64::paging::{MappingAttributes, TranslationIndices, TranslationLevel};
     use crate::memory::{
         AddressRange, FrameRange, MemoryMap, PAGE_SIZE, PageFrame, PhysAddr, VirtAddr,
     };
@@ -1212,7 +1219,7 @@ mod tests {
         .unwrap();
         let plan = final_kernel_page_table_plan_from_regions(layout, [Ok(ram)]).unwrap();
 
-        assert_eq!(plan.required_table_frames(), 5);
+        assert_eq!(plan.required_table_frames(), 7);
         assert_eq!(plan.mappings().len(), 767);
         for (address, attributes) in [
             (base, MappingAttributes::kernel_code()),
@@ -1246,6 +1253,19 @@ mod tests {
         assert_eq!(proof.managed_frames(), managed);
 
         let stack_pool = runtime_kernel_stack_pool().expect("runtime-stack arena");
+        let stack_indices =
+            TranslationIndices::new(stack_pool.arena().start()).expect("canonical stack arena");
+        assert!(plan.tables().any(|role| {
+            role == KernelTranslationTableRole::Level2 {
+                l1: stack_indices.l1(),
+            }
+        }));
+        assert!(plan.tables().any(|role| {
+            role == KernelTranslationTableRole::Level3 {
+                l1: stack_indices.l1(),
+                l2: stack_indices.l2(),
+            }
+        }));
         assert_eq!(
             stack_pool.arena().start().as_usize(),
             KERNEL_STACK_ARENA_START

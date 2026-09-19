@@ -23,7 +23,7 @@ The linker emits page-aligned permission-domain symbols and enforces their order
 | Boot-stack guard | `__boot_stack_guard_start..__boot_stack_guard_end` minus the offset | Deliberately unmapped |
 | Other DTB-declared RAM | Complete frames in each memory node | Normal, read/write, non-executable |
 | PL011 | Physical `0x09000000`, one 4 KiB page | Device-nGnRnE, read/write, non-executable |
-| Runtime-stack arena | `0xffffff9000000000..0xffffff90000a0000` | Initially unmapped; retained 16-slot pool owner |
+| Runtime-stack arena | `0xffffff9000000000..0xffffff90000a0000` | Prelinked L2/L3 topology, invalid leaves; retained 16-slot pool owner |
 
 All mappings are EL1-only. The plan rejects EL0-accessible attributes and writable-executable
 combinations. The linked image must end no later than physical `0x40200000`; this keeps all
@@ -42,9 +42,16 @@ the complete requested change in a copy before committing it and chooses the lar
 Permission overrides split the physical direct map at page boundaries. On the pinned 512 MiB
 machine, the first 2 MiB is represented by 512 L3 pages so that text, rodata, and data differ;
 the remaining 510 MiB uses 255 L2 blocks. Omitting the guard and adding the single PL011 page brings
-the exact topology to five table frames and 767 leaf mappings. The configured limits are eight
-table frames and 1024 leaves,
+the mapped portion to five table frames and 767 leaf mappings. The empty runtime-stack arena adds
+one L2 and one L3 table without adding a leaf, bringing the current exact topology to seven table
+frames and 767 leaf mappings. The configured limits are eight table frames and 1024 leaves,
 so an unexpected DTB topology fails explicitly rather than truncating the address space.
+
+The empty-topology reservation is transactional. It rejects zero or non-page-multiple lengths,
+misaligned or non-upper-half starts, address overflow, existing leaf translations, and
+table-capacity exhaustion. Once a child table is reserved, a coarser leaf cannot overwrite it;
+page-level mappings may later populate individual L3 slots. Materialization links the reserved
+parents while leaving every arena leaf descriptor invalid.
 
 The platform builder mutates its unpublished plan with the planner's transactional operations,
 avoiding repeated ownership moves of the large fixed-capacity value on the bounded early stack.
@@ -55,8 +62,8 @@ that owner below 512 bytes.
 The QEMU platform builder verifies both ends of text, rodata, and data through the offline
 translation model, proves the boot-stack guard is absent, and verifies the PL011 physical address,
 page level, and device attributes before any table frame is allocated. It also checks all 160
-pages of the provisional runtime-stack arena and rejects the plan if any already has a
-translation.
+pages of the provisional runtime-stack arena, rejects the plan if any already has a translation,
+and reserves their empty L3 topology before table-frame allocation.
 
 ## Ownership and publication
 
@@ -125,14 +132,17 @@ Host tests cover range decomposition, exact translation, permission replacement,
 topology, table-capacity and overlap failures, atomic allocation, descriptor materialization,
 retryable backend failure, and unpublished release. Platform tests cover the pinned 512 MiB
 topology, critical mappings, linker-layout rejection, RAM-window rejection, exact runtime-stack
-arena extent, initial absence, and injected mapping conflicts.
+arena extent, seven-table/767-leaf result, initial leaf absence, reserved-parent materialization,
+and injected mapping conflicts. Planner tests also cover reservations crossing an L3-table
+boundary plus transactional alignment, half, capacity, and leaf/topology conflict failures.
 
 The focused kernel image is Cross Compiled and ELF Inspected. Static checks require every
 permission-domain symbol, page alignment and ordering, the first-2-MiB image bound, the expected
 load addresses, and the heap and final success sentinels. On the recorded QEMU 9.1.3 `virt-9.1` run,
 `cargo xtask test-kernel-map` reported root `0x0000000040000000`, five tables, 767 leaves, and
 the ordered enter/success markers after TTBR1 publication. That run predates the new heap marker,
-so it remains final-table evidence but does not validate the current extended probe.
+and also predates the two empty runtime-stack tables. It remains historical final-table evidence
+but does not validate the current seven-table extended probe.
 
 ## TODO
 

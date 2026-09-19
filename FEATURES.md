@@ -63,9 +63,9 @@ _No unclassified entries._
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
 | MM-001 | Physical page allocator | In Progress | 0.1.0 | QEMU boot-memory probe validated DTB derivation and one allocate/readback/scrub/release cycle; boundary-negative probes remain |
-| MM-002 | Virtual memory and kernel address space | In Progress | 0.1.0 | Final TTBR1 publication passed on QEMU; a managed-RAM proof and retained-table access capability are Host Tested/Cross Compiled, while their rerun, guard/permission negatives, low-alias retirement, and dynamic mappings remain |
+| MM-002 | Virtual memory and kernel address space | In Progress | 0.1.0 | Final TTBR1 publication passed on QEMU; managed-RAM access and empty runtime-stack L3 topology are Host Tested/Cross Compiled, while the current seven-table rerun, guard/permission negatives, low-alias retirement, and dynamic leaves remain |
 | MM-003 | Kernel heap and fallible allocation policy | In Progress | 0.1.0 | Core ownership/failure behavior is Host Tested; a bounded four-frame/four-record post-TTBR1 probe is Cross Compiled and ELF Inspected, while target evidence, consumer sizing, and synchronized use remain |
-| MM-004 | Kernel stacks and guard pages | In Progress | 0.1.0 | Owned slot/frame plans, mapped ownership type state, injected publication/retirement failures, and an initially unmapped retained QEMU `virt` arena are Host Tested; the live AArch64 backend, switching, sizing evidence, and exception-stack policy remain |
+| MM-004 | Kernel stacks and guard pages | In Progress | 0.1.0 | Owned slot/frame plans, mapped ownership type state, injected publication/retirement failures, and a retained QEMU `virt` arena with prelinked empty L3 topology are Host Tested; the live AArch64 backend, switching, sizing evidence, and exception-stack policy remain |
 | MM-005 | User address spaces and safe user copies | In Progress | 0.1.0 | Plans/materialization/ownership and bidirectional copies are Host Tested; loaded init uses an ownership-checked final-direct-map adapter; general fault recovery, lifecycle, and runtime evidence remain |
 | MM-006 | Shared memory and copy-on-write | Deferred | Unscheduled | Requires process VM |
 | MM-007 | Huge pages and block mappings | Captured | Unscheduled | Revisit after basic paging |

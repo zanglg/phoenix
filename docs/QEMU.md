@@ -145,10 +145,11 @@ planner frame. The recorded fix increases only the construction stack to 1 MiB a
 transactional planner updates; it does not change the 4 KiB granule, QEMU RAM size, or address
 layout.
 
-That recorded final-map run predates the bounded heap path and did not emit
-`PHOENIX_KERNEL_HEAP_OK`. It remains evidence for final TTBR1 publication, not for the current
-heap-extended protocol or `RUN-KHEAP-001`; the latter remains Runtime Pending until a new run is
-captured.
+That recorded final-map run predates the bounded heap path, did not emit
+`PHOENIX_KERNEL_HEAP_OK`, and used five table frames before the runtime-stack arena gained two
+prelinked empty tables. It remains evidence for final TTBR1 publication, not for the current
+seven-table heap-extended protocol, `RUN-KHEAP-001`, or runtime-stack publication; those boundaries
+remain Runtime Pending until a new run is captured.
 
 ## How to report a run
 

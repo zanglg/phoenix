@@ -112,10 +112,11 @@ heap probe with aligned allocation, recoverable byte/metadata exhaustion, releas
 ordered success marker; target rerun and production consumer sizing remain. Guarded runtime-stack
 slots, transactional frame ownership, clearing, failure rollback, reuse, and offline AArch64 RW/NX
 mapping are Host Tested. Final-map builders now prove a retained provisional 16-slot/eight-page
-QEMU `virt` arena completely unmapped. An ownership-preserving mapped-stack type state now makes
-publication and retirement failures transactional and prevents mapped frames from reaching the
-unpublished release path; the live AArch64 backend, measured sizing, thread switching, and
-exception-stack activation remain;
+QEMU `virt` arena has no leaf translations and prelink its empty L2/L3 topology in the retained
+final hierarchy. An ownership-preserving mapped-stack type state now makes publication and
+retirement failures transactional and prevents mapped frames from reaching the unpublished
+release path; the current seven-table image still needs target execution, and the live AArch64
+backend, measured sizing, thread switching, and exception-stack activation remain;
 the loaded-init path retires temporary TTBR0 aliases when it installs its user hierarchy.
 
 Observable result: allocator and mapping self-tests exercise success and failure paths without
