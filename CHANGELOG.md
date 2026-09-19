@@ -27,6 +27,10 @@ numbers and remains explicitly unstable before 1.0.0. During construction, chang
 - Strict allocation-free QEMU `virt` DTB discovery for the GICv3 distributor/redistributor,
   controller phandle, and four unique architected-timer PPIs, with malformed, disabled,
   misaligned, aliased, and wrong-parent topologies rejected before any MMIO access.
+- An architecture-side GICv3 preparation type state with a unique unsafe register-backend
+  contract, checked PPI/priority configuration, PIDR/SRE validation, one-way ARE preservation,
+  finite RWP/wake polling, isolated field updates, closed delivery gates, and retained primary and
+  best-effort recovery failures.
 - Checked architecture-neutral physical/virtual addresses, pages, frames, and half-open ranges.
 - Strict allocation-free DTB parsing with boot CPU, bootargs, memory-region, and reservation extraction.
 - Fixed-capacity physical memory normalization, conservative reservation, and first-fit frame allocation.

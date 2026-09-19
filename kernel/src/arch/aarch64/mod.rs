@@ -5,6 +5,7 @@ use core::arch::asm;
 
 pub mod asid;
 pub mod exception;
+pub mod gicv3;
 pub mod kernel_page_table;
 pub mod paging;
 pub mod syscall;

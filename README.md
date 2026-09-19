@@ -19,6 +19,9 @@ narrow support claim:
   while boot activation, GIC delivery, IRQ synchronization, and sleep remain pending;
 - strict QEMU `virt` DTB discovery validates GICv3 MMIO ranges, interrupt-parent ownership, and
   the architected-timer PPIs without mapping the controller or enabling interrupts;
+- a Host Tested/Cross Compiled GICv3 preparation state machine validates PIDR/SRE, wakes the
+  selected redistributor, configures one timer PPI with bounded waits, and preserves recovery
+  evidence while distributor and CPU Group-1 delivery remain disabled;
 - a bounded QEMU runner and boot-test harness are implemented and host tested;
 - bounded QEMU probes have verified direct boot, DTB/allocator access, final TTBR1 publication,
   the first EL0 transition, and the loaded-init/file-I/O path on the pinned board;

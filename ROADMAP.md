@@ -148,9 +148,12 @@ Host-verifiable foundation now available:
   nanosecond-to-tick round-up are Host Tested/Cross Compiled but not connected to boot;
 - strict platform-layer DTB discovery validates the GICv3 distributor/redistributor ranges,
   controller phandle, and all four architected-timer PPIs without mapping or touching MMIO;
-- host tests cover boundary and failure atomicity, while GIC register ownership and routing,
-  IRQ-safe synchronization, boot integration, sleep integration, and all target execution remain
-  pending.
+- a failure-bounded GICv3 preparation type state validates PIDR/SRE, preserves one-way affinity
+  routing, wakes GICR, configures the timer PPI, and retains explicit recovery evidence while both
+  Group-1 delivery gates stay closed;
+- host tests cover boundaries, register update isolation, finite polling, and injected failure,
+  while concrete MMIO/system-register ownership, delivery/dispatch, IRQ-safe synchronization,
+  boot integration, sleep integration, and all target execution remain pending.
 
 Observable result: timer interrupts advance a monotonic time source and scheduled callbacks fire
 under an automated QEMU test.

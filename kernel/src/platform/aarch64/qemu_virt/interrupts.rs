@@ -2,6 +2,8 @@
 
 use core::str;
 
+pub use crate::arch::aarch64::gicv3::{InterruptTrigger, PrivatePeripheralInterrupt as GicPpi};
+use crate::arch::aarch64::gicv3::{PPI_INTID_MAX, PPI_INTID_MIN};
 use crate::dtb::{DeviceTree, Error as DeviceTreeError, Event};
 use crate::memory::{AddressRange, PhysAddr};
 
@@ -14,42 +16,13 @@ const GIC_REDISTRIBUTOR_ALIGNMENT: u64 = 128 * 1024;
 const GIC_REDISTRIBUTOR_MIN_SIZE: u64 = 128 * 1024;
 const MAX_PHYSICAL_ADDRESS_EXCLUSIVE: u64 = 1_u64 << 48;
 const GIC_PPI_TYPE: u32 = 1;
-const GIC_PPI_BASE: u16 = 16;
-const GIC_PPI_MAX_NUMBER: u32 = 15;
+const GIC_PPI_MAX_NUMBER: u32 = (PPI_INTID_MAX - PPI_INTID_MIN) as u32;
 const GIC_TRIGGER_MASK: u32 = 0x0f;
 const IRQ_TYPE_EDGE_RISING: u32 = 1;
 const IRQ_TYPE_LEVEL_HIGH: u32 = 4;
 const ARCH_TIMER_INTERRUPT_COUNT: usize = 4;
 const INTERRUPT_SPECIFIER_CELLS: usize = 3;
 const INTERRUPT_SPECIFIER_BYTES: usize = INTERRUPT_SPECIFIER_CELLS * 4;
-
-/// Trigger mode accepted by the ARM GIC device-tree binding.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum InterruptTrigger {
-    /// Rising-edge triggered interrupt.
-    EdgeRising,
-    /// Active-high level-triggered interrupt.
-    LevelHigh,
-}
-
-/// One validated private peripheral interrupt from a three-cell GIC specifier.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct GicPpi {
-    intid: u16,
-    trigger: InterruptTrigger,
-}
-
-impl GicPpi {
-    /// Return the architectural GIC interrupt identifier in the PPI range.
-    pub const fn intid(self) -> u16 {
-        self.intid
-    }
-
-    /// Return the accepted trigger mode.
-    pub const fn trigger(self) -> InterruptTrigger {
-        self.trigger
-    }
-}
 
 /// Four interrupts in the order required by the ARM architected-timer binding.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -604,26 +577,32 @@ fn parse_timer_interrupts(
             expected: EXPECTED_BYTES,
         });
     }
-    let mut ppis = [GicPpi {
-        intid: 0,
-        trigger: InterruptTrigger::LevelHigh,
-    }; ARCH_TIMER_INTERRUPT_COUNT];
+    let mut ppis: [Option<GicPpi>; ARCH_TIMER_INTERRUPT_COUNT] = [None; ARCH_TIMER_INTERRUPT_COUNT];
     for (index, entry) in value.chunks_exact(INTERRUPT_SPECIFIER_BYTES).enumerate() {
-        ppis[index] = parse_ppi(index, entry)?;
+        let ppi = parse_ppi(index, entry)?;
         if ppis[..index]
             .iter()
-            .any(|existing| existing.intid == ppis[index].intid)
+            .flatten()
+            .any(|existing| existing.intid() == ppi.intid())
         {
-            return Err(InterruptTopologyError::DuplicateTimerInterrupt {
-                intid: ppis[index].intid,
-            });
+            return Err(InterruptTopologyError::DuplicateTimerInterrupt { intid: ppi.intid() });
         }
+        ppis[index] = Some(ppi);
     }
+    let [
+        Some(secure_physical),
+        Some(non_secure_physical),
+        Some(virtual_timer),
+        Some(hypervisor),
+    ] = ppis
+    else {
+        unreachable!("exact timer interrupt list length fills every slot")
+    };
     Ok(ArchitectedTimerInterrupts {
-        secure_physical: ppis[0],
-        non_secure_physical: ppis[1],
-        virtual_timer: ppis[2],
-        hypervisor: ppis[3],
+        secure_physical,
+        non_secure_physical,
+        virtual_timer,
+        hypervisor,
     })
 }
 
@@ -654,9 +633,13 @@ fn parse_ppi(index: usize, entry: &[u8]) -> Result<GicPpi, InterruptTopologyErro
             flags,
         });
     }
-    Ok(GicPpi {
-        intid: GIC_PPI_BASE + number as u16,
-        trigger,
+    GicPpi::new(PPI_INTID_MIN + number as u16, trigger).map_err(|_| {
+        InterruptTopologyError::InvalidTimerInterrupt {
+            index,
+            interrupt_type,
+            number,
+            flags,
+        }
     })
 }
 
