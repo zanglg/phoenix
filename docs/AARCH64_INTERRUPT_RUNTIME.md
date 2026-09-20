@@ -23,6 +23,9 @@ target publication and delivery remain Runtime Pending.
   programming permit only after both Group-1 delivery gates open successfully;
 - one dispatch operation that distinguishes special, timer, and unexpected INTIDs, reprograms the
   timer before combined EOI/deactivation, and returns due events only after both locks release; and
+- `schedule_one_shot`, which holds the outer IRQ-save lock across timer scheduling and exact
+  consumer binding, cancels the new timer on binding failure, and closes the runtime if that
+  cancellation cannot safely restore the prior state; and
 - a deactivation transition that rejects a nonempty timer queue, explicitly disarms empty timer
   hardware, revokes its programming permit, then closes the CPU and distributor GIC gates.
 
@@ -77,10 +80,12 @@ is dormant because boot leaves the consumer unbound and never activates delivery
 - Publication, activation, dispatch, scheduling, cancellation, and deactivation are single-CPU
   operations. Their handles and the concrete GIC/timer backends cannot move to another CPU.
 - The outer runtime lock is always acquired before the inner timer lock. Neither path acquires them
-  in reverse order, sleeps, allocates, schedules, or invokes a callback while guarded.
-- The one-shot consumer lock is acquired only after the runtime returned the completed due batch;
-  it is never nested inside either device lock. Binding must occur with local IRQs continuously
-  masked from successful scheduling until the exact ID/event has been stored.
+  in reverse order, sleeps, allocates, context-switches, or invokes a callback while guarded.
+- One-shot binding follows `runtime -> timer` scheduling and then `runtime -> consumer`, with the
+  timer guard released before the consumer guard is acquired. On binding failure, the consumer
+  guard is released before cancellation reacquires the timer lock. No path holds both inner locks.
+- Post-EOI consumption acquires only the consumer lock after `dispatch_one` has released both
+  device locks. No consumer-held path acquires the runtime or timer lock.
 - The outer lock masks local IRQ delivery before the distributor gate opens and retains masking
   until the complete transition is published in the slot. `activate` and `deactivate` preserve the
   caller's exact preceding mask state; they do not independently enable `DAIF.I`.
@@ -97,6 +102,10 @@ is dormant because boot leaves the consumer unbound and never activates delivery
   chooses the terminal `PHOENIX_EXCEPTION` path.
 - A recoverable timer programming failure rolls the queue back and reapplies prior hardware state.
   Failed recovery, GIC acknowledge failure, or EOI failure makes the runtime unavailable.
+- A one-shot binding failure is recoverable only if cancellation removes the newly scheduled ID
+  and restores hardware state. Any cancellation failure makes the runtime unavailable even when
+  the timer service itself recovered, because safe code can no longer prove that every armed event
+  has its matching consumer.
 - Deactivation never abandons queued events. `PendingTimers` leaves delivery active; callers must
   cancel or dispatch every owned timer before retrying.
 - Due batches contain data only. Callbacks run after the runtime and timer guards have released and
@@ -113,7 +122,9 @@ shutdown, exact prior IRQ-mask restoration, pending-timer shutdown rejection and
 activation failure, and terminal EOI failure. The GIC tests separately verify that abandoning an
 acknowledgement blocks both a second acknowledge and shutdown without closing active gates.
 One-shot consumer tests cover one-way binding, exact retained completion, empty/multiple batches,
-stale IDs, wrong events, repeated consumption, and consumer acquisition strictly after EOI.
+stale IDs, wrong events, and repeated consumption. Runtime tests additionally cover atomic
+schedule/bind success, cancellation after rejected binding, terminal cancellation/recovery failure,
+and consumer acquisition strictly after EOI.
 
 Canonical checks cross-compile `PhysicalTimer`'s `TimerHardware` adapter, the permit-gated service,
 and the runtime state machine for every AArch64 kernel variant. The final-map and loaded-init
@@ -126,8 +137,8 @@ Compiled, and ELF Inspected only; no new QEMU command was run.
 
 - Add an explicit final transition that unmasks `DAIF.I` only after runtime publication and
   activation, and a symmetric removal protocol that prevents new handler entry.
-- Add a bounded boot scheduling API that binds the returned ID/event to the installed consumer
-  before activation and before any IRQ can be recognized.
+- Invoke the bounded schedule/bind transaction from boot after activation while `DAIF.I` remains
+  masked, before any IRQ can be recognized.
 - Replace the current terminal diagnostic policy with the scheduler-era policy for an unexpected
   completed INTID or acknowledge/EOI failure.
 - Connect returned timer events to sleeping kernel threads and the tickless scheduler.

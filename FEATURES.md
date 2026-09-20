@@ -78,11 +78,11 @@ _No unclassified entries._
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
 | CONC-001 | Atomics and memory-ordering policy | In Progress | 0.1.0 | IRQ-save spinlock ownership uses documented Acquire/Release ordering; publication, device, page-table, and future scheduler primitives retain their own contracts |
-| CONC-002 | Spinlocks and IRQ-safe synchronization | In Progress | 0.1.0 | IRQ-save lock, transactional timer service, one-shot post-EOI consumer, and runtime-before-timer order are Host Tested; closed-gate boot publication/lookup Cross Compiles, while active delivery, preemption/migration rules, broader lock graph, and target evidence remain |
+| CONC-002 | Spinlocks and IRQ-safe synchronization | In Progress | 0.1.0 | IRQ-save lock, timer service, atomic one-shot schedule/bind, post-EOI consumption, and runtime-before-inner-lock ordering are Host Tested; closed-gate boot publication/lookup Cross Compiles, while active boot delivery, preemption/migration rules, broader lock graph, and target evidence remain |
 | SCHED-001 | Kernel threads and context switching | Planned | 0.1.0 | Architecture boundary required |
 | SCHED-002 | Scheduler, preemption, and idle | Planned | 0.1.0 | Policy remains open |
-| TIME-001 | Monotonic clock and generic timer | In Progress | 0.1.0 | Checked ticks/frequency plus the non-transferable CNTP adapter/runtime are Host Tested/Cross Compiled; boot claims, disables, observes, and publishes it, while scheduling, activation, observed target frequency, and runtime evidence remain |
-| TIME-002 | Timer queue and sleep | In Progress | 0.1.0 | Fixed deadlines, transactional reprogramming/recovery, due batches, exact one-shot post-EOI consumption, and pending-event shutdown rejection are Host Tested; the boot consumer is installed but unbound, while scheduling, sleep, and runtime evidence remain |
+| TIME-001 | Monotonic clock and generic timer | In Progress | 0.1.0 | Checked ticks/frequency plus the non-transferable CNTP adapter/runtime are Host Tested/Cross Compiled; boot claims, disables, observes, and publishes it, while boot scheduling/activation, observed target frequency, and runtime evidence remain |
+| TIME-002 | Timer queue and sleep | In Progress | 0.1.0 | Fixed deadlines, transactional reprogramming/recovery, atomic one-shot schedule/bind with cancellation rollback, exact post-EOI consumption, and pending-event shutdown rejection are Host Tested; boot still leaves the consumer unbound, while active scheduling, sleep, and runtime evidence remain |
 | SMP-001 | Secondary CPU bring-up and per-CPU data | Deferred | Unscheduled | Preserve interfaces before enabling SMP |
 | SMP-002 | IPI and TLB shootdown | Deferred | Unscheduled | Coordinate with virtual memory design |
 
@@ -116,7 +116,7 @@ _No unclassified entries._
 | --- | --- | --- | --- | --- |
 | DEV-001 | Minimal device and driver lifecycle | Deferred | Unscheduled | Do not build a framework before two users exist |
 | DEV-002 | Early and runtime console | In Progress | 0.1.0 | Polled PL011 positive output/flush passed on QEMU; panic and interrupt-era behavior remain |
-| IRQ-001 | Interrupt controller abstraction and GIC | In Progress | 0.1.0 | DTB/mapping/preparation, pinned runtime, and post-EOI one-shot consumer are Host Tested/Cross Compiled; final-map boot publishes the IRQ lookup and installs the unbound consumer but retains closed delivery, so schedule/bind, activation, `DAIF.I` unmask/removal, target delivery, and runtime evidence remain |
+| IRQ-001 | Interrupt controller abstraction and GIC | In Progress | 0.1.0 | DTB/mapping/preparation, pinned runtime, atomic schedule/bind rollback, and post-EOI one-shot consumption are Host Tested/Cross Compiled; final-map boot publishes the IRQ lookup and installs the unbound consumer but retains closed delivery, so invoking schedule/bind, activation, `DAIF.I` unmask/removal, target delivery, and runtime evidence remain |
 | FW-001 | PSCI integration | Deferred | Unscheduled | Power and SMP services |
 | VIRTIO-001 | VirtIO transport and device discovery | Deferred | Unscheduled | MMIO first; PCI may follow |
 | PCI-001 | PCI discovery and configuration | Deferred | Unscheduled | Important for x86_64 and future platforms |

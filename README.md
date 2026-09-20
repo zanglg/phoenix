@@ -24,7 +24,8 @@ narrow support claim:
 - a locked, fixed-capacity timer controller is Host Tested with earliest-only reprogramming,
   deterministic due batches, callbacks-after-unlock, exact queue rollback, and explicit hardware
   recovery failure; an IRQ-safe one-shot sink validates the exact ID/event after EOI without false
-  completion, while the published boot owner and installed sink remain inactive and unbound;
+  completion, while an active-runtime transaction keeps scheduling/binding under one IRQ mask and
+  rolls back binding failure; the published boot owner and installed sink remain inactive/unbound;
 - strict QEMU `virt` DTB discovery validates GICv3 MMIO ranges, interrupt-parent ownership, and
   the architected-timer PPIs; the final-map paths select the current CPU redistributor by affinity
   and map only it plus GICD as exact device pages without enabling interrupts;
@@ -36,8 +37,8 @@ narrow support claim:
   separate Host Tested pinned runtime publishes dispatcher state before ordered activation, binds
   the matching timer PPI, reprograms before mandatory combined EOI/deactivation, and disarms before
   shutdown; both final-map paths now claim/disable the timer and publish an Acquire-checked IRQ
-  lookup plus post-EOI one-shot consumer, but neither schedules/binds an event, activates delivery,
-  nor unmasks IRQs;
+  lookup plus post-EOI one-shot consumer; the schedule/bind transaction Cross Compiles, but neither
+  boot path invokes it, activates delivery, or unmasks IRQs;
 - a bounded QEMU runner and boot-test harness are implemented and host tested;
 - bounded QEMU probes have verified direct boot, DTB/allocator access, final TTBR1 publication,
   the first EL0 transition, and the loaded-init/file-I/O path on the pinned board;

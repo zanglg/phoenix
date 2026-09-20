@@ -12,7 +12,8 @@ use crate::arch::aarch64::gicv3::{
 use crate::sync::{IrqSpinLock, LocalIrqControl};
 use crate::time::{TickInstant, TimerEvent, TimerId};
 use crate::timer_service::{
-    FiredTimerBatch, LockedTimerQueue, TimerHardware, TimerProgrammingPermit, TimerServiceError,
+    FiredTimerBatch, LockedTimerQueue, OneShotTimerConsumer, OneShotTimerConsumerError,
+    TimerHardware, TimerProgrammingPermit, TimerServiceError,
 };
 
 /// Observable lifecycle of a published interrupt runtime slot.
@@ -69,6 +70,28 @@ pub enum InterruptRuntimeError<GE, TE> {
     },
     /// GIC shutdown failed after the timer was quiesced.
     Shutdown(GicV3DeliveryError<GE>),
+}
+
+/// Failure while scheduling and binding one timer as a single IRQ-masked transaction.
+#[derive(Debug, Eq, PartialEq)]
+pub enum InterruptRuntimeOneShotError<GE, TE> {
+    /// Runtime phase or timer scheduling rejected the request before binding.
+    Runtime(InterruptRuntimeError<GE, TE>),
+    /// Consumer binding failed, and cancellation restored the prior timer state.
+    Binding {
+        /// Exact consumer state or validation failure.
+        error: OneShotTimerConsumerError,
+    },
+    /// Consumer binding failed and cancellation could not restore prior timer state.
+    ///
+    /// The runtime becomes permanently unavailable after this result because
+    /// later delivery cannot be matched to the requested one-shot consumer.
+    Rollback {
+        /// Failure that made rollback necessary.
+        binding_error: OneShotTimerConsumerError,
+        /// Timer cancellation or hardware recovery failure.
+        cancellation_error: TimerServiceError<TE>,
+    },
 }
 
 /// Result of one complete Group-1 acknowledgement/dispatch/EOI cycle.
@@ -302,6 +325,64 @@ impl<'a, B: GicV3RegisterAccess, const CAPACITY: usize, H: TimerHardware>
         }
     }
 
+    /// Schedule and bind one exact event before restoring the prior IRQ state.
+    ///
+    /// The outer runtime lock keeps local IRQ delivery masked from the first
+    /// timer mutation through successful consumer binding. If binding fails,
+    /// the new timer is cancelled under that same mask. A cancellation failure
+    /// makes the runtime unavailable because an armed event may no longer have
+    /// a matching consumer.
+    pub fn schedule_one_shot<C: LocalIrqControl>(
+        &self,
+        irq: &C,
+        consumer: &OneShotTimerConsumer,
+        deadline: TickInstant,
+        event: TimerEvent,
+    ) -> Result<TimerId, InterruptRuntimeOneShotError<B::Error, H::Error>> {
+        let mut state = self.runtime.state.lock(irq);
+        let RuntimeState::Active(active) = &mut *state else {
+            return Err(InterruptRuntimeOneShotError::Runtime(
+                InterruptRuntimeError::Phase(state.phase()),
+            ));
+        };
+        if !active.operational {
+            return Err(InterruptRuntimeOneShotError::Runtime(
+                InterruptRuntimeError::Phase(InterruptRuntimePhase::Unavailable),
+            ));
+        }
+
+        let id = match active.timer.schedule(irq, &active.permit, deadline, event) {
+            Ok(id) => id,
+            Err(error) => {
+                if timer_failure_is_terminal(&error) {
+                    active.operational = false;
+                }
+                return Err(InterruptRuntimeOneShotError::Runtime(
+                    InterruptRuntimeError::Timer(error),
+                ));
+            }
+        };
+        let Err(binding_error) = consumer.bind(irq, id, event) else {
+            return Ok(id);
+        };
+
+        match active.timer.cancel(irq, &active.permit, id) {
+            Ok(cancelled_event) => {
+                debug_assert_eq!(cancelled_event, event);
+                Err(InterruptRuntimeOneShotError::Binding {
+                    error: binding_error,
+                })
+            }
+            Err(cancellation_error) => {
+                active.operational = false;
+                Err(InterruptRuntimeOneShotError::Rollback {
+                    binding_error,
+                    cancellation_error,
+                })
+            }
+        }
+    }
+
     /// Cancel one exact timer generation while delivery is active.
     pub fn cancel<C: LocalIrqControl>(
         &self,
@@ -482,7 +563,7 @@ mod tests {
 
     use super::{
         InterruptDispatch, InterruptRuntime, InterruptRuntimeActivationError,
-        InterruptRuntimeError, InterruptRuntimePhase,
+        InterruptRuntimeError, InterruptRuntimeOneShotError, InterruptRuntimePhase,
     };
     use crate::arch::aarch64::gicv3::{
         CpuInterfaceRegister, GicV3Configuration, GicV3DeliveryError, GicV3DeliveryStage,
@@ -491,7 +572,8 @@ mod tests {
     use crate::sync::LocalIrqControl;
     use crate::time::{TickInstant, TimerEvent};
     use crate::timer_service::{
-        LockedTimerQueue, OneShotTimerConsumer, TimerHardware, TimerProgramming, TimerServiceError,
+        LockedTimerQueue, OneShotTimerConsumer, OneShotTimerConsumerError,
+        OneShotTimerConsumerState, TimerHardware, TimerProgramming, TimerServiceError,
     };
 
     const AFFINITY_ROUTING: u32 = 1 << 4;
@@ -768,11 +850,23 @@ mod tests {
         published.activate(&irq).unwrap();
         assert_eq!(published.phase(&irq), InterruptRuntimePhase::Active);
         let event = TimerEvent::new(0x55);
-        let id = published
-            .schedule(&irq, TickInstant::from_raw(10), event)
-            .unwrap();
         let consumer = OneShotTimerConsumer::new();
-        consumer.bind(&irq, id, event).unwrap();
+        let transaction_start = operations.borrow().len();
+        let id = published
+            .schedule_one_shot(&irq, &consumer, TickInstant::from_raw(10), event)
+            .unwrap();
+        assert_eq!(
+            &operations.borrow()[transaction_start..],
+            &[
+                Operation::Mask(false),
+                Operation::Mask(true),
+                Operation::Timer(TimerProgramming::Arm(TickInstant::from_raw(10))),
+                Operation::Restore(true),
+                Operation::Mask(true),
+                Operation::Restore(true),
+                Operation::Restore(false),
+            ]
+        );
 
         now.set(TickInstant::from_raw(10));
         let dispatch = published.dispatch_one(&irq).unwrap();
@@ -827,6 +921,133 @@ mod tests {
         assert!(eoi < consumer_lock);
         assert!(final_disarm < cpu_close);
         assert!(cpu_close < distributor_close);
+    }
+
+    #[test]
+    fn one_shot_binding_failure_cancels_the_new_timer_transactionally() {
+        let operations = RefCell::new(Vec::new());
+        let masked = Cell::new(false);
+        let now = Cell::new(TickInstant::from_raw(1));
+        let irq = MockIrq {
+            masked: &masked,
+            operations: &operations,
+        };
+        let runtime = InterruptRuntime::<_, 1, _>::new(
+            prepared_gic(&operations, Vec::new()),
+            timer_service(&now, &masked, &operations, Vec::new()),
+            timer_ppi(30),
+        );
+        let runtime = pin!(runtime);
+        // SAFETY: the pinned test slot is the only modeled dispatcher lookup.
+        let published = unsafe { runtime.as_ref().publish(&irq) }.unwrap();
+        published.activate(&irq).unwrap();
+
+        let stale_event = TimerEvent::new(0x10);
+        let stale_id = published
+            .schedule(&irq, TickInstant::from_raw(5), stale_event)
+            .unwrap();
+        assert_eq!(published.cancel(&irq, stale_id), Ok(stale_event));
+        let consumer = OneShotTimerConsumer::new();
+        consumer.bind(&irq, stale_id, stale_event).unwrap();
+        operations.borrow_mut().clear();
+
+        let event = TimerEvent::new(0x20);
+        assert_eq!(
+            published.schedule_one_shot(&irq, &consumer, TickInstant::from_raw(10), event,),
+            Err(InterruptRuntimeOneShotError::Binding {
+                error: OneShotTimerConsumerError::State {
+                    actual: OneShotTimerConsumerState::Bound {
+                        id: stale_id,
+                        event: stale_event,
+                    },
+                },
+            })
+        );
+        assert_eq!(
+            *operations.borrow(),
+            vec![
+                Operation::Mask(false),
+                Operation::Mask(true),
+                Operation::Timer(TimerProgramming::Arm(TickInstant::from_raw(10))),
+                Operation::Restore(true),
+                Operation::Mask(true),
+                Operation::Restore(true),
+                Operation::Mask(true),
+                Operation::Timer(TimerProgramming::Disarm),
+                Operation::Restore(true),
+                Operation::Restore(false),
+            ]
+        );
+        assert_eq!(published.phase(&irq), InterruptRuntimePhase::Active);
+        assert_eq!(
+            consumer.state(&irq),
+            OneShotTimerConsumerState::Bound {
+                id: stale_id,
+                event: stale_event,
+            }
+        );
+        published.deactivate(&irq).unwrap();
+        assert_eq!(published.phase(&irq), InterruptRuntimePhase::Prepared);
+    }
+
+    #[test]
+    fn one_shot_rollback_failure_makes_the_runtime_unavailable() {
+        let operations = RefCell::new(Vec::new());
+        let masked = Cell::new(true);
+        let now = Cell::new(TickInstant::from_raw(1));
+        let irq = MockIrq {
+            masked: &masked,
+            operations: &operations,
+        };
+        let runtime = InterruptRuntime::<_, 1, _>::new(
+            prepared_gic(&operations, Vec::new()),
+            timer_service(&now, &masked, &operations, vec![3, 4]),
+            timer_ppi(30),
+        );
+        let runtime = pin!(runtime);
+        // SAFETY: the pinned test slot is the only modeled dispatcher lookup.
+        let published = unsafe { runtime.as_ref().publish(&irq) }.unwrap();
+        published.activate(&irq).unwrap();
+
+        let stale_event = TimerEvent::new(0x10);
+        let stale_id = published
+            .schedule(&irq, TickInstant::from_raw(5), stale_event)
+            .unwrap();
+        assert_eq!(published.cancel(&irq, stale_id), Ok(stale_event));
+        let consumer = OneShotTimerConsumer::new();
+        consumer.bind(&irq, stale_id, stale_event).unwrap();
+
+        let event = TimerEvent::new(0x20);
+        assert_eq!(
+            published.schedule_one_shot(&irq, &consumer, TickInstant::from_raw(10), event,),
+            Err(InterruptRuntimeOneShotError::Rollback {
+                binding_error: OneShotTimerConsumerError::State {
+                    actual: OneShotTimerConsumerState::Bound {
+                        id: stale_id,
+                        event: stale_event,
+                    },
+                },
+                cancellation_error: TimerServiceError::Programming {
+                    requested: TimerProgramming::Disarm,
+                    error: MockTimerError::Program,
+                    recovery: TimerProgramming::Arm(TickInstant::from_raw(10)),
+                    recovery_error: Some(MockTimerError::Program),
+                },
+            })
+        );
+        assert_eq!(published.phase(&irq), InterruptRuntimePhase::Unavailable);
+        assert_eq!(
+            published.schedule_one_shot(
+                &irq,
+                &OneShotTimerConsumer::new(),
+                TickInstant::from_raw(11),
+                TimerEvent::new(0x30),
+            ),
+            Err(InterruptRuntimeOneShotError::Runtime(
+                InterruptRuntimeError::Phase(InterruptRuntimePhase::Unavailable)
+            ))
+        );
+        assert!(masked.get());
     }
 
     #[test]

@@ -41,6 +41,14 @@ exactly one matching record transitions `Unbound -> Bound -> Fired`; the complet
 retained as completion evidence. Empty, multiple, stale-ID, wrong-event, unbound, and repeated
 delivery return explicit errors without publishing completion.
 
+`PublishedInterruptRuntime::schedule_one_shot` is the architecture owner that closes the interval
+between `Arm` and consumer binding. Its outer IRQ-save guard remains live while the inner timer
+service schedules the event and while the consumer stores the returned ID/event. If binding is
+rejected, the runtime cancels that exact ID before restoring the caller's prior IRQ state. A
+successful cancellation reports the binding error with the queue/hardware restored; any
+cancellation failure makes the runtime unavailable because an unmatched armed event can no longer
+be excluded.
+
 `kernel/src/arch/aarch64/timer.rs` defines:
 
 - a checked nonzero 32-bit `CNTFRQ_EL0` value and nanosecond-to-tick conversion that rounds up;
@@ -106,8 +114,11 @@ callbacks remain outside timer and GIC ownership.
   queue before interrupt delivery can close;
 - the one-shot consumer binds at most once, accepts exactly one record with both the expected queue
   generation and event value, and never changes its bound state on validation failure; and
-- consumer locking occurs only after `dispatch_one` has released the runtime/timer locks and
-  completed EOI, so the consumer is not inserted into the nested device-lock order.
+- schedule/bind holds the outer runtime lock, releases the timer guard before acquiring the
+  consumer guard, and releases the consumer guard before any cancellation rollback reacquires the
+  timer; no operation holds both inner locks; and
+- delivery-time consumer locking occurs only after `dispatch_one` has released the runtime/timer
+  locks and completed EOI, and no consumer-held path acquires either device lock.
 
 The raw time and queue module contains no unsafe code or architecture-specific state. The service
 uses narrow unsafe calls only to apply a hardware command while its IRQ-save guard proves local
@@ -141,15 +152,16 @@ after failed recovery, queue failures that never program hardware, permit-gated 
 mismatch, pending-timer deactivation rejection, timer-before-EOI ordering, and terminal GIC
 failures. One-shot tests cover one-way binding, exact completion evidence, empty/multiple batches,
 stale generations, wrong event values, repeated delivery, and EOI-before-consumer ordering. They
-also cover invalid frequency, round-up boundaries, conversion/deadline overflow, and control-bit
-decoding. Canonical CI cross-compiles the concrete adapter and boot consumer as part of the
-relevant AArch64 variants; this proves compilation and static artifact contracts, not target
-execution.
+also cover atomic active-runtime schedule/bind, successful cancellation after binding rejection,
+terminal cancellation/recovery failure, invalid frequency, round-up boundaries,
+conversion/deadline overflow, and control-bit decoding. Canonical CI cross-compiles the concrete
+adapter, runtime transaction, and boot consumer as part of the relevant AArch64 variants; this
+proves compilation and static artifact contracts, not target execution.
 
 ## TODO
 
-- Add the bounded boot schedule/bind transition while `DAIF.I` is masked, then activate the
-  published runtime without exposing an unbound due batch.
+- Activate the published boot runtime while `DAIF.I` remains masked, then invoke the bounded
+  schedule/bind transaction before opening the final local-IRQ recognition window.
 - Add the explicit final `DAIF.I` unmask/removal transition after every runtime invariant is live.
 - Connect due events to sleeping threads and tickless scheduler wakeups.
 - Decide whether a queue-instance namespace is worth the identifier and initialization cost.
