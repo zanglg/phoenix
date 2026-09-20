@@ -56,6 +56,9 @@ numbers and remains explicitly unstable before 1.0.0. During construction, chang
   claimed, disabled, and observed once; pinned runtime and handle slots are Release-published; and
   every IRQ vector reaches an Acquire-checked dispatch/fatal policy without activating GIC delivery
   or unmasking `DAIF.I`, with a separate statically inspected publication progress marker.
+- An IRQ-safe one-shot timer-event consumer that binds one exact queue generation and opaque event,
+  rejects empty/multiple/mismatched/repeated delivery without false completion, retains the fired
+  record, and is reached by the final-map IRQ wrapper only after the runtime has completed EOI.
 - Checked architecture-neutral physical/virtual addresses, pages, frames, and half-open ranges.
 - Strict allocation-free DTB parsing with boot CPU, bootargs, memory-region, and reservation extraction.
 - Fixed-capacity physical memory normalization, conservative reservation, and first-fit frame allocation.

@@ -175,6 +175,9 @@ Host-verifiable foundation now available:
   earliest-deadline rearm/disarm, returns due batches only after unlock, restores exact queue state
   on programming failure, closes permanently if hardware recovery also fails, and requires a
   private active-runtime permit for every hardware command;
+- an IRQ-safe one-shot consumer binds one exact timer generation/event, rejects empty, multiple,
+  stale, mismatched, and repeated delivery without publishing false completion, and retains the
+  complete fired record after EOI;
 - a pinned single-CPU interrupt runtime publishes stable dispatcher lookup before activation,
   checks the exact timer PPI, orders outer runtime/GIC locking before the timer lock, reprograms
   before EOI, rejects shutdown with pending events, and disarms before closing GIC delivery;
@@ -182,13 +185,14 @@ Host-verifiable foundation now available:
   active runtime can create its post-activation programming permit;
 - both final-map paths now claim and disable the physical timer, capture the initial counter, pin
   the one-event runtime in static storage, Release-publish its handle, and route IRQ vector slots
-  through an Acquire-checked lookup while delivery remains closed;
+  through an Acquire-checked lookup and the installed one-shot consumer while delivery remains
+  closed;
 - host tests cover boundaries, selection failures, exact page mappings, register update isolation,
   finite polling, injected failure, gate ordering, special/unexpected acknowledgements, abandoned
   completion ownership, pinned publication, timer-before-EOI dispatch, shutdown ordering, and
-  ordered output protocol; boot still retains prepared state, so a bounded event consumer,
-  activation, `DAIF.I` unmask/removal, sleep integration, and all current target execution remain
-  pending.
+  exact post-EOI one-shot consumption, and ordered output protocol; boot still retains prepared
+  state and the consumer remains unbound, so schedule/bind, activation, `DAIF.I` unmask/removal,
+  sleep integration, and all current target execution remain pending.
 
 Observable result: timer interrupts advance a monotonic time source and scheduled callbacks fire
 under an automated QEMU test.
@@ -210,7 +214,8 @@ Host-verifiable foundation now available:
   in the final-map publication and IRQ lookup paths, but has not handled a target IRQ;
 - an architecture-neutral timer controller and pinned AArch64 interrupt runtime prove
   transactional queue/programming, runtime-before-timer lock order, and callbacks-after-unlock in
-  host tests; and
+  host tests; a separate one-shot consumer proves exact post-EOI completion without holding either
+  device lock; and
 - the primitive has no allocation, poisoning, fairness, or scheduler/preemption integration; the
   runtime-before-timer order and closed-gate boot lookup are published, while active delivery,
   scheduler adoption, and all target evidence remain pending.

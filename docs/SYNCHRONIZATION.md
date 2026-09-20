@@ -36,7 +36,9 @@ abstract hardware owner under one lock, performs no callback while guarded, and 
 restores queue state if programming fails. `kernel/src/arch/aarch64/interrupt_runtime.rs` adds an
 outer GIC/publication lock and publishes the first subsystem order: runtime lock before timer lock.
 Activation, scheduling, dispatch, cancellation, and deactivation all follow that direction; no
-timer-guarded path attempts to acquire the runtime lock.
+timer-guarded path attempts to acquire the runtime lock. A separate one-shot completion lock is
+acquired only after dispatch has released both device guards and completed EOI, so it adds no
+reverse edge to that nested order.
 
 ## Invariants and memory ordering
 
@@ -77,7 +79,9 @@ performing 8,000 serialized updates through the Acquire/Release path. Formatting
 and all existing host tests run through canonical CI. Timer-controller tests additionally verify
 that comparator operations occur while masked and returned callbacks occur after restoration.
 Interrupt-runtime tests cover nested mask preservation, the runtime-before-timer order,
-timer-before-EOI service, pending-timer deactivation rejection, and terminal controller failures.
+timer-before-EOI service, pending-timer deactivation rejection, terminal controller failures, and
+one-shot consumer acquisition after EOI. Consumer tests separately cover exact binding/completion
+and transactional rejection of invalid batches.
 
 Every AArch64 kernel variant Cross Compiles the real `MRS DAIF`, `MSR DAIFSet`, `MSR DAIFClr`, and
 `ISB` backend. Existing ELF inspection continues to validate each kernel artifact, but static
@@ -86,8 +90,8 @@ cycle in a future dispatcher.
 
 ## TODO
 
-- Preserve the published runtime-before-timer order when boot activation and the first event
-  consumer are added; keep console, allocator, and scheduler work outside both guards.
+- Preserve the published runtime-before-timer order when boot schedule/bind and activation are
+  added; keep the post-EOI consumer, console, allocator, and scheduler work outside both guards.
 - Decide the kernel-heap and runtime-stack policies for normal-context versus interrupt-context
   access before wrapping either owner.
 - Add preemption-count integration before a scheduler can migrate or switch a lock holder.
@@ -103,7 +107,7 @@ RCU, priority inheritance, fairness guarantee, lock dependency graph, timeout, N
 per-CPU storage, scheduler preemption control, or SMP bring-up. It does not wrap the heap, frame
 allocator, runtime-stack pool, process table, file table, or console. Boot now uses it for pinned
 interrupt-runtime publication and lookup, but does not activate target Group-1 delivery, program a
-timer deadline, or unmask boot IRQs.
+timer deadline, bind the installed one-shot consumer, or unmask boot IRQs.
 
 ## Runtime Pending
 

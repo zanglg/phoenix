@@ -491,7 +491,7 @@ mod tests {
     use crate::sync::LocalIrqControl;
     use crate::time::{TickInstant, TimerEvent};
     use crate::timer_service::{
-        LockedTimerQueue, TimerHardware, TimerProgramming, TimerServiceError,
+        LockedTimerQueue, OneShotTimerConsumer, TimerHardware, TimerProgramming, TimerServiceError,
     };
 
     const AFFINITY_ROUTING: u32 = 1 << 4;
@@ -767,9 +767,12 @@ mod tests {
         let published = unsafe { runtime.as_ref().publish(&irq) }.unwrap();
         published.activate(&irq).unwrap();
         assert_eq!(published.phase(&irq), InterruptRuntimePhase::Active);
-        published
-            .schedule(&irq, TickInstant::from_raw(10), TimerEvent::new(0x55))
+        let event = TimerEvent::new(0x55);
+        let id = published
+            .schedule(&irq, TickInstant::from_raw(10), event)
             .unwrap();
+        let consumer = OneShotTimerConsumer::new();
+        consumer.bind(&irq, id, event).unwrap();
 
         now.set(TickInstant::from_raw(10));
         let dispatch = published.dispatch_one(&irq).unwrap();
@@ -778,8 +781,12 @@ mod tests {
         };
         assert_eq!(
             batch.iter().map(|timer| timer.event()).collect::<Vec<_>>(),
-            vec![TimerEvent::new(0x55)]
+            vec![event]
         );
+        let consumer_lock = operations.borrow().len();
+        let fired = consumer.consume(&irq, &batch).unwrap();
+        assert_eq!(fired.id(), id);
+        assert_eq!(operations.borrow()[consumer_lock], Operation::Mask(false));
         published.deactivate(&irq).unwrap();
         assert_eq!(published.phase(&irq), InterruptRuntimePhase::Prepared);
         assert!(!masked.get());
@@ -817,6 +824,7 @@ mod tests {
             .unwrap();
         assert!(distributor_open < cpu_open);
         assert!(timer_disarm < eoi);
+        assert!(eoi < consumer_lock);
         assert!(final_disarm < cpu_close);
         assert!(cpu_close < distributor_close);
     }

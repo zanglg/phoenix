@@ -3,8 +3,8 @@
 Phoenix currently provides an architecture-neutral, allocation-free foundation for monotonic
 time and deadline ordering plus an AArch64 physical generic-timer adapter and a Host Tested pinned
 GIC/timer publication runtime. The final-map boot paths now claim, disable, observe, and publish
-the timer owner but retain delivery closed; they do not schedule/program a deadline, deliver timer
-interrupts, block a thread, or run callbacks.
+the timer owner and install an unbound one-shot event consumer but retain delivery closed; they do
+not schedule/program a deadline, deliver timer interrupts, block a thread, or run callbacks.
 
 ## Current implementation
 
@@ -32,6 +32,14 @@ interrupts, block a thread, or run callbacks.
   hardware command, and permanently closes the controller if that recovery also fails; and
 - `quiesce` refuses to strand queued events and explicitly disarms an empty service before its
   architecture permit is revoked.
+
+The same module defines `OneShotTimerConsumer`, a second IRQ-safe state machine for the bounded
+boot probe. Normal context binds the exact generation-checked `TimerId` and opaque `TimerEvent`
+while local IRQ delivery is still masked. After runtime dispatch has reprogrammed the comparator
+and completed EOI, the IRQ wrapper supplies the returned batch to the consumer. Only a batch of
+exactly one matching record transitions `Unbound -> Bound -> Fired`; the complete `FiredTimer` is
+retained as completion evidence. Empty, multiple, stale-ID, wrong-event, unbound, and repeated
+delivery return explicit errors without publishing completion.
 
 `kernel/src/arch/aarch64/timer.rs` defines:
 
@@ -95,7 +103,11 @@ callbacks remain outside timer and GIC ownership.
   matching counter domain; each later command additionally requires the active runtime's private
   programming permit; and
 - quiescence rejects a nonempty queue without hardware mutation and explicitly disarms an empty
-  queue before interrupt delivery can close.
+  queue before interrupt delivery can close;
+- the one-shot consumer binds at most once, accepts exactly one record with both the expected queue
+  generation and event value, and never changes its bound state on validation failure; and
+- consumer locking occurs only after `dispatch_one` has released the runtime/timer locks and
+  completed EOI, so the consumer is not inserted into the nested device-lock order.
 
 The raw time and queue module contains no unsafe code or architecture-specific state. The service
 uses narrow unsafe calls only to apply a hardware command while its IRQ-save guard proves local
@@ -115,7 +127,8 @@ The Host Tested AArch64 interrupt runtime supplies the first nested production o
 outer GIC/publication lock before the inner timer lock. Its pinned slot is published while GIC
 delivery is closed, and it creates the timer permit only after activation. The concrete register
 adapter, static boot owner, atomic lookup publication, and common IRQ branch Cross Compile. The
-boot owner remains in `Prepared`, so the permit and hardware programming path are unreachable.
+boot owner remains in `Prepared` and its one-shot consumer remains `Unbound`, so the permit,
+binding, and hardware programming paths are unreachable.
 
 ## Validation
 
@@ -126,14 +139,17 @@ reprogramming, non-earliest cancellation, equal-deadline batch order, rearm/disa
 IRQ-state restoration, exact queue rollback, successful programming recovery, permanent closure
 after failed recovery, queue failures that never program hardware, permit-gated activation, PPI
 mismatch, pending-timer deactivation rejection, timer-before-EOI ordering, and terminal GIC
-failures. They also cover invalid frequency, round-up boundaries, conversion/deadline overflow,
-and control-bit decoding. Canonical CI cross-compiles the concrete adapter as part of every AArch64
-kernel variant; this proves compilation and static artifact contracts, not target execution.
+failures. One-shot tests cover one-way binding, exact completion evidence, empty/multiple batches,
+stale generations, wrong event values, repeated delivery, and EOI-before-consumer ordering. They
+also cover invalid frequency, round-up boundaries, conversion/deadline overflow, and control-bit
+decoding. Canonical CI cross-compiles the concrete adapter and boot consumer as part of the
+relevant AArch64 variants; this proves compilation and static artifact contracts, not target
+execution.
 
 ## TODO
 
-- Add a bounded boot event consumer, schedule its first deadline, then activate the published
-  runtime without exposing an unhandled due batch.
+- Add the bounded boot schedule/bind transition while `DAIF.I` is masked, then activate the
+  published runtime without exposing an unbound due batch.
 - Add the explicit final `DAIF.I` unmask/removal transition after every runtime invariant is live.
 - Connect due events to sleeping threads and tickless scheduler wakeups.
 - Decide whether a queue-instance namespace is worth the identifier and initialization cost.
@@ -145,8 +161,9 @@ kernel variant; this proves compilation and static artifact contracts, not targe
 This checkpoint does not implement wall time, calendar time, periodic timers, callback storage,
 dynamic queue growth, kernel-thread sleep, scheduler preemption, idle `WFI`, SMP, boot-time GIC
 delivery activation, target timer programming, target IRQ acknowledgement, or boot-time timer
-activation. GIC discovery, closed-gate PPI preparation, and the still-inactive Host Tested
-delivery protocol belong to the separate interrupt module. This checkpoint does not
+activation. The installed boot consumer is deliberately left unbound until schedule and activation
+form one masked transition. GIC discovery, closed-gate PPI preparation, and the still-inactive
+Host Tested delivery protocol belong to the separate interrupt module. This checkpoint does not
 claim a target frequency or precision because `CNTFRQ_EL0` has not been read during target
 execution.
 

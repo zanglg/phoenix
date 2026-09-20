@@ -181,9 +181,10 @@ with IRQs masked and before delivery is enabled. The owner is not exposed to gen
 The delivery API additionally makes the dispatcher publication proof and concrete mapped backend
 non-transferable across CPUs. The Host Tested pinned runtime now owns the GIC and timer behind an
 outer IRQ-save lock and acquires the timer's inner lock only in that direction. It returns due data
-after EOI and both locks release. No callback, scheduler action, allocator use, console output, or
-inverted lock acquisition may occur while an interrupt is outstanding. Boot now adopts the owner
-and lookup only in the closed-delivery `Prepared` phase.
+after EOI and both locks release. The installed one-shot consumer is acquired only afterward and
+therefore adds no reverse device-lock edge. No callback, scheduler action, allocator use, console
+output, or inverted lock acquisition may occur while an interrupt is outstanding. Boot now adopts
+the owner and lookup only in the closed-delivery `Prepared` phase.
 
 The current boot path retains the combined runtime in `Prepared`, so it does not create the
 internal `PublishedIrqDispatcher` activation proof, open either GIC gate, program/unmask the
@@ -204,7 +205,7 @@ masking, timer and unexpected classification, EOI ordering, retained EOI retry o
 indeterminate shutdown failure. They also verify that dropping an acknowledgement blocks later
 acknowledgement and shutdown. Interrupt-runtime tests cover one-way pinned publication, PPI
 mismatch, ordered activation/deactivation, timer-before-EOI dispatch, pending-event shutdown
-rejection, and terminal activation/EOI failures. Canonical CI
+rejection, terminal activation/EOI failures, and exact one-shot consumption after EOI. Canonical CI
 also covers MPIDR packing, VLPI-aware redistributor stride, exact affinity selection, `Last`,
 duplicate/missing/truncated/access failures, bootstrap-window bounds, register-range checks, and
 all 48 final GIC L3 leaves in the pinned 8-table/815-leaf plan. It cross-compiles the volatile
@@ -220,7 +221,7 @@ Tested delivery transaction can handle a real target interrupt.
 ## TODO
 
 - Activate the already-published runtime from boot without weakening the masked-transition
-  contract, after a bounded event consumer is installed.
+  contract, after one deadline is scheduled and bound to the installed consumer.
 - Define the fatal/recovery policy after an unexpected real INTID is completed and preserve full
   IRQ entry/exit register-state evidence.
 - Add the final boot transition that schedules a bounded event, activates the published runtime,

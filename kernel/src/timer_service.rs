@@ -133,6 +133,143 @@ impl<const CAPACITY: usize> FiredTimerBatch<CAPACITY> {
     }
 }
 
+/// Observable state of a one-shot timer-event consumer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OneShotTimerConsumerState {
+    /// No scheduled timer identity has been bound yet.
+    Unbound,
+    /// One exact scheduled identity and event value are expected.
+    Bound {
+        /// Generation-checked timer identity returned by the queue.
+        id: TimerId,
+        /// Opaque event value supplied with that timer.
+        event: TimerEvent,
+    },
+    /// The exact bound timer was consumed once.
+    Fired {
+        /// Complete due record retained as completion evidence.
+        timer: FiredTimer,
+    },
+}
+
+/// Failure while binding or consuming a one-shot timer event.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OneShotTimerConsumerError {
+    /// The requested transition is invalid from the current state.
+    State {
+        /// Exact state that rejected the transition.
+        actual: OneShotTimerConsumerState,
+    },
+    /// A one-shot consumer requires exactly one due record.
+    BatchLength {
+        /// Number of records supplied by the dispatcher.
+        actual: usize,
+    },
+    /// The due record belongs to another slot generation.
+    TimerMismatch {
+        /// Identity bound before interrupt delivery was enabled.
+        expected: TimerId,
+        /// Identity returned by the timer queue.
+        observed: TimerId,
+    },
+    /// The due record carries a different caller-defined event value.
+    EventMismatch {
+        /// Event value bound before interrupt delivery was enabled.
+        expected: TimerEvent,
+        /// Event value returned by the timer queue.
+        observed: TimerEvent,
+    },
+}
+
+/// IRQ-safe one-shot sink for an exact scheduled timer generation.
+///
+/// Binding is one-way and consumption accepts exactly one due record whose
+/// generation-checked identity and opaque event value both match. Validation
+/// failures leave the bound state unchanged, and successful consumption keeps
+/// the complete fired record as permanent completion evidence. The caller is
+/// responsible for invoking [`Self::consume`] only after the architecture
+/// dispatcher has completed the interrupt-controller acknowledgement.
+pub struct OneShotTimerConsumer {
+    state: IrqSpinLock<OneShotTimerConsumerState>,
+}
+
+impl OneShotTimerConsumer {
+    /// Create an unbound consumer without allocation.
+    pub const fn new() -> Self {
+        Self {
+            state: IrqSpinLock::new(OneShotTimerConsumerState::Unbound),
+        }
+    }
+
+    /// Bind the exact timer identity and event expected from one future IRQ.
+    ///
+    /// Callers must keep local IRQ delivery masked from successful scheduling
+    /// through this binding so the timer cannot fire into an unbound consumer.
+    pub fn bind<C: LocalIrqControl>(
+        &self,
+        irq: &C,
+        id: TimerId,
+        event: TimerEvent,
+    ) -> Result<(), OneShotTimerConsumerError> {
+        let mut state = self.state.lock(irq);
+        if *state != OneShotTimerConsumerState::Unbound {
+            return Err(OneShotTimerConsumerError::State { actual: *state });
+        }
+        *state = OneShotTimerConsumerState::Bound { id, event };
+        Ok(())
+    }
+
+    /// Consume one exact due batch and retain its completion evidence.
+    pub fn consume<C: LocalIrqControl, const CAPACITY: usize>(
+        &self,
+        irq: &C,
+        batch: &FiredTimerBatch<CAPACITY>,
+    ) -> Result<FiredTimer, OneShotTimerConsumerError> {
+        if batch.len() != 1 {
+            return Err(OneShotTimerConsumerError::BatchLength {
+                actual: batch.len(),
+            });
+        }
+        let observed = batch
+            .iter()
+            .next()
+            .expect("a batch of length one must contain one timer");
+        let mut state = self.state.lock(irq);
+        let OneShotTimerConsumerState::Bound {
+            id: expected_id,
+            event: expected_event,
+        } = *state
+        else {
+            return Err(OneShotTimerConsumerError::State { actual: *state });
+        };
+        if observed.id() != expected_id {
+            return Err(OneShotTimerConsumerError::TimerMismatch {
+                expected: expected_id,
+                observed: observed.id(),
+            });
+        }
+        if observed.event() != expected_event {
+            return Err(OneShotTimerConsumerError::EventMismatch {
+                expected: expected_event,
+                observed: observed.event(),
+            });
+        }
+        *state = OneShotTimerConsumerState::Fired { timer: observed };
+        Ok(observed)
+    }
+
+    /// Return a stable snapshot while preserving the exact IRQ mask state.
+    pub fn state<C: LocalIrqControl>(&self, irq: &C) -> OneShotTimerConsumerState {
+        *self.state.lock(irq)
+    }
+}
+
+impl Default for OneShotTimerConsumer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 struct TimerState<const CAPACITY: usize, H> {
     clock: MonotonicClock,
     queue: TimerQueue<CAPACITY>,
@@ -347,7 +484,8 @@ mod tests {
     use crate::time::{TickInstant, TimerEvent, TimerQueueError};
 
     use super::{
-        FiredTimerBatch, LockedTimerQueue, TimerHardware, TimerProgramming, TimerProgrammingPermit,
+        FiredTimerBatch, LockedTimerQueue, OneShotTimerConsumer, OneShotTimerConsumerError,
+        OneShotTimerConsumerState, TimerHardware, TimerProgramming, TimerProgrammingPermit,
         TimerServiceError,
     };
 
@@ -441,6 +579,141 @@ mod tests {
         // SAFETY: each test models one published, active interrupt route for
         // its uniquely owned timer and retains the proof on this host thread.
         unsafe { TimerProgrammingPermit::assume_ready() }
+    }
+
+    #[test]
+    fn one_shot_consumer_accepts_only_its_exact_bound_generation() {
+        let operations = RefCell::new(Vec::new());
+        let now = Cell::new(TickInstant::from_raw(1));
+        let irq = MockIrq {
+            masked: Cell::new(false),
+            operations: &operations,
+        };
+        let service = service::<1>(&now, &operations, Vec::new());
+        let permit = programming_permit();
+        let event = TimerEvent::new(0x5048_4f45_4e49_5801);
+        let id = service
+            .schedule(&irq, &permit, TickInstant::from_raw(10), event)
+            .unwrap();
+        let consumer = OneShotTimerConsumer::new();
+
+        assert_eq!(consumer.bind(&irq, id, event), Ok(()));
+        assert_eq!(
+            consumer.bind(&irq, id, event),
+            Err(OneShotTimerConsumerError::State {
+                actual: OneShotTimerConsumerState::Bound { id, event },
+            })
+        );
+        now.set(TickInstant::from_raw(10));
+        let batch = service.handle_interrupt(&irq, &permit).unwrap();
+        let fired = consumer.consume(&irq, &batch).unwrap();
+        assert_eq!(fired.id(), id);
+        assert_eq!(fired.deadline(), TickInstant::from_raw(10));
+        assert_eq!(fired.event(), event);
+        assert_eq!(
+            consumer.state(&irq),
+            OneShotTimerConsumerState::Fired { timer: fired }
+        );
+        assert_eq!(
+            consumer.consume(&irq, &batch),
+            Err(OneShotTimerConsumerError::State {
+                actual: OneShotTimerConsumerState::Fired { timer: fired },
+            })
+        );
+    }
+
+    #[test]
+    fn one_shot_consumer_rejects_empty_or_multiple_batches_without_completion() {
+        let operations = RefCell::new(Vec::new());
+        let now = Cell::new(TickInstant::from_raw(1));
+        let irq = MockIrq {
+            masked: Cell::new(false),
+            operations: &operations,
+        };
+        let service = service::<2>(&now, &operations, Vec::new());
+        let permit = programming_permit();
+        let event = TimerEvent::new(1);
+        let id = service
+            .schedule(&irq, &permit, TickInstant::from_raw(10), event)
+            .unwrap();
+        service
+            .schedule(&irq, &permit, TickInstant::from_raw(10), TimerEvent::new(2))
+            .unwrap();
+        let consumer = OneShotTimerConsumer::new();
+        consumer.bind(&irq, id, event).unwrap();
+
+        let empty = service.handle_interrupt(&irq, &permit).unwrap();
+        assert_eq!(
+            consumer.consume(&irq, &empty),
+            Err(OneShotTimerConsumerError::BatchLength { actual: 0 })
+        );
+        now.set(TickInstant::from_raw(10));
+        let multiple = service.handle_interrupt(&irq, &permit).unwrap();
+        assert_eq!(
+            consumer.consume(&irq, &multiple),
+            Err(OneShotTimerConsumerError::BatchLength { actual: 2 })
+        );
+        assert_eq!(
+            consumer.state(&irq),
+            OneShotTimerConsumerState::Bound { id, event }
+        );
+    }
+
+    #[test]
+    fn one_shot_consumer_rejects_stale_identity_and_wrong_event_transactionally() {
+        let operations = RefCell::new(Vec::new());
+        let now = Cell::new(TickInstant::from_raw(1));
+        let irq = MockIrq {
+            masked: Cell::new(false),
+            operations: &operations,
+        };
+        let service = service::<1>(&now, &operations, Vec::new());
+        let permit = programming_permit();
+        let stale_event = TimerEvent::new(10);
+        let stale_id = service
+            .schedule(&irq, &permit, TickInstant::from_raw(5), stale_event)
+            .unwrap();
+        assert_eq!(service.cancel(&irq, &permit, stale_id), Ok(stale_event));
+        let live_event = TimerEvent::new(20);
+        let live_id = service
+            .schedule(&irq, &permit, TickInstant::from_raw(10), live_event)
+            .unwrap();
+        let stale_consumer = OneShotTimerConsumer::new();
+        stale_consumer.bind(&irq, stale_id, live_event).unwrap();
+        now.set(TickInstant::from_raw(10));
+        let batch = service.handle_interrupt(&irq, &permit).unwrap();
+        assert_eq!(
+            stale_consumer.consume(&irq, &batch),
+            Err(OneShotTimerConsumerError::TimerMismatch {
+                expected: stale_id,
+                observed: live_id,
+            })
+        );
+        assert_eq!(
+            stale_consumer.state(&irq),
+            OneShotTimerConsumerState::Bound {
+                id: stale_id,
+                event: live_event,
+            }
+        );
+
+        let wrong_event = TimerEvent::new(21);
+        let event_consumer = OneShotTimerConsumer::new();
+        event_consumer.bind(&irq, live_id, wrong_event).unwrap();
+        assert_eq!(
+            event_consumer.consume(&irq, &batch),
+            Err(OneShotTimerConsumerError::EventMismatch {
+                expected: wrong_event,
+                observed: live_event,
+            })
+        );
+        assert_eq!(
+            event_consumer.state(&irq),
+            OneShotTimerConsumerState::Bound {
+                id: live_id,
+                event: wrong_event,
+            }
+        );
     }
 
     #[test]

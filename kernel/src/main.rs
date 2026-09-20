@@ -54,7 +54,9 @@ use phoenix_kernel::platform::aarch64::qemu_virt::EarlyPl011;
         not(any(feature = "el0-probe", feature = "loaded-init-probe"))
     )
 ))]
-use phoenix_kernel::timer_service::LockedTimerQueue;
+use phoenix_kernel::timer_service::{
+    LockedTimerQueue, OneShotTimerConsumer, OneShotTimerConsumerError,
+};
 
 #[cfg(all(
     feature = "kernel-map-probe",
@@ -427,6 +429,14 @@ static mut BOOT_INTERRUPT_HANDLE: MaybeUninit<BootInterruptHandle> = MaybeUninit
     )
 ))]
 static BOOT_INTERRUPT_PUBLISHED: AtomicBool = AtomicBool::new(false);
+#[cfg(any(
+    feature = "loaded-init-probe",
+    all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    )
+))]
+static BOOT_TIMER_CONSUMER: OneShotTimerConsumer = OneShotTimerConsumer::new();
 
 #[cfg(any(
     feature = "loaded-init-probe",
@@ -439,7 +449,7 @@ enum BootIrqFailure {
     Unpublished,
     Runtime(BootInterruptError),
     Unexpected { intid: u32 },
-    UnhandledTimerEvents { count: usize },
+    TimerConsumer(OneShotTimerConsumerError),
 }
 #[cfg(all(
     feature = "kernel-map-probe",
@@ -1313,9 +1323,10 @@ fn dispatch_boot_irq(slot: Option<VectorSlot>) -> Option<Result<(), BootIrqFailu
     Some(match handle.dispatch_one(&local_irq) {
         Ok(InterruptDispatch::Spurious { .. }) => Ok(()),
         Ok(InterruptDispatch::Timer(batch)) if batch.is_empty() => Ok(()),
-        Ok(InterruptDispatch::Timer(batch)) => {
-            Err(BootIrqFailure::UnhandledTimerEvents { count: batch.len() })
-        }
+        Ok(InterruptDispatch::Timer(batch)) => BOOT_TIMER_CONSUMER
+            .consume(&local_irq, &batch)
+            .map(|_| ())
+            .map_err(BootIrqFailure::TimerConsumer),
         Ok(InterruptDispatch::Unexpected { intid }) => Err(BootIrqFailure::Unexpected { intid }),
         Err(error) => Err(BootIrqFailure::Runtime(error)),
     })
@@ -1386,8 +1397,8 @@ pub unsafe extern "C" fn phoenix_exception_dispatch(frame: *mut ExceptionFrame, 
             BootIrqFailure::Unexpected { intid } => {
                 let _ = writeln!(console, "irq: unexpected intid={intid}");
             }
-            BootIrqFailure::UnhandledTimerEvents { count } => {
-                let _ = writeln!(console, "irq: {count} timer event(s) have no boot consumer");
+            BootIrqFailure::TimerConsumer(error) => {
+                let _ = writeln!(console, "irq: timer consumer error {error:?}");
             }
         }
     }

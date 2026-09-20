@@ -46,9 +46,10 @@ trust the interrupted stack.
 The default Rust dispatcher is deliberately fatal for every asynchronous slot. Final-map variants
 add an Acquire-checked lookup for their published but inactive interrupt runtime: special INTIDs
 and empty timer batches could return, while an unpublished/error state, unexpected completed INTID,
-or due event without a boot consumer emits the IRQ-specific `PHOENIX_EXCEPTION` path and halts.
-Because GIC delivery and `DAIF.I` remain closed, this path has only been Cross Compiled. The opt-in EL0
-paths first recognize their narrow `SVC #0` contract and exercise the assembly return epilogue.
+or due batch rejected by the installed exact one-shot consumer emits the IRQ-specific
+`PHOENIX_EXCEPTION` path and halts. Because the consumer remains unbound and GIC delivery plus
+`DAIF.I` remain closed, this path has only been Cross Compiled. The opt-in EL0 paths first recognize
+their narrow `SVC #0` contract and exercise the assembly return epilogue.
 Other consistent lower-AArch64 synchronous exceptions are classified as terminal user faults;
 current-EL synchronous faults, FIQ, SError, and inconsistent exception classes retain the fatal
 kernel path. General recovery and production syscall dispatch are not enabled. See
@@ -115,8 +116,8 @@ fault output remain Runtime Pending in `docs/RUNTIME_VALIDATION.md`.
 - validate vector installation and every save/restore path on QEMU;
 - choose dedicated exception-stack and nested-exception policies;
 - dispatch current-EL faults, FIQ, and SError separately;
-- activate the published IRQ lookup only after adding a bounded timer-event consumer, then validate
-  IRQ return and fatal diagnostics on target;
+- schedule and bind the installed one-shot consumer before activating the published IRQ lookup,
+  then validate IRQ return and fatal diagnostics on target;
 - validate `FAR_EL1` only for classes and syndrome values where the architecture defines it;
 - expand diagnostic formatting with class-specific detail without allocation;
 - add recoverable user page-fault policy before terminal classification;

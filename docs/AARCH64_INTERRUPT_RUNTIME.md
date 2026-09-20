@@ -5,8 +5,8 @@ controller and one locked physical-timer service at a pinned address. It resolve
 cycle between the two devices: vector lookup is established while GIC delivery is closed, and
 timer programming becomes possible only after matching GIC activation succeeds. Both final-map
 boot paths now construct and publish the real pinned owner and IRQ lookup, but do not activate GIC
-delivery, program a deadline, or unmask `DAIF.I`; target publication and delivery remain Runtime
-Pending.
+delivery, bind/schedule the installed one-shot consumer, program a deadline, or unmask `DAIF.I`;
+target publication and delivery remain Runtime Pending.
 
 ## Current implementation
 
@@ -38,6 +38,11 @@ Every command-capable operation requires the private, non-transferable `TimerPro
 held only by the active runtime. `quiesce` rejects pending timers and applies an explicit `Disarm`
 transaction before the permit is revoked.
 
+That module also supplies `OneShotTimerConsumer`, an allocation-free IRQ-safe sink for the first
+bounded event. It binds one exact `TimerId` generation and `TimerEvent`, accepts only a one-record
+matching due batch, and retains the complete fired record. Validation failure or repeated delivery
+does not manufacture completion.
+
 On AArch64, `PhysicalTimer` is now deliberately non-`Send` and non-`Sync` and implements
 `TimerHardware`. `Arm` programs `CNTP_CVAL_EL0` while signaling is masked, then unmasks the timer;
 `Disarm` disables and masks it. The unsafe hardware call remains reachable only through the locked
@@ -48,16 +53,18 @@ architectural traps remain outside that error model.
 and a separate permanent published handle. After final TTBR1 activation and bounded GIC
 preparation, the single boot CPU claims `PhysicalTimer`, explicitly disables/masks it, reads the
 initial physical counter, builds the locked service, pins the combined runtime in static storage,
-and publishes its handle. A Release/Acquire atomic flag prevents the common exception dispatcher
-from reading the handle before initialization. `PHOENIX_GIC_PREPARED` followed by
+publishes its handle, and installs a permanent initially unbound one-shot consumer. A
+Release/Acquire atomic flag prevents the common exception dispatcher from reading the handle before
+initialization. `PHOENIX_GIC_PREPARED` followed by
 `PHOENIX_IRQ_RUNTIME_PUBLISHED` is emitted only after this closed-delivery publication completes.
 
 Every IRQ vector already reaches `phoenix_exception_dispatch`. In a final-map build it now checks
 the publication flag and delegates IRQ slots to `dispatch_one`; synchronous syscall and user-fault
 ordering is unchanged. A special INTID or empty timer batch may return. An unexpected completed
-INTID, a nonempty batch with no boot consumer, an unpublished lookup, or any runtime failure emits
-the normal `PHOENIX_EXCEPTION` terminal path with IRQ-specific detail. This policy is dormant
-because the boot path never activates delivery or unmasks IRQs.
+INTID, a timer batch rejected by the exact one-shot consumer, an unpublished lookup, or any runtime
+failure emits the normal `PHOENIX_EXCEPTION` terminal path with IRQ-specific detail. The consumer
+is invoked only after `dispatch_one` has completed EOI and released both device locks. This policy
+is dormant because boot leaves the consumer unbound and never activates delivery or unmasks IRQs.
 
 ## Invariants and failure semantics
 
@@ -71,6 +78,9 @@ because the boot path never activates delivery or unmasks IRQs.
   operations. Their handles and the concrete GIC/timer backends cannot move to another CPU.
 - The outer runtime lock is always acquired before the inner timer lock. Neither path acquires them
   in reverse order, sleeps, allocates, schedules, or invokes a callback while guarded.
+- The one-shot consumer lock is acquired only after the runtime returned the completed due batch;
+  it is never nested inside either device lock. Binding must occur with local IRQs continuously
+  masked from successful scheduling until the exact ID/event has been stored.
 - The outer lock masks local IRQ delivery before the distributor gate opens and retains masking
   until the complete transition is published in the slot. `activate` and `deactivate` preserve the
   caller's exact preceding mask state; they do not independently enable `DAIF.I`.
@@ -91,6 +101,9 @@ because the boot path never activates delivery or unmasks IRQs.
   cancel or dispatch every owned timer before retrying.
 - Due batches contain data only. Callbacks run after the runtime and timer guards have released and
   after successful GIC completion.
+- A one-shot completion requires exactly one due record matching both the bound timer generation
+  and event value. Invalid cardinality, stale IDs, wrong events, and repeated delivery preserve the
+  prior state and return explicit errors.
 
 ## Validation
 
@@ -99,20 +112,22 @@ CPU activation, timer reprogramming before EOI, timer-disarm-before-CPU-before-d
 shutdown, exact prior IRQ-mask restoration, pending-timer shutdown rejection and retry, terminal
 activation failure, and terminal EOI failure. The GIC tests separately verify that abandoning an
 acknowledgement blocks both a second acknowledge and shutdown without closing active gates.
+One-shot consumer tests cover one-way binding, exact retained completion, empty/multiple batches,
+stale IDs, wrong events, repeated consumption, and consumer acquisition strictly after EOI.
 
 Canonical checks cross-compile `PhysicalTimer`'s `TimerHardware` adapter, the permit-gated service,
 and the runtime state machine for every AArch64 kernel variant. The final-map and loaded-init
 variants additionally Cross Compile the static owner, physical counter/timer initialization,
-Release/Acquire handle publication, and common IRQ dispatcher branch; static ELF inspection keeps
-requiring both publication markers. These results are Host Tested, Cross Compiled, and ELF
-Inspected only; no new QEMU command was run.
+Release/Acquire handle publication, installed consumer, and common IRQ dispatcher branch; static
+ELF inspection keeps requiring both publication markers. These results are Host Tested, Cross
+Compiled, and ELF Inspected only; no new QEMU command was run.
 
 ## TODO
 
 - Add an explicit final transition that unmasks `DAIF.I` only after runtime publication and
   activation, and a symmetric removal protocol that prevents new handler entry.
-- Add a bounded boot scheduling API and event consumer before activation; the current dispatcher
-  deliberately terminates if it observes a nonempty due batch.
+- Add a bounded boot scheduling API that binds the returned ID/event to the installed consumer
+  before activation and before any IRQ can be recognized.
 - Replace the current terminal diagnostic policy with the scheduler-era policy for an unexpected
   completed INTID or acknowledge/EOI failure.
 - Connect returned timer events to sleeping kernel threads and the tickless scheduler.
@@ -121,8 +136,9 @@ Inspected only; no new QEMU command was run.
 
 ## Deliberately skipped
 
-This checkpoint does not activate the retained boot GIC, issue `Arm`, program a target comparator,
-unmask `DAIF.I`, observe or return through a real IRQ, or run QEMU. It does not add nested
+This checkpoint does not bind the boot consumer, activate the retained boot GIC, issue `Arm`,
+program a target comparator, unmask `DAIF.I`, observe or return through a real IRQ, or run QEMU. It
+does not add nested
 interrupts, FIQ/NMI handling, SMP/per-CPU slots, scheduler callbacks, dynamic timer capacity,
 allocation in interrupt context, or a general interrupt-controller abstraction. The final-map and
 loaded-init paths retain the combined runtime in its published `Prepared` phase with delivery
