@@ -453,6 +453,10 @@ impl KernelVariant {
         matches!(self, Self::KernelMapProbe)
     }
 
+    const fn expects_gic_preparation(self) -> bool {
+        matches!(self, Self::KernelMapProbe | Self::LoadedInitProbe)
+    }
+
     const fn expected_user_fault_sentinel(self) -> Option<(&'static str, &'static str)> {
         match self {
             Self::El0Probe => Some((qemu::USER_FAULT_SENTINEL, qemu::EL0_FAILURE_SENTINEL)),
@@ -1250,6 +1254,22 @@ fn inspect_kernel_variant(variant: KernelVariant) -> bool {
             } else {
                 println!("ok: kernel-map {label} sentinel is embedded: {sentinel}");
             }
+        }
+    }
+
+    if variant.expects_gic_preparation()
+        && let Some(bytes) = kernel_bytes.as_deref()
+    {
+        let sentinel = qemu::GIC_PREPARED_SENTINEL;
+        if bytes
+            .windows(sentinel.len())
+            .all(|window| window != sentinel.as_bytes())
+        {
+            errors.push(format!(
+                "final-map ELF does not contain required GIC preparation sentinel: {sentinel}"
+            ));
+        } else {
+            println!("ok: GIC preparation sentinel is embedded: {sentinel}");
         }
     }
 

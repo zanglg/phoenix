@@ -33,7 +33,10 @@ numbers and remains explicitly unstable before 1.0.0. During construction, chang
   best-effort recovery failures.
 - Boot-CPU GICv3 redistributor selection from packed `MPIDR_EL1` affinity with PIDR/TYPER checks,
   VLPI-aware bounded scanning, exact final-TTBR1 GICD/GICR L3 device mappings, retained layout
-  evidence, and a concrete bounds-checked volatile MMIO/`ICC_*_EL1` backend that remains inactive.
+  evidence, and a concrete bounds-checked volatile MMIO/`ICC_*_EL1` backend.
+- EL2 bootstrap permission for the GIC system-register interface plus one-time post-TTBR1 GICv3
+  preparation in both final-map paths, with checked IRQ masking, a 100,000-read per-wait budget,
+  permanently retained closed-delivery ownership, and an ordered static/runtime marker.
 - Checked architecture-neutral physical/virtual addresses, pages, frames, and half-open ranges.
 - Strict allocation-free DTB parsing with boot CPU, bootargs, memory-region, and reservation extraction.
 - Fixed-capacity physical memory normalization, conservative reservation, and first-fit frame allocation.

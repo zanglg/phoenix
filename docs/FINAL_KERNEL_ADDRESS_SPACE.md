@@ -3,8 +3,8 @@
 This document describes Phoenix's implemented final `TTBR1_EL1` hierarchy for the pinned
 AArch64 QEMU `virt` platform. Planning, allocation, materialization, cross-compilation, and ELF
 inspection are complete. Publication on the recorded QEMU 9.1.3 AArch64 CPU path is Runtime
-Verified for the historical five-table layout; the current eight-table GIC extension, negative
-permission cases, and guard-fault probes remain Runtime Pending.
+Verified for the historical five-table layout; the current eight-table GIC mapping/preparation,
+negative permission cases, and guard-fault probes remain Runtime Pending.
 
 ## Current implementation
 
@@ -92,9 +92,10 @@ publication operation. Publication executes:
 
 Both final-map runtime owner variants also retain one platform-created runtime-stack pool for the
 reserved arena and the copied physical/virtual GIC layout. The GIC layout is descriptive evidence,
-not register authorization. The unsafe non-copying `MappedGicV3Registers` backend can later bind it
-to the exact active table owner under unique GICD/GICR/current-CPU ownership; this checkpoint does
-not construct it. The stack pool establishes virtual-slot ownership but does not allocate stack
+not register authorization. After TTBR1 activation, each path uses the unsafe non-copying
+`MappedGicV3Registers` constructor to bind the exact active table owner under unique
+GICD/GICR/current-CPU ownership, completes bounded preparation, and permanently retains the
+closed-gate type state in a separate static owner. The stack pool establishes virtual-slot ownership but does not allocate stack
 frames or by itself authorize live descriptor mutation. A separate unsafe AArch64 stack mapper can
 bind the exact retained table owner, its final-direct-map descriptor access, and serialized TLB
 maintenance. It changes only prelinked L3 leaves after completing all fallible checks. The focused
@@ -123,10 +124,12 @@ The `kernel-map-probe` image uses the real boot DTB, current CPU affinity, GICR 
 kernel linker bounds, reservation-aware frame allocator, and bootstrap physical-memory backend.
 Before publication it emits
 `PHOENIX_KERNEL_MAP_ENTER`. After the TTBR1 switch it reuses the mapped kernel text, rodata, stack,
-data, and PL011 device page, initializes and exercises the bounded heap, emits
+data, PL011, GICD, and selected GICR device pages. It checks `DAIF.I`, runs the fixed-budget GICv3
+preparation transaction, permanently retains the closed-gate owner, and emits
+`PHOENIX_GIC_PREPARED`. It then initializes and exercises the bounded heap, emits
 `PHOENIX_KERNEL_HEAP_OK`, publishes and retires one owned stack, verifies its virtual/physical
-alias, scrubs and releases it, emits `PHOENIX_KERNEL_STACK_OK`, then emits
-`PHOENIX_KERNEL_MAP_OK` and halts.
+alias, scrubs and releases it, emits `PHOENIX_KERNEL_STACK_OK`, then emits `PHOENIX_KERNEL_MAP_OK`
+and halts.
 
 When QEMU is available, run:
 
@@ -134,9 +137,9 @@ When QEMU is available, run:
 cargo xtask test-kernel-map
 ```
 
-The bounded harness cannot pass on the earlier boot, enter, heap, or stack marker; map-enter, heap,
-and stack progress markers must appear in order before terminal success. Panic, exception, early
-exit, timeout, and excessive output are failures. Output is retained in
+The bounded harness cannot pass on the earlier boot, enter, GIC, heap, or stack marker; map-enter,
+GIC-prepared, heap, and stack progress markers must appear in order before terminal success.
+Panic, exception, early exit, timeout, and excessive output are failures. Output is retained in
 `target/phoenix/aarch64-unknown-none-softfloat/debug/qemu-kernel-map.log`.
 
 The `loaded-init-probe` uses the same builder and owner in its end-to-end path. It constructs both
@@ -157,25 +160,25 @@ mapper model injects publication and retirement reads, verifies zero partial wri
 rejects an altered live descriptor, and requires a completed maintenance batch before frame release.
 The GIC additions cover bounded bootstrap register addresses, MPIDR affinity packing, VLPI-aware
 redistributor selection and its negative cases, exact page-level GIC translations, and concrete
-backend register bounds. The Cross Compiled/ELF Inspected focused image includes the new discovery
-and mapping path plus a bounded real-backend stack transaction and its required marker, but static
-inclusion does not prove execution.
+backend register bounds. The Cross Compiled/ELF Inspected focused image includes EL2 SRE setup,
+the new discovery and mapping path, one-time retained preparation, and a bounded real-backend
+stack transaction with required ordered markers, but static inclusion does not prove execution.
 
 The focused kernel image is Cross Compiled and ELF Inspected. Static checks require every
 permission-domain symbol, page alignment and ordering, the first-2-MiB image bound, the expected
-load addresses, and the heap, stack, and final success sentinels. On the recorded QEMU 9.1.3 `virt-9.1` run,
+load addresses, and the GIC, heap, stack, and final success sentinels. On the recorded QEMU 9.1.3 `virt-9.1` run,
 `cargo xtask test-kernel-map` reported root `0x0000000040000000`, five tables, 767 leaves, and
 the ordered enter/success markers after TTBR1 publication. That run predates the new heap marker,
 the two empty runtime-stack tables, boot-CPU GIC discovery, and 48 exact GIC device leaves. It
 remains historical final-table evidence but does not validate the current eight-table/815-leaf
-heap, stack, and GIC-extended probe.
+GIC-prepared, heap, and stack probe.
 
 ## TODO
 
 - remove the temporary TTBR0 aliases when no low virtual pointer or bootstrap handle survives;
 - migrate remaining post-switch raw helper users to the retained final-direct-map capability and
   rerun its valid/invalid target paths;
-- rerun the heap, stack, and GIC-extended final-map probe and use observed consumers to replace its
+- rerun the GIC-prepared, heap, and stack final-map probe and use observed consumers to replace its
   conformance sizing with an explicit production policy;
 - derive the physical-address size from `ID_AA64MMFR0_EL1.PARange` before accepting RAM above
   the current 32-bit IPS envelope;
@@ -198,7 +201,7 @@ substitute for firmware-reserved or allocator-owned frames.
 ## Runtime status
 
 `RUN-MMU-001` remains Runtime Verified by the recorded focused probe at its historical five-table
-scope. The current eight-table GIC-extended image has not executed. `RUN-MMU-002` remains open for
+scope. The current eight-table GIC-prepared image has not executed. `RUN-MMU-002` remains open for
 final TTBR0 alias retirement, `RUN-MMU-003` covers the new final-map access capability,
 `RUN-IRQ-001` covers target GIC selection/mapping/access, and controlled permission/guard faults
 remain separate Pending work.

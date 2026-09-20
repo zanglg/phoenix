@@ -11,6 +11,8 @@ state and negative paths must not be inferred from that positive evidence.
 - Raw image physical load address: `0x40080000`.
 - Linked virtual entry: `0xffffff8040080000` at `_start`.
 - The entry CPU must already be in AArch64 state at EL1 or non-secure EL2. EL3 is unsupported.
+- EL2 entry preserves `ICC_SRE_EL2` and sets `SRE`, `DFB`, `DIB`, and `Enable` before the drop to
+  EL1. Direct EL1 entry requires firmware/higher ELs to permit `ICC_SRE_EL1` system-register use.
 - Stage-1 translation must be disabled at entry. Instruction and data caches must be disabled, or
   firmware must have completed the cache maintenance needed to make the loaded image coherent.
 - Asynchronous exceptions are masked during bootstrap; Rust installs vectors before any later
@@ -43,7 +45,9 @@ Before either final-map consumer replaces TTBR1, it uses the low device identity
 read-only, naturally aligned GICR PIDR2/TYPER discovery. Access is bounded below 1 GiB, selects the
 current CPU by `MPIDR_EL1` affinity, and is dropped before final-table publication. This is Cross
 Compiled and Host Tested through an abstract register fixture; it remains Runtime Pending and does
-not initialize or enable the GIC.
+not enable GIC interrupt delivery. After final TTBR1 publication, the final-map consumers check
+that `DAIF.I` remains masked, perform finite-budget GIC preparation, and retain the prepared owner
+with both Group-1 gates closed. That target path is Cross Compiled but remains Runtime Pending.
 
 The linker reserves a zeroed BSS, one page-aligned 4 KiB guard frame, and a 1 MiB,
 16-byte-aligned boot-construction stack. The coarse bootstrap mappings still map the guard; the

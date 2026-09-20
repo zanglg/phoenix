@@ -5,6 +5,9 @@
 compile_error!("the Phoenix kernel binary currently supports only AArch64");
 
 use core::fmt::Write;
+use core::panic::PanicInfo;
+#[cfg(feature = "loaded-init-probe")]
+use core::sync::atomic::{AtomicBool, Ordering};
 #[cfg(any(
     feature = "loaded-init-probe",
     all(
@@ -12,12 +15,20 @@ use core::fmt::Write;
         not(any(feature = "el0-probe", feature = "loaded-init-probe"))
     )
 ))]
-use core::mem::MaybeUninit;
-use core::panic::PanicInfo;
-#[cfg(feature = "loaded-init-probe")]
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::{mem::MaybeUninit, num::NonZeroU32};
 
 use phoenix_kernel::arch::aarch64::exception::{ExceptionFrame, VectorSlot};
+#[cfg(any(
+    feature = "loaded-init-probe",
+    all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    )
+))]
+use phoenix_kernel::arch::aarch64::{
+    gicv3::{GicV3Configuration, MappedGicV3Registers, PreparedGicV3, prepare},
+    irqs_masked,
+};
 use phoenix_kernel::arch::aarch64::{halt, install_exception_vectors};
 use phoenix_kernel::build_info::BuildInfo;
 #[cfg(feature = "loaded-init-probe")]
@@ -146,6 +157,14 @@ const KERNEL_HEAP_SUCCESS_SENTINEL: &str = "PHOENIX_KERNEL_HEAP_OK";
     not(any(feature = "el0-probe", feature = "loaded-init-probe"))
 ))]
 const KERNEL_STACK_SUCCESS_SENTINEL: &str = "PHOENIX_KERNEL_STACK_OK";
+#[cfg(any(
+    feature = "loaded-init-probe",
+    all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    )
+))]
+const GIC_PREPARED_SENTINEL: &str = "PHOENIX_GIC_PREPARED";
 #[cfg(all(feature = "el0-probe", not(feature = "loaded-init-probe")))]
 const EL0_ENTER_SENTINEL: &str = "PHOENIX_EL0_ENTER";
 #[cfg(all(feature = "el0-probe", not(feature = "loaded-init-probe")))]
@@ -200,7 +219,7 @@ struct InitRuntime {
     address_space: InitAddressSpace,
     kernel_tables: FinalKernelTables,
     direct_map_layout: FinalDirectMapLayout<INIT_MEMORY_RANGES>,
-    _gic: BootGicV3Discovery,
+    gic: BootGicV3Discovery,
     _kernel_stack_pool: QemuVirtKernelStackPool,
     files: ReadOnlyFileTable<'static, INIT_OPEN_FILES>,
     _allocator: FrameAllocator<INIT_MEMORY_RANGES>,
@@ -299,6 +318,38 @@ const KERNEL_HEAP_ALLOCATIONS: usize = 4;
     )
 ))]
 type FinalKernelTables = MaterializedKernelPageTables<FINAL_KERNEL_TABLE_CAPACITY>;
+#[cfg(any(
+    feature = "loaded-init-probe",
+    all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    )
+))]
+type BootGicV3Registers = MappedGicV3Registers<'static, FINAL_KERNEL_TABLE_CAPACITY>;
+#[cfg(any(
+    feature = "loaded-init-probe",
+    all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    )
+))]
+type BootPreparedGicV3 = PreparedGicV3<BootGicV3Registers>;
+#[cfg(any(
+    feature = "loaded-init-probe",
+    all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    )
+))]
+const GIC_PREPARATION_POLL_BUDGET: u32 = 100_000;
+#[cfg(any(
+    feature = "loaded-init-probe",
+    all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    )
+))]
+static mut BOOT_PREPARED_GICV3: MaybeUninit<BootPreparedGicV3> = MaybeUninit::uninit();
 #[cfg(all(
     feature = "kernel-map-probe",
     not(any(feature = "el0-probe", feature = "loaded-init-probe"))
@@ -306,7 +357,7 @@ type FinalKernelTables = MaterializedKernelPageTables<FINAL_KERNEL_TABLE_CAPACIT
 struct KernelMapRuntime {
     tables: FinalKernelTables,
     direct_map_layout: FinalDirectMapLayout<KERNEL_MAP_MEMORY_RANGES>,
-    _gic: BootGicV3Discovery,
+    gic: BootGicV3Discovery,
     allocator: FrameAllocator<KERNEL_MAP_MEMORY_RANGES>,
     heap: KernelHeap<KERNEL_HEAP_ALLOCATIONS>,
     kernel_stack_pool: QemuVirtKernelStackPool,
@@ -318,6 +369,7 @@ struct KernelMapRuntime {
 struct KernelMapRuntimeAccess {
     tables: &'static FinalKernelTables,
     direct_map_layout: FinalDirectMapLayout<KERNEL_MAP_MEMORY_RANGES>,
+    gic: BootGicV3Discovery,
     allocator: &'static mut FrameAllocator<KERNEL_MAP_MEMORY_RANGES>,
     heap: &'static mut KernelHeap<KERNEL_HEAP_ALLOCATIONS>,
     kernel_stack_pool: &'static mut QemuVirtKernelStackPool,
@@ -504,7 +556,7 @@ fn run_kernel_map_probe(boot_argument: usize, console: &mut Console<EarlyPl011>)
         install_kernel_map_runtime(KernelMapRuntime {
             tables: materialized,
             direct_map_layout,
-            _gic: gic,
+            gic,
             allocator,
             heap: KernelHeap::new(),
             kernel_stack_pool: runtime_kernel_stack_pool()
@@ -527,6 +579,19 @@ fn run_kernel_map_probe(boot_argument: usize, console: &mut Console<EarlyPl011>)
     unsafe {
         runtime.tables.activate();
     }
+
+    // SAFETY: the one-time runtime permanently owns the active table hierarchy
+    // and copied GIC discovery evidence. IRQs remain masked on the only CPU,
+    // and no other GIC register owner or handler exists.
+    let prepared_gic = unsafe { prepare_and_install_boot_gicv3(runtime.tables, runtime.gic) };
+    let _ = writeln!(
+        console,
+        "gicv3: timer-intid={} poll-budget={} delivery=closed",
+        prepared_gic.configuration().timer().intid(),
+        prepared_gic.configuration().poll_budget(),
+    );
+    let _ = writeln!(console, "{GIC_PREPARED_SENTINEL}");
+    console.sink_mut().flush();
 
     initialize_and_exercise_kernel_heap(
         runtime.tables,
@@ -565,10 +630,60 @@ unsafe fn install_kernel_map_runtime(runtime: KernelMapRuntime) -> KernelMapRunt
         KernelMapRuntimeAccess {
             tables: &*core::ptr::addr_of!((*runtime).tables),
             direct_map_layout: *core::ptr::addr_of!((*runtime).direct_map_layout),
+            gic: *core::ptr::addr_of!((*runtime).gic),
             allocator: &mut *core::ptr::addr_of_mut!((*runtime).allocator),
             heap: &mut *core::ptr::addr_of_mut!((*runtime).heap),
             kernel_stack_pool: &mut *core::ptr::addr_of_mut!((*runtime).kernel_stack_pool),
         }
+    }
+}
+
+#[cfg(any(
+    feature = "loaded-init-probe",
+    all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    )
+))]
+unsafe fn prepare_and_install_boot_gicv3(
+    tables: &'static FinalKernelTables,
+    discovery: BootGicV3Discovery,
+) -> &'static BootPreparedGicV3 {
+    assert!(
+        irqs_masked(),
+        "boot GICv3 preparation requires DAIF.I to remain masked"
+    );
+    let poll_budget = NonZeroU32::new(GIC_PREPARATION_POLL_BUDGET)
+        .expect("the fixed GICv3 poll budget is nonzero");
+    let configuration = GicV3Configuration::new(
+        discovery.topology().timers().non_secure_physical(),
+        poll_budget,
+    );
+    // SAFETY: `tables` is the permanently retained active TTBR1 owner, its
+    // validated plan maps both exact ranges as Device-nGnRnE, the copied
+    // discovery selected this CPU's GICR, IRQs are checked masked above, and
+    // the one-time boot path grants this backend unique GIC register access.
+    let backend =
+        unsafe { MappedGicV3Registers::assume_active(tables, discovery.layout().registers()) };
+    // SAFETY: the preceding construction establishes unique mapped register
+    // ownership for the single boot CPU, DAIF.I is masked, and no interrupt
+    // handler or competing CPU can access the controller during preparation.
+    let prepared = match unsafe { prepare(backend, configuration) } {
+        Ok(prepared) => prepared,
+        Err(failure) => panic!(
+            "could not prepare boot GICv3: primary={:?} recovery={:?}",
+            failure.error(),
+            failure.recovery_error()
+        ),
+    };
+
+    let slot = &raw mut BOOT_PREPARED_GICV3;
+    // SAFETY: each final-map probe reaches this one-time single-core boot path
+    // at most once. The referenced table owner and this prepared owner remain
+    // installed forever, and no mutable reference to the slot is published.
+    unsafe {
+        (*slot).write(prepared);
+        &*(*slot).as_ptr()
     }
 }
 
@@ -865,14 +980,14 @@ fn run_loaded_init_probe(boot_argument: usize, console: &mut Console<EarlyPl011>
         .unwrap_or_else(|error| panic!("could not make init ready: {error:?}"));
     // SAFETY: this single-CPU boot path initializes the slot exactly once
     // before EL0 can issue an exception. The slot is never replaced or freed.
-    let (prepared, kernel_tables) = unsafe {
+    let (prepared, kernel_tables, gic) = unsafe {
         install_init_runtime(InitRuntime {
             process,
             _init_asid: init_asid,
             address_space: prepared,
             kernel_tables,
             direct_map_layout,
-            _gic: gic,
+            gic,
             _kernel_stack_pool: runtime_kernel_stack_pool()
                 .unwrap_or_else(|error| panic!("could not reserve kernel-stack arena: {error:?}")),
             files: ReadOnlyFileTable::new(initramfs),
@@ -894,7 +1009,20 @@ fn run_loaded_init_probe(boot_argument: usize, console: &mut Console<EarlyPl011>
     unsafe {
         kernel_tables.activate();
     }
+
+    // SAFETY: the installed runtime permanently owns the active final tables
+    // and copied boot-CPU GIC evidence. IRQs remain masked, the boot CPU is the
+    // sole observer, and neither EL0 nor an interrupt handler is reachable yet.
+    let prepared_gic = unsafe { prepare_and_install_boot_gicv3(kernel_tables, gic) };
+    let _ = writeln!(
+        console,
+        "gicv3: timer-intid={} poll-budget={} delivery=closed",
+        prepared_gic.configuration().timer().intid(),
+        prepared_gic.configuration().poll_budget(),
+    );
+    let _ = writeln!(console, "{GIC_PREPARED_SENTINEL}");
     let _ = writeln!(console, "{INIT_KERNEL_MAP_SENTINEL}");
+    console.sink_mut().flush();
 
     // SAFETY: the one-time runtime is installed in the ready state and no
     // execution context can race this single-core transition before `eret`.
@@ -927,7 +1055,11 @@ fn run_loaded_init_probe(boot_argument: usize, console: &mut Console<EarlyPl011>
 #[cfg(feature = "loaded-init-probe")]
 unsafe fn install_init_runtime(
     runtime: InitRuntime,
-) -> (&'static InitAddressSpace, &'static FinalKernelTables) {
+) -> (
+    &'static InitAddressSpace,
+    &'static FinalKernelTables,
+    BootGicV3Discovery,
+) {
     let slot = &raw mut INIT_RUNTIME;
     // SAFETY: the caller guarantees unique one-time initialization and eternal
     // retention; raw pointers avoid manufacturing a reference before init.
@@ -937,6 +1069,7 @@ unsafe fn install_init_runtime(
         (
             &*core::ptr::addr_of!((*runtime).address_space),
             &*core::ptr::addr_of!((*runtime).kernel_tables),
+            *core::ptr::addr_of!((*runtime).gic),
         )
     }
 }

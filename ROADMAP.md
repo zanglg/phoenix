@@ -120,9 +120,9 @@ infallible batch writes, and completes per-page all-ASID TLB maintenance before 
 release; host failure injection covers partial-update prevention. The focused image Cross Compiles
 one bounded post-TTBR1 stack allocation, virtual-alias round trip, retirement, scrub, and release
 with an ordered success marker. Exact GICD and affinity-selected GICR device pages now bring the
-current image to eight tables; that image and mapper still need target execution, and stack entry,
-measured sizing, thread switching, and exception-stack activation
-remain;
+current image to eight tables; both final-map paths now prepare and retain their unique GIC owner
+after TTBR1 publication with delivery closed. That image and mapper still need target execution,
+and stack entry, measured sizing, thread switching, and exception-stack activation remain;
 the loaded-init path retires temporary TTBR0 aliases when it installs its user hierarchy.
 
 Observable result: allocator and mapping self-tests exercise success and failure paths without
@@ -156,11 +156,13 @@ Host-verifiable foundation now available:
   strides and a mandatory `Last`, retains the unique matching 128 KiB RD/SGI pair, and maps only it
   plus the complete GICD range as exact final-TTBR1 device pages;
 - a non-copying concrete AArch64 backend bounds and performs volatile MMIO plus named `ICC_*_EL1`
-  accesses against the retained table/layout contract, but is not yet constructed by boot;
+  accesses against the retained table/layout contract;
+- the EL2 bootstrap permits the GIC system-register interface, and both final-map paths check
+  `DAIF.I`, construct the backend only after TTBR1 publication, prepare the DTB-selected timer PPI
+  with a fixed 100,000-read per-wait budget, and permanently retain the closed-gate type state;
 - host tests cover boundaries, selection failures, exact page mappings, register update isolation,
-  finite polling, and injected failure, while preparation through the concrete owner,
-  delivery/dispatch, IRQ-safe synchronization, sleep integration, and all target execution remain
-  pending.
+  finite polling, injected failure, and ordered output protocol, while delivery/dispatch, IRQ-safe
+  synchronization, sleep integration, and all target execution remain pending.
 
 Observable result: timer interrupts advance a monotonic time source and scheduled callbacks fire
 under an automated QEMU test.

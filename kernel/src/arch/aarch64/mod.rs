@@ -45,6 +45,24 @@ pub unsafe fn install_exception_vectors() {
     }
 }
 
+/// Return whether ordinary IRQ exceptions are masked in the current PSTATE.
+#[cfg(target_arch = "aarch64")]
+pub fn irqs_masked() -> bool {
+    const DAIF_IRQ_MASK: u64 = 1 << 7;
+
+    let daif: u64;
+    // SAFETY: reading `DAIF` has no memory side effects and is available at
+    // EL1 in Phoenix's AArch64 execution environment.
+    unsafe {
+        asm!(
+            "mrs {daif}, DAIF",
+            daif = out(reg) daif,
+            options(nomem, nostack, preserves_flags)
+        );
+    }
+    daif & DAIF_IRQ_MASK != 0
+}
+
 /// Stop execution while allowing an event to wake the CPU transiently.
 #[cfg(target_arch = "aarch64")]
 pub fn halt() -> ! {

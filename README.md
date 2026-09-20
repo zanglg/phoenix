@@ -22,8 +22,9 @@ narrow support claim:
   and map only it plus GICD as exact device pages without enabling interrupts;
 - a Host Tested/Cross Compiled GICv3 preparation state machine validates PIDR/SRE, wakes the
   selected redistributor, configures one timer PPI with bounded waits, and preserves recovery
-  evidence while distributor and CPU Group-1 delivery remain disabled; a concrete bounded
-  volatile MMIO/`ICC_*_EL1` backend Cross Compiles but is not yet constructed by boot;
+  evidence while distributor and CPU Group-1 delivery remain disabled; both final-map paths now
+  construct that concrete volatile MMIO/`ICC_*_EL1` owner after TTBR1 publication, execute the
+  preparation transaction with a fixed poll budget, and retain its closed-gate type state;
 - a bounded QEMU runner and boot-test harness are implemented and host tested;
 - bounded QEMU probes have verified direct boot, DTB/allocator access, final TTBR1 publication,
   the first EL0 transition, and the loaded-init/file-I/O path on the pinned board;
@@ -61,8 +62,8 @@ narrow support claim:
 - an opt-in boot-memory probe cross-links the real DTB-to-allocation-to-readback path;
 - an opt-in final-kernel-map image builds allocator-owned TTBR1 tables with RX text, RO/NX
   rodata, RW/NX RAM, an unmapped boot-stack guard, and page-granular PL011/GIC mappings, then
-  publishes them with barriers and TLB invalidation; that base path passed previously, while the
-  current heap, stack, and GIC-extended image requires a target rerun;
+  publishes them with barriers and TLB invalidation before bounded GIC preparation; that base path
+  passed previously, while the current heap, stack, and GIC-prepared image requires a target rerun;
 - final-map builders retain a Host Tested managed-RAM proof beside their table owner, and the
   loaded-init user-copy adapter is Cross Compiled against that bounded capability;
 - early PL011 output and the bounded boot smoke test have been verified on QEMU 9.1.3; deliberate
@@ -123,8 +124,8 @@ standalone native user ELF and deterministic initramfs. `qemu-command` prints th
 without starting an emulator. `run` is interactive and `test-boot` is bounded; neither is part of
 emulator-free `ci`.
 `test-memory` builds the opt-in boot-memory integration image; `test-kernel-map` replaces TTBR1
-with the final permission-separated layout and requires the bounded heap probe before terminal
-success; `test-el0` builds the opt-in statically linked
+with the final permission-separated layout and requires ordered closed-gate GIC preparation plus
+the bounded heap and stack probes before terminal success; `test-el0` builds the opt-in statically linked
 user-mode conformance image; `test-init` builds the full dynamically loaded standalone-init path.
 Each requires its own final marker. See [`docs/QEMU.md`](docs/QEMU.md),
 [`docs/BOOT_MEMORY_PROBE.md`](docs/BOOT_MEMORY_PROBE.md),

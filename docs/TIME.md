@@ -2,8 +2,8 @@
 
 Phoenix currently provides an architecture-neutral, allocation-free foundation for monotonic
 time and deadline ordering plus a deliberately unintegrated AArch64 physical generic-timer
-register owner. It does not initialize the GIC, deliver timer interrupts, block a thread, or run
-callbacks.
+register owner. The final-map boot paths prepare the GIC timer PPI with delivery closed, but do not
+construct or program the timer owner, deliver timer interrupts, block a thread, or run callbacks.
 
 ## Current implementation
 
@@ -25,7 +25,8 @@ callbacks.
 
 The QEMU `virt` platform layer also strictly discovers all four architected-timer PPIs from the
 DTB and selects the second, non-secure physical entry for the `CNTP_*` contract. That descriptive
-topology is not yet connected to the timer owner or a GIC driver.
+topology now feeds the boot GIC preparation transaction, but is not yet connected to the physical-
+timer owner or an interrupt dispatcher.
 
 The target owner programs an absolute compare value only while signaling is disabled and masked,
 then leaves the timer enabled but masked. Unmasking is an unsafe operation whose caller must first
@@ -84,8 +85,8 @@ compilation and static artifact contracts, not target execution.
 
 ## TODO
 
-- Map and initialize the discovered GICv3 regions and route the discovered physical-timer PPI.
-- Connect the exclusive physical-timer owner to boot only after GIC and IRQ state are ready.
+- Open GIC delivery only after publishing the interrupt dispatcher and its synchronization state.
+- Connect the exclusive physical-timer owner to boot after GIC and IRQ state are ready.
 - Introduce the IRQ-safe synchronization and memory-ordering contract described above.
 - Connect due events to sleeping threads and tickless scheduler wakeups.
 - Decide whether a queue-instance namespace is worth the identifier and initialization cost.
@@ -96,8 +97,10 @@ compilation and static artifact contracts, not target execution.
 
 This checkpoint does not implement wall time, calendar time, periodic timers, callback storage,
 dynamic queue growth, kernel-thread sleep, scheduler preemption, idle `WFI`, SMP, GIC access,
-PPI discovery/routing, IRQ acknowledgement, or boot-time timer activation. It does not claim a
-target frequency or precision because `CNTFRQ_EL0` has not been read during target execution.
+delivery activation, IRQ acknowledgement, or boot-time timer activation. GIC discovery and
+closed-gate PPI preparation belong to the separate interrupt module. This checkpoint does not
+claim a target frequency or precision because `CNTFRQ_EL0` has not been read during target
+execution.
 
 ## Runtime Pending
 

@@ -1,6 +1,6 @@
 # AArch64 Interrupt Topology
 
-Phoenix currently discovers and maps, but does not initialize or activate, the GICv3 and
+Phoenix currently discovers, maps, and prepares—but does not activate—the GICv3 and
 architected-timer interrupt topology emitted for the pinned AArch64 QEMU `virt` platform.
 Discovery is strict, allocation-free, and isolated under the platform implementation; generic DTB
 traversal remains independent of GIC concepts.
@@ -58,7 +58,21 @@ virtual layout beside the permanent table owner. `MappedGicV3Registers` is the c
 AArch64 backend: its unsafe constructor binds that active table owner and exact layout, every MMIO
 access is aligned, range checked, and volatile, each `ICC_*_EL1` variant names one fixed system
 register, and `DSB SY; ISB` implements the preparation protocol's synchronization hook. No boot
-path constructs this backend or invokes `prepare` yet.
+path can construct the backend before TTBR1 publication.
+
+When Phoenix enters at EL2, `boot.S` preserves the existing `ICC_SRE_EL2` value while setting
+`SRE`, `DFB`, `DIB`, and `Enable`, then executes an `ISB` before dropping to EL1. A direct EL1
+entry remains a firmware contract: the higher exception levels must already permit EL1 system-
+register access. The preparation transaction still sets and reads back `ICC_SRE_EL1.SRE`; an
+unpermitted access can trap and therefore is not represented as an ordinary Rust error.
+
+After each final-map path installs its permanent runtime owner and activates TTBR1, it checks that
+`DAIF.I` is still set, constructs `MappedGicV3Registers` from the retained tables and copied
+discovery evidence, and calls `prepare` with the DTB-selected non-secure physical timer PPI. Every
+hardware wait receives a fixed 100,000-read budget. Success is installed once in a separate static
+`PreparedGicV3<MappedGicV3Registers<...>>`, preserving the table borrow and unique register owner
+for the rest of boot. Only then is `PHOENIX_GIC_PREPARED` emitted. Both Group-1 delivery gates and
+the architectural IRQ mask remain closed.
 
 ## Invariants and rejection policy
 
@@ -94,23 +108,27 @@ path constructs this backend or invokes `prepare` yet.
 - `InterruptTopology` is descriptive evidence only. Possessing it does not authorize MMIO access,
   map device pages, enable the distributor/redistributor, unmask `DAIF.I`, or satisfy the unsafe
   preconditions of `PhysicalTimer::unmask`.
+- Prepared boot ownership is published exactly once and outlives the active final table hierarchy.
+  A copied topology/layout is evidence, not a second register capability. A preparation failure
+  attempts closed-gate recovery and then terminates boot without publishing a prepared owner.
+- `PHOENIX_GIC_PREPARED` means the bounded transaction returned success with delivery closed; it
+  does not mean an IRQ was delivered, acknowledged, or returned from.
 
 The parser contains no unsafe code and retains no reference into the DTB after returning copied
 topology values.
 
 ## Synchronization and ownership boundary
 
-The concrete backend exists but is not yet constructed by the boot path. Its future retained owner
-must uniquely bind the mapped GICD, selected boot CPU GICR, current CPU interface, and active final
-tables. Preparation must occur while IRQs remain masked and before delivery is enabled. Once IRQ
-dispatch exists, normal context and handlers must share state only through an IRQ-safe lock or a
-documented single-owner protocol with acquire/release ordering. No callback, scheduler action,
-allocator use, or lock acquisition with an inverted order may occur while acknowledging an
+The final-map boot paths now construct and permanently retain the unique owner binding the mapped
+GICD, selected boot CPU GICR, current CPU interface, and active final tables. Preparation occurs
+with IRQs masked and before delivery is enabled. The owner is not exposed to general kernel code.
+Once IRQ dispatch exists, normal context and handlers must share state only through an IRQ-safe
+lock or a documented single-owner protocol with acquire/release ordering. No callback, scheduler
+action, allocator use, or lock acquisition with an inverted order may occur while acknowledging an
 interrupt.
 
-The current boot path selects and maps a redistributor but does not construct the register owner,
-run preparation, open Group-1 delivery, unmask `DAIF.I`, or define the interrupt-context lock
-hierarchy.
+The current boot path still does not open Group-1 delivery, unmask `DAIF.I`, acknowledge an INTID,
+or define the interrupt-context lock hierarchy.
 
 ## Validation
 
@@ -123,15 +141,15 @@ timeout, injected access failure, stage attribution, and best-effort recovery. C
 also covers MPIDR packing, VLPI-aware redistributor stride, exact affinity selection, `Last`,
 duplicate/missing/truncated/access failures, bootstrap-window bounds, register-range checks, and
 all 48 final GIC L3 leaves in the pinned 8-table/815-leaf plan. It cross-compiles the volatile
-MMIO/system-register backend and both final-map boot consumers. These checks do not prove that the
-recorded QEMU board emits the expected nodes, that selection succeeds on target, or that any final
-GIC register can be accessed.
+MMIO/system-register backend, `ICC_SRE_EL2` setup, checked `DAIF.I` observation, one-time retained
+preparation in both final-map consumers, and the `PHOENIX_GIC_PREPARED` static/protocol contract.
+Manual ELF disassembly of `boot_drop_el2_to_el1` also confirms the ordered
+`MRS ICC_SRE_EL2`/`ORR #0xf`/`MSR ICC_SRE_EL2`/`ISB` sequence in the built default kernel.
+These checks do not prove that the recorded QEMU board emits the expected nodes, that selection or
+preparation succeeds on target, or that any final GIC register can be accessed.
 
 ## TODO
 
-- Configure `ICC_SRE_EL2` during the EL2 bootstrap so EL1 system-register access cannot trap.
-- Construct and permanently retain the concrete backend after TTBR1 publication, then invoke the
-  failure-retaining preparation transition while IRQs remain masked.
 - Add a separate type-state transition that opens Group-1 delivery only after IRQ dispatch is
   published, then define a recoverable shutdown transition.
 - Define IRQ entry/exit, spurious-ID handling, priority, acknowledge/deactivate/EOI ordering, and
@@ -146,14 +164,15 @@ GIC register can be accessed.
 This checkpoint does not support GICv2, multiple redistributor regions, legacy GICC/GICH/GICV
 ranges, ITS/MSI/LPI, shared peripheral interrupts, four-cell PPI partitions, `interrupts-extended`,
 the optional VHE virtual timer interrupt, SMP routing, priority policy, or nested interrupts. The
-concrete backend is Cross Compiled but is not constructed or exercised. Phoenix does not run
-preparation, enable distributor/CPU group delivery, acknowledge an interrupt, write EOI,
+concrete backend and boot preparation path are Cross Compiled but have not executed on target.
+Phoenix does not enable distributor/CPU group delivery, acknowledge an interrupt, write EOI,
 deactivate, or return through an IRQ vector. Those behaviors are not inferred from valid topology,
-offline mappings, or a Host Tested register protocol.
+offline mappings, a Host Tested register protocol, or the unobserved preparation marker.
 
 ## Runtime Pending
 
 `RUN-IRQ-001` and `RUN-TIME-001` in `docs/RUNTIME_VALIDATION.md` remain Runtime Pending. The prior
 positive QEMU runs predate boot-time GIC selection and the current eight-table final image.
-Host-built fixtures cannot prove the content of QEMU's generated DTB, redistributor selection, GIC
-register semantics, PPI delivery, acknowledgement ordering, or interrupt return.
+Host-built fixtures cannot prove the content of QEMU's generated DTB, redistributor selection,
+EL2/EL1 SRE behavior, preparation completion, GIC register semantics, PPI delivery,
+acknowledgement ordering, or interrupt return.
