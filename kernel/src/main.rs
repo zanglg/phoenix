@@ -73,9 +73,9 @@ use phoenix_kernel::process_image::ProcessImageMemory;
 use phoenix_kernel::{
     arch::aarch64::kernel_page_table::MaterializedKernelPageTables,
     platform::aarch64::qemu_virt::{
-        FINAL_KERNEL_TABLE_CAPACITY, FinalDirectMapLayout, FinalDirectMapMemory,
-        QemuVirtKernelStackPool, final_direct_map_layout, final_kernel_page_table_plan,
-        runtime_kernel_stack_pool,
+        BootGicV3Discovery, FINAL_KERNEL_TABLE_CAPACITY, FinalDirectMapLayout,
+        FinalDirectMapMemory, QemuVirtKernelStackPool, discover_boot_gicv3,
+        final_direct_map_layout, final_kernel_page_table_plan, runtime_kernel_stack_pool,
     },
 };
 
@@ -200,6 +200,7 @@ struct InitRuntime {
     address_space: InitAddressSpace,
     kernel_tables: FinalKernelTables,
     direct_map_layout: FinalDirectMapLayout<INIT_MEMORY_RANGES>,
+    _gic: BootGicV3Discovery,
     _kernel_stack_pool: QemuVirtKernelStackPool,
     files: ReadOnlyFileTable<'static, INIT_OPEN_FILES>,
     _allocator: FrameAllocator<INIT_MEMORY_RANGES>,
@@ -305,6 +306,7 @@ type FinalKernelTables = MaterializedKernelPageTables<FINAL_KERNEL_TABLE_CAPACIT
 struct KernelMapRuntime {
     tables: FinalKernelTables,
     direct_map_layout: FinalDirectMapLayout<KERNEL_MAP_MEMORY_RANGES>,
+    _gic: BootGicV3Discovery,
     allocator: FrameAllocator<KERNEL_MAP_MEMORY_RANGES>,
     heap: KernelHeap<KERNEL_HEAP_ALLOCATIONS>,
     kernel_stack_pool: QemuVirtKernelStackPool,
@@ -451,16 +453,20 @@ fn run_kernel_map_probe(boot_argument: usize, console: &mut Console<EarlyPl011>)
     // RAM alias. Allocated table frames remain private until publication.
     let mut physical_memory = unsafe { BootstrapPhysicalMemory::assume_bootstrap_mapping() };
     let device_tree_start = PhysAddr::new(boot_argument);
-    let (plan, map) = {
+    let (plan, map, gic) = {
         let tree = physical_memory
             .device_tree(device_tree_start)
             .unwrap_or_else(|error| panic!("could not borrow boot DTB: {error:?}"));
         let info = tree
             .boot_info()
             .unwrap_or_else(|error| panic!("could not extract boot information: {error:?}"));
+        // SAFETY: the single boot CPU still owns the bootstrap low device
+        // identity map, IRQs remain masked, and no GIC consumer exists yet.
+        let gic = unsafe { discover_boot_gicv3(tree) }
+            .unwrap_or_else(|error| panic!("could not discover boot GICv3: {error:?}"));
         let kernel_image = kernel_physical_range()
             .unwrap_or_else(|error| panic!("could not derive kernel image range: {error:?}"));
-        let plan = final_kernel_page_table_plan(info)
+        let plan = final_kernel_page_table_plan(info, gic.layout())
             .unwrap_or_else(|error| panic!("could not plan final kernel page tables: {error:?}"));
         let map = memory_map_from_boot_info::<KERNEL_MAP_MEMORY_RANGES>(
             info,
@@ -468,7 +474,7 @@ fn run_kernel_map_probe(boot_argument: usize, console: &mut Console<EarlyPl011>)
             device_tree_start,
         )
         .unwrap_or_else(|error| panic!("could not construct boot memory map: {error:?}"));
-        (plan, map)
+        (plan, map, gic)
     };
 
     let mapping_count = plan.mappings().len();
@@ -498,6 +504,7 @@ fn run_kernel_map_probe(boot_argument: usize, console: &mut Console<EarlyPl011>)
         install_kernel_map_runtime(KernelMapRuntime {
             tables: materialized,
             direct_map_layout,
+            _gic: gic,
             allocator,
             heap: KernelHeap::new(),
             kernel_stack_pool: runtime_kernel_stack_pool()
@@ -514,8 +521,9 @@ fn run_kernel_map_probe(boot_argument: usize, console: &mut Console<EarlyPl011>)
 
     // SAFETY: the validated plan maps the running kernel image with exact
     // text/rodata/data permissions, preserves the live boot stack and vector
-    // table, maps all pinned QEMU RAM, and provides the PL011 device page. The
-    // static runtime permanently retains the hierarchy on the single boot CPU.
+    // table, maps all pinned QEMU RAM, and provides exact PL011, GICD, and
+    // selected boot-GICR device pages. The static runtime permanently retains
+    // the hierarchy and GIC layout on the single boot CPU.
     unsafe {
         runtime.tables.activate();
     }
@@ -766,21 +774,25 @@ fn run_loaded_init_probe(boot_argument: usize, console: &mut Console<EarlyPl011>
     // by the allocator-derived image or table type state below.
     let mut physical_memory = unsafe { BootstrapPhysicalMemory::assume_bootstrap_mapping() };
     let device_tree_start = PhysAddr::new(boot_argument);
-    let (kernel_plan, map) = {
+    let (kernel_plan, map, gic) = {
         let tree = physical_memory
             .device_tree(device_tree_start)
             .unwrap_or_else(|error| panic!("could not borrow boot DTB: {error:?}"));
         let info = tree
             .boot_info()
             .unwrap_or_else(|error| panic!("could not extract boot information: {error:?}"));
+        // SAFETY: the single boot CPU still owns the bootstrap low device
+        // identity map, IRQs remain masked, and no GIC consumer exists yet.
+        let gic = unsafe { discover_boot_gicv3(tree) }
+            .unwrap_or_else(|error| panic!("could not discover boot GICv3: {error:?}"));
         let kernel_image = kernel_physical_range()
             .unwrap_or_else(|error| panic!("could not derive kernel image range: {error:?}"));
-        let kernel_plan = final_kernel_page_table_plan(info)
+        let kernel_plan = final_kernel_page_table_plan(info, gic.layout())
             .unwrap_or_else(|error| panic!("could not plan final kernel page tables: {error:?}"));
         let map =
             memory_map_from_boot_info::<INIT_MEMORY_RANGES>(info, kernel_image, device_tree_start)
                 .unwrap_or_else(|error| panic!("could not construct boot memory map: {error:?}"));
-        (kernel_plan, map)
+        (kernel_plan, map, gic)
     };
     let mut allocator = map.into_allocator();
     let allocated = plan
@@ -860,6 +872,7 @@ fn run_loaded_init_probe(boot_argument: usize, console: &mut Console<EarlyPl011>
             address_space: prepared,
             kernel_tables,
             direct_map_layout,
+            _gic: gic,
             _kernel_stack_pool: runtime_kernel_stack_pool()
                 .unwrap_or_else(|error| panic!("could not reserve kernel-stack arena: {error:?}")),
             files: ReadOnlyFileTable::new(initramfs),
@@ -875,8 +888,9 @@ fn run_loaded_init_probe(boot_argument: usize, console: &mut Console<EarlyPl011>
     let _ = writeln!(console, "{INIT_KERNEL_MAP_ENTER_SENTINEL}");
     console.sink_mut().flush();
     // SAFETY: the retained final hierarchy covers the current image, stack,
-    // vectors, direct-mapped RAM, and PL011. The bootstrap handle was dropped,
-    // and this remains a masked, single-core boot path.
+    // vectors, direct-mapped RAM, PL011, GICD, and selected boot GICR. The
+    // bootstrap handle was dropped, and this remains a masked, single-core
+    // boot path.
     unsafe {
         kernel_tables.activate();
     }

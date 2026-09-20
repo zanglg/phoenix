@@ -4,6 +4,11 @@ pub mod interrupts;
 
 use core::ptr::{self, read_volatile, write_volatile};
 
+#[cfg(target_arch = "aarch64")]
+use crate::arch::aarch64::gicv3::{
+    CpuAffinity, GicRedistributorDiscoveryAccess, RedistributorSelectionError, select_redistributor,
+};
+use crate::arch::aarch64::gicv3::{GicV3MmioError, GicV3MmioLayout, SelectedRedistributor};
 #[cfg(any(target_arch = "aarch64", test))]
 use crate::arch::aarch64::kernel_page_table::DirectMapOverride;
 use crate::arch::aarch64::kernel_page_table::{
@@ -25,6 +30,10 @@ use crate::memory::{
 use crate::process_image::ProcessImageMemory;
 use crate::user_copy::{UserMemoryReader, UserMemoryWriter};
 
+use self::interrupts::InterruptTopology;
+#[cfg(target_arch = "aarch64")]
+use self::interrupts::InterruptTopologyError;
+
 /// Physical base of QEMU `virt`'s first PL011 UART.
 pub const PL011_PHYSICAL_BASE: usize = 0x0900_0000;
 /// Final higher-half virtual address of the first PL011 UART.
@@ -33,6 +42,8 @@ pub const PL011_VIRTUAL_BASE: usize = 0xffff_ff80_0900_0000;
 pub const BOOTSTRAP_RAM_PHYSICAL_START: usize = 0x4000_0000;
 /// Exclusive physical end of the RAM window reachable through the bootstrap alias.
 pub const BOOTSTRAP_RAM_PHYSICAL_END: usize = 0x8000_0000;
+/// Exclusive end of the temporary low Device-nGnRnE identity window.
+pub const BOOTSTRAP_DEVICE_PHYSICAL_END: usize = 0x4000_0000;
 /// Fixed physical-to-virtual offset of the QEMU `virt` kernel direct map.
 pub const KERNEL_VIRTUAL_OFFSET: usize = 0xffff_ff80_0000_0000;
 /// First byte of the platform-owned runtime kernel-stack virtual arena.
@@ -49,6 +60,90 @@ const UART_DR: usize = 0x00;
 const UART_FR: usize = 0x18;
 const UART_FR_BUSY: u32 = 1 << 3;
 const UART_FR_TXFF: u32 = 1 << 5;
+
+/// Failure while reading GIC discovery registers through the boot device map.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BootstrapDeviceAccessError {
+    /// The requested access is not naturally aligned.
+    MisalignedAccess {
+        /// Physical register address.
+        address: usize,
+        /// Required byte alignment.
+        alignment: usize,
+    },
+    /// Address arithmetic overflowed.
+    AddressOverflow,
+    /// The access is outside the temporary low device identity mapping.
+    OutsideTemporaryDeviceWindow {
+        /// Physical register address.
+        address: usize,
+        /// Access width in bytes.
+        width: usize,
+    },
+}
+
+/// Exclusive early-boot reader for GIC redistributor discovery registers.
+#[cfg(target_arch = "aarch64")]
+pub struct BootstrapGicDiscoveryAccess {
+    _private: (),
+}
+
+#[cfg(target_arch = "aarch64")]
+impl BootstrapGicDiscoveryAccess {
+    /// Assert that the temporary low Device-nGnRnE identity map is active.
+    ///
+    /// # Safety
+    ///
+    /// The caller must run on the single boot CPU before replacing TTBR0 and
+    /// must uniquely own GIC discovery access. The bootstrap mapping of
+    /// `0..BOOTSTRAP_DEVICE_PHYSICAL_END` must remain active for this value's
+    /// lifetime, and no concurrent observer may mutate redistributor topology.
+    pub const unsafe fn assume_bootstrap_mapping() -> Self {
+        Self { _private: () }
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+impl GicRedistributorDiscoveryAccess for BootstrapGicDiscoveryAccess {
+    type Error = BootstrapDeviceAccessError;
+
+    fn read_u32(&mut self, address: PhysAddr) -> Result<u32, Self::Error> {
+        let address = checked_bootstrap_device_access(address, size_of::<u32>())? as *const u32;
+        // SAFETY: construction proves the low Device identity mapping and
+        // unique discovery access; validation proves a naturally aligned
+        // complete register access inside that mapping.
+        Ok(unsafe { read_volatile(address) })
+    }
+
+    fn read_u64(&mut self, address: PhysAddr) -> Result<u64, Self::Error> {
+        let address = checked_bootstrap_device_access(address, size_of::<u64>())? as *const u64;
+        // SAFETY: construction proves the low Device identity mapping and
+        // unique discovery access; validation proves a naturally aligned
+        // complete register access inside that mapping.
+        Ok(unsafe { read_volatile(address) })
+    }
+}
+
+#[cfg(any(target_arch = "aarch64", test))]
+fn checked_bootstrap_device_access(
+    address: PhysAddr,
+    width: usize,
+) -> Result<usize, BootstrapDeviceAccessError> {
+    let address = address.as_usize();
+    if !address.is_multiple_of(width) {
+        return Err(BootstrapDeviceAccessError::MisalignedAccess {
+            address,
+            alignment: width,
+        });
+    }
+    let end = address
+        .checked_add(width)
+        .ok_or(BootstrapDeviceAccessError::AddressOverflow)?;
+    if end > BOOTSTRAP_DEVICE_PHYSICAL_END {
+        return Err(BootstrapDeviceAccessError::OutsideTemporaryDeviceWindow { address, width });
+    }
+    Ok(address)
+}
 
 /// Polled PL011 transmitter used before the driver subsystem exists.
 pub struct EarlyPl011 {
@@ -106,6 +201,155 @@ pub type QemuVirtKernelPageTablePlan =
 pub type QemuVirtKernelStackPool =
     KernelStackPool<KERNEL_STACK_ARENA_SLOTS, KERNEL_STACK_USABLE_PAGES>;
 
+/// Exact physical and final virtual ownership for the boot CPU's GICv3 path.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct QemuVirtGicV3Layout {
+    distributor_physical: AddressRange<PhysAddr>,
+    redistributor_physical: AddressRange<PhysAddr>,
+    registers: GicV3MmioLayout,
+}
+
+impl QemuVirtGicV3Layout {
+    /// Return the complete DTB-declared GICD physical range.
+    pub const fn distributor_physical(self) -> AddressRange<PhysAddr> {
+        self.distributor_physical
+    }
+
+    /// Return the selected boot CPU's exact 128 KiB RD/SGI physical pair.
+    pub const fn redistributor_physical(self) -> AddressRange<PhysAddr> {
+        self.redistributor_physical
+    }
+
+    /// Return the checked final virtual register ranges.
+    pub const fn registers(self) -> GicV3MmioLayout {
+        self.registers
+    }
+}
+
+/// Failure while binding discovered GIC topology to final virtual ranges.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum QemuVirtGicV3LayoutError {
+    /// The selected redistributor is not inside the DTB-declared region.
+    RedistributorOutsideDiscoveredRegion,
+    /// Physical-to-virtual address conversion overflowed.
+    AddressOverflow,
+    /// The architecture-side MMIO contract rejected the ranges.
+    Mmio(GicV3MmioError),
+}
+
+/// Copied boot-CPU GIC discovery evidence retained beyond the borrowed DTB.
+#[cfg(target_arch = "aarch64")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct BootGicV3Discovery {
+    topology: InterruptTopology,
+    affinity: CpuAffinity,
+    selected: SelectedRedistributor,
+    layout: QemuVirtGicV3Layout,
+}
+
+#[cfg(target_arch = "aarch64")]
+impl BootGicV3Discovery {
+    /// Return the validated DTB interrupt topology.
+    pub const fn topology(self) -> InterruptTopology {
+        self.topology
+    }
+
+    /// Return the current CPU affinity used during selection.
+    pub const fn affinity(self) -> CpuAffinity {
+        self.affinity
+    }
+
+    /// Return the exact selected redistributor evidence.
+    pub const fn selected(self) -> SelectedRedistributor {
+        self.selected
+    }
+
+    /// Return the final GIC device layout used by the TTBR1 builder.
+    pub const fn layout(self) -> QemuVirtGicV3Layout {
+        self.layout
+    }
+}
+
+/// Failure while discovering and selecting the boot CPU GIC path.
+#[cfg(target_arch = "aarch64")]
+#[derive(Debug, Eq, PartialEq)]
+pub enum BootGicV3DiscoveryError {
+    /// The DTB GIC/timer topology is invalid.
+    Topology(InterruptTopologyError),
+    /// The current CPU redistributor could not be selected safely.
+    Redistributor(RedistributorSelectionError<BootstrapDeviceAccessError>),
+    /// The selected physical ranges cannot form the final MMIO layout.
+    Layout(QemuVirtGicV3LayoutError),
+}
+
+/// Discover, affinity-select, and bind the boot CPU's GICv3 device ranges.
+///
+/// # Safety
+///
+/// The temporary low Device-nGnRnE identity window must still be active, the
+/// caller must execute on the sole boot CPU with IRQs masked, and no other
+/// observer may access or mutate the GIC redistributor discovery registers.
+#[cfg(target_arch = "aarch64")]
+pub unsafe fn discover_boot_gicv3(
+    tree: DeviceTree<'_>,
+) -> Result<BootGicV3Discovery, BootGicV3DiscoveryError> {
+    let topology = interrupts::discover(tree).map_err(BootGicV3DiscoveryError::Topology)?;
+    let affinity = CpuAffinity::current();
+    // SAFETY: the caller establishes the low device mapping, single-CPU, and
+    // exclusive discovery conditions required by the access capability.
+    let mut access = unsafe { BootstrapGicDiscoveryAccess::assume_bootstrap_mapping() };
+    let selected = select_redistributor(topology.redistributor(), affinity, &mut access)
+        .map_err(BootGicV3DiscoveryError::Redistributor)?;
+    let layout = final_gicv3_layout(topology, selected).map_err(BootGicV3DiscoveryError::Layout)?;
+    Ok(BootGicV3Discovery {
+        topology,
+        affinity,
+        selected,
+        layout,
+    })
+}
+
+/// Bind discovered topology and one affinity-selected redistributor to TTBR1.
+pub fn final_gicv3_layout(
+    topology: InterruptTopology,
+    selected: SelectedRedistributor,
+) -> Result<QemuVirtGicV3Layout, QemuVirtGicV3LayoutError> {
+    let distributor_physical = topology.distributor();
+    let redistributor_physical = selected.range();
+    if !topology
+        .redistributor()
+        .contains_range(redistributor_physical)
+    {
+        return Err(QemuVirtGicV3LayoutError::RedistributorOutsideDiscoveredRegion);
+    }
+    let distributor_virtual = final_device_virtual_range(distributor_physical)?;
+    let redistributor_virtual = final_device_virtual_range(redistributor_physical)?;
+    let registers = GicV3MmioLayout::new(distributor_virtual, redistributor_virtual)
+        .map_err(QemuVirtGicV3LayoutError::Mmio)?;
+    Ok(QemuVirtGicV3Layout {
+        distributor_physical,
+        redistributor_physical,
+        registers,
+    })
+}
+
+fn final_device_virtual_range(
+    physical: AddressRange<PhysAddr>,
+) -> Result<AddressRange<VirtAddr>, QemuVirtGicV3LayoutError> {
+    let start = physical
+        .start()
+        .as_usize()
+        .checked_add(KERNEL_VIRTUAL_OFFSET)
+        .ok_or(QemuVirtGicV3LayoutError::AddressOverflow)?;
+    let end = physical
+        .end()
+        .as_usize()
+        .checked_add(KERNEL_VIRTUAL_OFFSET)
+        .ok_or(QemuVirtGicV3LayoutError::AddressOverflow)?;
+    AddressRange::new(VirtAddr::new(start), VirtAddr::new(end))
+        .map_err(|_| QemuVirtGicV3LayoutError::AddressOverflow)
+}
+
 /// Failure while deriving the final QEMU `virt` higher-half address space.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FinalKernelMapError {
@@ -124,6 +368,8 @@ pub enum FinalKernelMapError {
     MissingRam,
     /// A required kernel section is absent from the resulting direct map.
     MissingKernelSectionMapping,
+    /// A required GIC device page is absent or mapped with wrong attributes.
+    MissingGicDeviceMapping,
     /// The fixed runtime-stack arena could not be represented.
     InvalidRuntimeStackArena(KernelStackPoolError),
     /// A final mapping unexpectedly occupies the reserved runtime-stack arena.
@@ -377,12 +623,14 @@ impl FinalKernelImageLayout {
 #[cfg(target_arch = "aarch64")]
 pub fn final_kernel_page_table_plan(
     info: BootInfo<'_>,
+    gic: QemuVirtGicV3Layout,
 ) -> Result<QemuVirtKernelPageTablePlan, FinalKernelMapError> {
     let layout = kernel_image_layout()?;
     final_kernel_page_table_plan_from_regions(
         layout,
         info.memory_regions()
             .map(|region| region.map_err(FinalKernelMapError::DeviceTree)),
+        gic,
     )
 }
 
@@ -390,6 +638,7 @@ pub fn final_kernel_page_table_plan(
 fn final_kernel_page_table_plan_from_regions<I>(
     layout: FinalKernelImageLayout,
     regions: I,
+    gic: QemuVirtGicV3Layout,
 ) -> Result<QemuVirtKernelPageTablePlan, FinalKernelMapError>
 where
     I: IntoIterator<Item = Result<AddressRange<PhysAddr>, FinalKernelMapError>>,
@@ -431,14 +680,21 @@ where
         return Err(FinalKernelMapError::MissingRam);
     }
 
-    plan.map(
-        VirtAddr::new(PL011_VIRTUAL_BASE),
-        PhysAddr::new(PL011_PHYSICAL_BASE),
-        TranslationLevel::L3,
-        MappingAttributes::kernel_device(),
-    )
-    .map_err(FinalKernelMapError::PageTable)?;
-    validate_critical_mappings(&plan, layout)?;
+    plan = map_final_device_range(plan, gic.distributor_physical, gic.registers.distributor())?;
+    plan = map_final_device_range(
+        plan,
+        gic.redistributor_physical,
+        gic.registers.redistributor(),
+    )?;
+    plan = plan
+        .with_mapping(
+            VirtAddr::new(PL011_VIRTUAL_BASE),
+            PhysAddr::new(PL011_PHYSICAL_BASE),
+            TranslationLevel::L3,
+            MappingAttributes::kernel_device(),
+        )
+        .map_err(FinalKernelMapError::PageTable)?;
+    validate_critical_mappings(&plan, layout, gic)?;
     validate_runtime_stack_arena(&plan)?;
     let stack_pool =
         runtime_kernel_stack_pool().map_err(FinalKernelMapError::InvalidRuntimeStackArena)?;
@@ -447,6 +703,44 @@ where
         .with_l3_range_reservation(stack_arena.start(), stack_arena.len())
         .map_err(FinalKernelMapError::PageTable)?;
     validate_runtime_stack_arena(&plan)?;
+    Ok(plan)
+}
+
+#[cfg(any(target_arch = "aarch64", test))]
+fn map_final_device_range(
+    mut plan: QemuVirtKernelPageTablePlan,
+    physical: AddressRange<PhysAddr>,
+    virtual_range: AddressRange<VirtAddr>,
+) -> Result<QemuVirtKernelPageTablePlan, FinalKernelMapError> {
+    debug_assert_eq!(physical.len(), virtual_range.len());
+    let mut offset = 0_usize;
+    while offset < physical.len() {
+        let virtual_address = virtual_range.start().as_usize().checked_add(offset).ok_or(
+            FinalKernelMapError::PageTable(KernelPageTableError::Paging(
+                crate::arch::aarch64::paging::PagingError::AddressOverflow,
+            )),
+        )?;
+        let physical_address = physical.start().as_usize().checked_add(offset).ok_or(
+            FinalKernelMapError::PageTable(KernelPageTableError::Paging(
+                crate::arch::aarch64::paging::PagingError::AddressOverflow,
+            )),
+        )?;
+        plan = plan
+            .with_mapping(
+                VirtAddr::new(virtual_address),
+                PhysAddr::new(physical_address),
+                TranslationLevel::L3,
+                MappingAttributes::kernel_device(),
+            )
+            .map_err(FinalKernelMapError::PageTable)?;
+        offset = offset
+            .checked_add(PAGE_SIZE)
+            .ok_or(FinalKernelMapError::PageTable(
+                KernelPageTableError::Paging(
+                    crate::arch::aarch64::paging::PagingError::AddressOverflow,
+                ),
+            ))?;
+    }
     Ok(plan)
 }
 
@@ -481,6 +775,7 @@ fn validate_runtime_stack_arena(
 fn validate_critical_mappings(
     plan: &QemuVirtKernelPageTablePlan,
     layout: FinalKernelImageLayout,
+    gic: QemuVirtGicV3Layout,
 ) -> Result<(), FinalKernelMapError> {
     for (frames, attributes) in [
         (layout.text, MappingAttributes::kernel_code()),
@@ -532,6 +827,48 @@ fn validate_critical_mappings(
         || uart.level != TranslationLevel::L3
     {
         return Err(FinalKernelMapError::MissingKernelSectionMapping);
+    }
+    validate_gic_device_mapping(plan, gic.distributor_physical, gic.registers.distributor())?;
+    validate_gic_device_mapping(
+        plan,
+        gic.redistributor_physical,
+        gic.registers.redistributor(),
+    )?;
+    Ok(())
+}
+
+#[cfg(any(target_arch = "aarch64", test))]
+fn validate_gic_device_mapping(
+    plan: &QemuVirtKernelPageTablePlan,
+    physical: AddressRange<PhysAddr>,
+    virtual_range: AddressRange<VirtAddr>,
+) -> Result<(), FinalKernelMapError> {
+    let mut offset = 0_usize;
+    while offset < physical.len() {
+        let virtual_address = virtual_range
+            .start()
+            .as_usize()
+            .checked_add(offset)
+            .ok_or(FinalKernelMapError::MissingGicDeviceMapping)?;
+        let expected_physical = physical
+            .start()
+            .as_usize()
+            .checked_add(offset)
+            .ok_or(FinalKernelMapError::MissingGicDeviceMapping)?;
+        let translation = plan
+            .translate(VirtAddr::new(virtual_address))
+            .map_err(KernelPageTableError::Paging)
+            .map_err(FinalKernelMapError::PageTable)?
+            .ok_or(FinalKernelMapError::MissingGicDeviceMapping)?;
+        if translation.physical_address != PhysAddr::new(expected_physical)
+            || translation.attributes != MappingAttributes::kernel_device()
+            || translation.level != TranslationLevel::L3
+        {
+            return Err(FinalKernelMapError::MissingGicDeviceMapping);
+        }
+        offset = offset
+            .checked_add(PAGE_SIZE)
+            .ok_or(FinalKernelMapError::MissingGicDeviceMapping)?;
     }
     Ok(())
 }
@@ -1118,19 +1455,82 @@ unsafe impl<const TABLES: usize, const RANGES: usize> ActiveKernelTableMemory
 #[cfg(test)]
 mod tests {
     use super::{
-        BOOTSTRAP_RAM_PHYSICAL_END, BOOTSTRAP_RAM_PHYSICAL_START, BootstrapMemoryError,
-        BootstrapPhysicalMemory, FinalDirectMapAccessError, FinalDirectMapLayoutError,
-        FinalKernelMapError, KERNEL_STACK_ARENA_SLOTS, KERNEL_STACK_ARENA_START,
-        KERNEL_STACK_USABLE_PAGES, KERNEL_VIRTUAL_OFFSET, PL011_VIRTUAL_BASE,
-        QemuVirtKernelPageTablePlan, final_direct_map_layout,
+        BOOTSTRAP_DEVICE_PHYSICAL_END, BOOTSTRAP_RAM_PHYSICAL_END, BOOTSTRAP_RAM_PHYSICAL_START,
+        BootstrapDeviceAccessError, BootstrapMemoryError, BootstrapPhysicalMemory,
+        FinalDirectMapAccessError, FinalDirectMapLayoutError, FinalKernelMapError,
+        KERNEL_STACK_ARENA_SLOTS, KERNEL_STACK_ARENA_START, KERNEL_STACK_USABLE_PAGES,
+        KERNEL_VIRTUAL_OFFSET, PL011_VIRTUAL_BASE, QemuVirtGicV3Layout,
+        QemuVirtKernelPageTablePlan, checked_bootstrap_device_access, final_direct_map_layout,
         final_kernel_page_table_plan_from_regions, linked_kernel_image_layout,
         physical_kernel_range, runtime_kernel_stack_pool, validate_runtime_stack_arena,
     };
+    use crate::arch::aarch64::gicv3::GicV3MmioLayout;
     use crate::arch::aarch64::kernel_page_table::{DirectMapOverride, KernelTranslationTableRole};
     use crate::arch::aarch64::paging::{MappingAttributes, TranslationIndices, TranslationLevel};
     use crate::memory::{
         AddressRange, FrameRange, MemoryMap, PAGE_SIZE, PageFrame, PhysAddr, VirtAddr,
     };
+
+    fn gic_layout() -> QemuVirtGicV3Layout {
+        let distributor_physical =
+            AddressRange::new(PhysAddr::new(0x0800_0000), PhysAddr::new(0x0801_0000)).unwrap();
+        let redistributor_physical =
+            AddressRange::new(PhysAddr::new(0x080a_0000), PhysAddr::new(0x080c_0000)).unwrap();
+        let distributor_virtual = AddressRange::new(
+            VirtAddr::new(KERNEL_VIRTUAL_OFFSET + distributor_physical.start().as_usize()),
+            VirtAddr::new(KERNEL_VIRTUAL_OFFSET + distributor_physical.end().as_usize()),
+        )
+        .unwrap();
+        let redistributor_virtual = AddressRange::new(
+            VirtAddr::new(KERNEL_VIRTUAL_OFFSET + redistributor_physical.start().as_usize()),
+            VirtAddr::new(KERNEL_VIRTUAL_OFFSET + redistributor_physical.end().as_usize()),
+        )
+        .unwrap();
+        QemuVirtGicV3Layout {
+            distributor_physical,
+            redistributor_physical,
+            registers: GicV3MmioLayout::new(distributor_virtual, redistributor_virtual).unwrap(),
+        }
+    }
+
+    #[test]
+    fn bootstrap_device_access_is_bounded_and_naturally_aligned() {
+        assert_eq!(
+            checked_bootstrap_device_access(PhysAddr::new(0x080a_0008), size_of::<u64>()),
+            Ok(0x080a_0008)
+        );
+        assert_eq!(
+            checked_bootstrap_device_access(PhysAddr::new(0x080a_0004), size_of::<u64>()),
+            Err(BootstrapDeviceAccessError::MisalignedAccess {
+                address: 0x080a_0004,
+                alignment: size_of::<u64>(),
+            })
+        );
+        assert_eq!(
+            checked_bootstrap_device_access(
+                PhysAddr::new(BOOTSTRAP_DEVICE_PHYSICAL_END - 4),
+                size_of::<u64>(),
+            ),
+            Err(BootstrapDeviceAccessError::MisalignedAccess {
+                address: BOOTSTRAP_DEVICE_PHYSICAL_END - 4,
+                alignment: size_of::<u64>(),
+            })
+        );
+        assert_eq!(
+            checked_bootstrap_device_access(
+                PhysAddr::new(BOOTSTRAP_DEVICE_PHYSICAL_END),
+                size_of::<u32>(),
+            ),
+            Err(BootstrapDeviceAccessError::OutsideTemporaryDeviceWindow {
+                address: BOOTSTRAP_DEVICE_PHYSICAL_END,
+                width: size_of::<u32>(),
+            })
+        );
+        assert_eq!(
+            checked_bootstrap_device_access(PhysAddr::new(usize::MAX - 3), size_of::<u32>()),
+            Err(BootstrapDeviceAccessError::AddressOverflow)
+        );
+    }
 
     #[test]
     fn translates_only_complete_frames_in_the_bootstrap_ram_window() {
@@ -1257,10 +1657,11 @@ mod tests {
             PhysAddr::new(0x6000_0000),
         )
         .unwrap();
-        let plan = final_kernel_page_table_plan_from_regions(layout, [Ok(ram)]).unwrap();
+        let gic = gic_layout();
+        let plan = final_kernel_page_table_plan_from_regions(layout, [Ok(ram)], gic).unwrap();
 
-        assert_eq!(plan.required_table_frames(), 7);
-        assert_eq!(plan.mappings().len(), 767);
+        assert_eq!(plan.required_table_frames(), 8);
+        assert_eq!(plan.mappings().len(), 815);
         for (address, attributes) in [
             (base, MappingAttributes::kernel_code()),
             (base + 0x20_000, MappingAttributes::kernel_rodata()),
@@ -1284,6 +1685,23 @@ mod tests {
             .unwrap();
         assert_eq!(uart.level, TranslationLevel::L3);
         assert_eq!(uart.attributes, MappingAttributes::kernel_device());
+        for (physical, virtual_range) in [
+            (gic.distributor_physical, gic.registers.distributor()),
+            (gic.redistributor_physical, gic.registers.redistributor()),
+        ] {
+            for offset in (0..physical.len()).step_by(PAGE_SIZE) {
+                let translation = plan
+                    .translate(VirtAddr::new(virtual_range.start().as_usize() + offset))
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    translation.physical_address,
+                    PhysAddr::new(physical.start().as_usize() + offset)
+                );
+                assert_eq!(translation.level, TranslationLevel::L3);
+                assert_eq!(translation.attributes, MappingAttributes::kernel_device());
+            }
+        }
 
         let mut memory = MemoryMap::<4>::new();
         memory.add_usable(ram).unwrap();
@@ -1522,7 +1940,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            final_kernel_page_table_plan_from_regions(layout, [Ok(outside)]),
+            final_kernel_page_table_plan_from_regions(layout, [Ok(outside)], gic_layout()),
             Err(FinalKernelMapError::RamOutsideBootstrap {
                 start: BOOTSTRAP_RAM_PHYSICAL_START - PAGE_SIZE,
                 end: BOOTSTRAP_RAM_PHYSICAL_START + PAGE_SIZE,

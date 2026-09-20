@@ -119,8 +119,9 @@ release path. A restricted AArch64 backend now preflights exact active L3 descri
 infallible batch writes, and completes per-page all-ASID TLB maintenance before publication or
 release; host failure injection covers partial-update prevention. The focused image Cross Compiles
 one bounded post-TTBR1 stack allocation, virtual-alias round trip, retirement, scrub, and release
-with an ordered success marker. The current seven-table image and mapper still need target
-execution, and stack entry, measured sizing, thread switching, and exception-stack activation
+with an ordered success marker. Exact GICD and affinity-selected GICR device pages now bring the
+current image to eight tables; that image and mapper still need target execution, and stack entry,
+measured sizing, thread switching, and exception-stack activation
 remain;
 the loaded-init path retires temporary TTBR0 aliases when it installs its user hierarchy.
 
@@ -151,9 +152,15 @@ Host-verifiable foundation now available:
 - a failure-bounded GICv3 preparation type state validates PIDR/SRE, preserves one-way affinity
   routing, wakes GICR, configures the timer PPI, and retains explicit recovery evidence while both
   Group-1 delivery gates stay closed;
-- host tests cover boundaries, register update isolation, finite polling, and injected failure,
-  while concrete MMIO/system-register ownership, delivery/dispatch, IRQ-safe synchronization,
-  boot integration, sleep integration, and all target execution remain pending.
+- boot integration now packs current `MPIDR_EL1` affinity, scans PIDR2/TYPER with VLPI-aware
+  strides and a mandatory `Last`, retains the unique matching 128 KiB RD/SGI pair, and maps only it
+  plus the complete GICD range as exact final-TTBR1 device pages;
+- a non-copying concrete AArch64 backend bounds and performs volatile MMIO plus named `ICC_*_EL1`
+  accesses against the retained table/layout contract, but is not yet constructed by boot;
+- host tests cover boundaries, selection failures, exact page mappings, register update isolation,
+  finite polling, and injected failure, while preparation through the concrete owner,
+  delivery/dispatch, IRQ-safe synchronization, sleep integration, and all target execution remain
+  pending.
 
 Observable result: timer interrupts advance a monotonic time source and scheduled callbacks fire
 under an automated QEMU test.

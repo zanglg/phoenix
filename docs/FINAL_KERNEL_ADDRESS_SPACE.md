@@ -3,7 +3,8 @@
 This document describes Phoenix's implemented final `TTBR1_EL1` hierarchy for the pinned
 AArch64 QEMU `virt` platform. Planning, allocation, materialization, cross-compilation, and ELF
 inspection are complete. Publication on the recorded QEMU 9.1.3 AArch64 CPU path is Runtime
-Verified; negative permission and guard-fault probes remain Runtime Pending.
+Verified for the historical five-table layout; the current eight-table GIC extension, negative
+permission cases, and guard-fault probes remain Runtime Pending.
 
 ## Current implementation
 
@@ -22,6 +23,8 @@ The linker emits page-aligned permission-domain symbols and enforces their order
 | Data, BSS, boot tables, usable stack pages | `__data_start..__data_end` minus the offset, excluding the guard | Normal, read/write, non-executable |
 | Boot-stack guard | `__boot_stack_guard_start..__boot_stack_guard_end` minus the offset | Deliberately unmapped |
 | Other DTB-declared RAM | Complete frames in each memory node | Normal, read/write, non-executable |
+| GICv3 distributor | Complete DTB-declared GICD range at the fixed offset | 4 KiB Device-nGnRnE pages, read/write, non-executable |
+| Boot CPU GICv3 redistributor | Affinity-selected 128 KiB RD/SGI pair at the fixed offset | 4 KiB Device-nGnRnE pages, read/write, non-executable |
 | PL011 | Physical `0x09000000`, one 4 KiB page | Device-nGnRnE, read/write, non-executable |
 | Runtime-stack arena | `0xffffff9000000000..0xffffff90000a0000` | Prelinked L2/L3 topology, invalid leaves; retained 16-slot pool owner |
 
@@ -42,10 +45,12 @@ the complete requested change in a copy before committing it and chooses the lar
 Permission overrides split the physical direct map at page boundaries. On the pinned 512 MiB
 machine, the first 2 MiB is represented by 512 L3 pages so that text, rodata, and data differ;
 the remaining 510 MiB uses 255 L2 blocks. Omitting the guard and adding the single PL011 page brings
-the mapped portion to five table frames and 767 leaf mappings. The empty runtime-stack arena adds
-one L2 and one L3 table without adding a leaf, bringing the current exact topology to seven table
-frames and 767 leaf mappings. The configured limits are eight table frames and 1024 leaves,
-so an unexpected DTB topology fails explicitly rather than truncating the address space.
+the pre-GIC mapped portion to five table frames and 767 leaf mappings. The QEMU fixture's 64 KiB
+GICD plus selected 128 KiB GICR pair add 48 forced-L3 leaves and one L3 table. The empty
+runtime-stack arena adds one L2 and one L3 table without adding a leaf, bringing the current exact
+topology to eight table frames and 815 leaf mappings. The configured limits are exactly eight table
+frames and 1024 leaves, so another required table or excessive DTB range fails explicitly rather
+than truncating the address space.
 
 The empty-topology reservation is transactional. It rejects zero or non-page-multiple lengths,
 misaligned or non-upper-half starts, address overflow, existing leaf translations, and
@@ -61,9 +66,12 @@ that owner below 512 bytes.
 
 The QEMU platform builder verifies both ends of text, rodata, and data through the offline
 translation model, proves the boot-stack guard is absent, and verifies the PL011 physical address,
-page level, and device attributes before any table frame is allocated. It also checks all 160
-pages of the provisional runtime-stack arena, rejects the plan if any already has a translation,
-and reserves their empty L3 topology before table-frame allocation.
+page level, and device attributes before any table frame is allocated. Before planning, it parses
+the real boot DTB and scans GICR PIDR2/TYPER through the temporary low device identity map to match
+the current `MPIDR_EL1` affinity. It then verifies every page of the complete GICD range and only
+the selected 128 KiB RD/SGI pair has the exact L3 physical output and device attributes. It also
+checks all 160 pages of the provisional runtime-stack arena, rejects the plan if any already has a
+translation, and reserves their empty L3 topology before table-frame allocation.
 
 ## Ownership and publication
 
@@ -83,12 +91,15 @@ publication operation. Publication executes:
 5. `DSB ISH` and `ISB` before continuing.
 
 Both final-map runtime owner variants also retain one platform-created runtime-stack pool for the
-reserved arena. This establishes virtual-slot ownership but does not allocate stack frames or
-by itself authorize live descriptor mutation. A separate unsafe AArch64 mapper can bind the exact
-retained table owner, its final-direct-map descriptor access, and serialized TLB maintenance. It
-changes only prelinked L3 leaves after completing all fallible checks. The focused final-map path
-constructs it for one bounded publish/alias/retire/release probe; loaded init and the default path
-do not.
+reserved arena and the copied physical/virtual GIC layout. The GIC layout is descriptive evidence,
+not register authorization. The unsafe non-copying `MappedGicV3Registers` backend can later bind it
+to the exact active table owner under unique GICD/GICR/current-CPU ownership; this checkpoint does
+not construct it. The stack pool establishes virtual-slot ownership but does not allocate stack
+frames or by itself authorize live descriptor mutation. A separate unsafe AArch64 stack mapper can
+bind the exact retained table owner, its final-direct-map descriptor access, and serialized TLB
+maintenance. It changes only prelinked L3 leaves after completing all fallible checks. The focused
+final-map path constructs the stack mapper for one bounded publish/alias/retire/release probe;
+loaded init and the default path do not.
 
 This replaces the coarse higher-half bootstrap hierarchy. The standalone final-map probe
 intentionally leaves `TTBR0_EL1` unchanged, so its temporary low device and RAM aliases remain.
@@ -108,8 +119,9 @@ owned.
 
 ## Focused QEMU probe
 
-The `kernel-map-probe` image uses the real boot DTB, kernel linker bounds, reservation-aware frame
-allocator, and bootstrap physical-memory backend. Before publication it emits
+The `kernel-map-probe` image uses the real boot DTB, current CPU affinity, GICR discovery registers,
+kernel linker bounds, reservation-aware frame allocator, and bootstrap physical-memory backend.
+Before publication it emits
 `PHOENIX_KERNEL_MAP_ENTER`. After the TTBR1 switch it reuses the mapped kernel text, rodata, stack,
 data, and PL011 device page, initializes and exercises the bounded heap, emits
 `PHOENIX_KERNEL_HEAP_OK`, publishes and retires one owned stack, verifies its virtual/physical
@@ -138,29 +150,33 @@ Host tests cover range decomposition, exact translation, permission replacement,
 topology, table-capacity and overlap failures, atomic allocation, descriptor materialization,
 retryable backend failure, and unpublished release. Platform tests cover the pinned 512 MiB
 topology, critical mappings, linker-layout rejection, RAM-window rejection, exact runtime-stack
-arena extent, seven-table/767-leaf result, initial leaf absence, reserved-parent materialization,
+arena extent, eight-table/815-leaf result, initial leaf absence, reserved-parent materialization,
 and injected mapping conflicts. Planner tests also cover reservations crossing an L3-table
 boundary plus transactional alignment, half, capacity, and leaf/topology conflict failures. A live
 mapper model injects publication and retirement reads, verifies zero partial writes on errors,
 rejects an altered live descriptor, and requires a completed maintenance batch before frame release.
-The Cross Compiled/ELF Inspected focused image includes a bounded real-backend stack transaction and
-its required marker, but static inclusion does not prove execution.
+The GIC additions cover bounded bootstrap register addresses, MPIDR affinity packing, VLPI-aware
+redistributor selection and its negative cases, exact page-level GIC translations, and concrete
+backend register bounds. The Cross Compiled/ELF Inspected focused image includes the new discovery
+and mapping path plus a bounded real-backend stack transaction and its required marker, but static
+inclusion does not prove execution.
 
 The focused kernel image is Cross Compiled and ELF Inspected. Static checks require every
 permission-domain symbol, page alignment and ordering, the first-2-MiB image bound, the expected
 load addresses, and the heap, stack, and final success sentinels. On the recorded QEMU 9.1.3 `virt-9.1` run,
 `cargo xtask test-kernel-map` reported root `0x0000000040000000`, five tables, 767 leaves, and
 the ordered enter/success markers after TTBR1 publication. That run predates the new heap marker,
-and also predates the two empty runtime-stack tables. It remains historical final-table evidence
-but does not validate the current seven-table heap-and-stack extended probe.
+the two empty runtime-stack tables, boot-CPU GIC discovery, and 48 exact GIC device leaves. It
+remains historical final-table evidence but does not validate the current eight-table/815-leaf
+heap, stack, and GIC-extended probe.
 
 ## TODO
 
 - remove the temporary TTBR0 aliases when no low virtual pointer or bootstrap handle survives;
 - migrate remaining post-switch raw helper users to the retained final-direct-map capability and
   rerun its valid/invalid target paths;
-- rerun the heap-and-stack-extended final-map probe and use observed consumers to replace its conformance
-  sizing with an explicit production policy;
+- rerun the heap, stack, and GIC-extended final-map probe and use observed consumers to replace its
+  conformance sizing with an explicit production policy;
 - derive the physical-address size from `ID_AA64MMFR0_EL1.PARange` before accepting RAM above
   the current 32-bit IPS envelope;
 - enable caches only after cache-maintenance and memory-ordering requirements are designed and
@@ -181,6 +197,8 @@ substitute for firmware-reserved or allocator-owned frames.
 
 ## Runtime status
 
-`RUN-MMU-001` is Runtime Verified by the recorded focused probe. `RUN-MMU-002` remains open for
-final TTBR0 alias retirement, `RUN-MMU-003` covers the new final-map access capability, and
-controlled permission/guard faults remain separate Pending work.
+`RUN-MMU-001` remains Runtime Verified by the recorded focused probe at its historical five-table
+scope. The current eight-table GIC-extended image has not executed. `RUN-MMU-002` remains open for
+final TTBR0 alias retirement, `RUN-MMU-003` covers the new final-map access capability,
+`RUN-IRQ-001` covers target GIC selection/mapping/access, and controlled permission/guard faults
+remain separate Pending work.

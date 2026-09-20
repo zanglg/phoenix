@@ -63,7 +63,7 @@ _No unclassified entries._
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
 | MM-001 | Physical page allocator | In Progress | 0.1.0 | QEMU boot-memory probe validated DTB derivation and one allocate/readback/scrub/release cycle; boundary-negative probes remain |
-| MM-002 | Virtual memory and kernel address space | In Progress | 0.1.0 | Final TTBR1 publication passed on QEMU; managed-RAM access, empty stack topology, restricted live L3 leaf/TLBI transactions, and a bounded final-map integration are Host Tested/Cross Compiled, while the current seven-table rerun, guard/permission negatives, low-alias retirement, and general dynamic mappings remain |
+| MM-002 | Virtual memory and kernel address space | In Progress | 0.1.0 | Final TTBR1 publication passed on QEMU; managed-RAM access, exact GIC device leaves, empty stack topology, restricted live L3 leaf/TLBI transactions, and a bounded final-map integration are Host Tested/Cross Compiled, while the current eight-table rerun, guard/permission negatives, low-alias retirement, and general dynamic mappings remain |
 | MM-003 | Kernel heap and fallible allocation policy | In Progress | 0.1.0 | Core ownership/failure behavior is Host Tested; a bounded four-frame/four-record post-TTBR1 probe is Cross Compiled and ELF Inspected, while target evidence, consumer sizing, and synchronized use remain |
 | MM-004 | Kernel stacks and guard pages | In Progress | 0.1.0 | Owned slot/frame plans, mapped ownership, a prelinked arena, and an exact AArch64 leaf mapper with injected failure/TLB-order tests are Host Tested; a bounded publish/alias/retire/release probe is Cross Compiled/ELF Inspected, while stack entry, target evidence, sizing, and exception-stack policy remain |
 | MM-005 | User address spaces and safe user copies | In Progress | 0.1.0 | Plans/materialization/ownership and bidirectional copies are Host Tested; loaded init uses an ownership-checked final-direct-map adapter; general fault recovery, lifecycle, and runtime evidence remain |
@@ -116,7 +116,7 @@ _No unclassified entries._
 | --- | --- | --- | --- | --- |
 | DEV-001 | Minimal device and driver lifecycle | Deferred | Unscheduled | Do not build a framework before two users exist |
 | DEV-002 | Early and runtime console | In Progress | 0.1.0 | Polled PL011 positive output/flush passed on QEMU; panic and interrupt-era behavior remain |
-| IRQ-001 | Interrupt controller abstraction and GIC | In Progress | 0.1.0 | DTB topology plus a bounded, recovery-retaining GICv3 preparation type state are Host Tested/Cross Compiled with delivery gates closed; concrete MMIO/system-register ownership, redistributor selection, activation, dispatch, and runtime evidence remain |
+| IRQ-001 | Interrupt controller abstraction and GIC | In Progress | 0.1.0 | DTB topology, affinity-selected redistributor, exact final GICD/GICR mappings, a concrete bounded MMIO/system-register backend, and a recovery-retaining preparation type state are Host Tested/Cross Compiled with delivery gates closed; boot construction of that owner, preparation, activation, dispatch, and runtime evidence remain |
 | FW-001 | PSCI integration | Deferred | Unscheduled | Power and SMP services |
 | VIRTIO-001 | VirtIO transport and device discovery | Deferred | Unscheduled | MMIO first; PCI may follow |
 | PCI-001 | PCI discovery and configuration | Deferred | Unscheduled | Important for x86_64 and future platforms |

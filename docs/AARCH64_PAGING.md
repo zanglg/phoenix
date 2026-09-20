@@ -113,8 +113,9 @@ permission overrides, exact guard holes, table ownership, and retry-safe materia
 reserved-topology tests additionally cover range boundaries, transactional rejection, coarser-leaf
 conflicts, and materialized invalid leaves. The focused final-map image is also Cross Compiled and
 ELF Inspected with the configured AArch64 bare-metal target. The recorded probe published the
-earlier five-table TTBR1 and continued through its success marker; the current seven-table image,
-live stack-leaf mapper, permission cases, and guard-fault negative cases remain pending. Host
+earlier five-table TTBR1 and continued through its success marker; the current eight-table image
+with exact GIC device leaves, live stack-leaf mapper, permission cases, and guard-fault negative
+cases remain pending. Host
 failure injection proves mapper errors precede all writes and successful retirement completes a
 second maintenance batch before ownership becomes releasable. The focused final-map image Cross
 Compiles and ELF Inspects one real-backend publish/alias/retire/release transaction, but it has not

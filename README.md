@@ -18,10 +18,12 @@ narrow support claim:
   frequency conversion, and masked physical-timer programming are Host Tested/Cross Compiled,
   while boot activation, GIC delivery, IRQ synchronization, and sleep remain pending;
 - strict QEMU `virt` DTB discovery validates GICv3 MMIO ranges, interrupt-parent ownership, and
-  the architected-timer PPIs without mapping the controller or enabling interrupts;
+  the architected-timer PPIs; the final-map paths select the current CPU redistributor by affinity
+  and map only it plus GICD as exact device pages without enabling interrupts;
 - a Host Tested/Cross Compiled GICv3 preparation state machine validates PIDR/SRE, wakes the
   selected redistributor, configures one timer PPI with bounded waits, and preserves recovery
-  evidence while distributor and CPU Group-1 delivery remain disabled;
+  evidence while distributor and CPU Group-1 delivery remain disabled; a concrete bounded
+  volatile MMIO/`ICC_*_EL1` backend Cross Compiles but is not yet constructed by boot;
 - a bounded QEMU runner and boot-test harness are implemented and host tested;
 - bounded QEMU probes have verified direct boot, DTB/allocator access, final TTBR1 publication,
   the first EL0 transition, and the loaded-init/file-I/O path on the pinned board;
@@ -55,12 +57,12 @@ narrow support claim:
   invalid leaves, while mapped ownership type state prevents frame release before transactional
   mapping retirement; a Host Tested/Cross Compiled AArch64 mapper performs exact L3 leaf batches
   and TLB maintenance; the final-map image Cross Compiles a bounded publish/alias/retire/release
-  probe without switching SP, but the seven-table image is not target rerun;
+  probe without switching SP, but the current eight-table image is not target rerun;
 - an opt-in boot-memory probe cross-links the real DTB-to-allocation-to-readback path;
 - an opt-in final-kernel-map image builds allocator-owned TTBR1 tables with RX text, RO/NX
-  rodata, RW/NX RAM, an unmapped boot-stack guard, and a page-granular PL011 mapping, then
+  rodata, RW/NX RAM, an unmapped boot-stack guard, and page-granular PL011/GIC mappings, then
   publishes them with barriers and TLB invalidation; that base path passed previously, while the
-  newly heap-and-stack-extended image requires a target rerun;
+  current heap, stack, and GIC-extended image requires a target rerun;
 - final-map builders retain a Host Tested managed-RAM proof beside their table owner, and the
   loaded-init user-copy adapter is Cross Compiled against that bounded capability;
 - early PL011 output and the bounded boot smoke test have been verified on QEMU 9.1.3; deliberate

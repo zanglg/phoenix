@@ -39,6 +39,12 @@ remain disabled or deferred. The default image retains the coarse mapping; the o
 linked EL1 exception vector table before emitting its first console line, but keeps asynchronous
 exceptions masked.
 
+Before either final-map consumer replaces TTBR1, it uses the low device identity window for
+read-only, naturally aligned GICR PIDR2/TYPER discovery. Access is bounded below 1 GiB, selects the
+current CPU by `MPIDR_EL1` affinity, and is dropped before final-table publication. This is Cross
+Compiled and Host Tested through an abstract register fixture; it remains Runtime Pending and does
+not initialize or enable the GIC.
+
 The linker reserves a zeroed BSS, one page-aligned 4 KiB guard frame, and a 1 MiB,
 16-byte-aligned boot-construction stack. The coarse bootstrap mappings still map the guard; the
 final TTBR1 hierarchy deliberately omits it. The larger temporary stack covers the statically

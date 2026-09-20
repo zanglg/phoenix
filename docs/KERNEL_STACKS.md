@@ -164,7 +164,8 @@ stack and the path has not run on target.
 
 Host tests verify that direct-map overrides can leave an exact page hole without losing adjacent
 permissions or large mappings. Platform tests verify that the QEMU `virt` final plan leaves the
-declared guard absent while retaining text, rodata, data, and PL011 mappings. Every AArch64 kernel
+declared guard absent while retaining text, rodata, data, PL011, GICD, and selected GICR mappings.
+Every AArch64 kernel
 variant is cross-linked and inspected for the two guard symbols, their exact size and adjacency,
 the 1 MiB stack size, and the overall image bound.
 
@@ -179,7 +180,7 @@ tests verify the exact 640 KiB arena, prove every initial translation absent, an
 mapping at its first page. Planner tests reserve empty topology across an L3-table boundary, reject
 misalignment, lower-half input, existing leaves, coarser-leaf replacement, and capacity exhaustion
 transactionally, and materialize linked parent tables while proving the selected leaf stays
-invalid. The pinned platform model now contains seven table frames and the same 767 leaves. A
+invalid. The pinned platform model now contains eight table frames and 815 leaves. A
 fault-injecting mapping model verifies failed publication, successful type-state transition,
 rejection by a foreign backend instance, failed unpublication with token retention, successful
 retry, and frame/slot release only after returning to the unpublished state.
@@ -210,10 +211,10 @@ retired. That separate target boundary is `RUN-KSTACK-002` and remains Runtime P
 `RUN-KSTACK-002` remains Runtime Pending for owned-stack publication, entry, and retirement. The
 recorded positive final-map and loaded-init runs validate only the linker-owned construction stack
 and do not close either negative or dynamic-stack boundary. Those runs also predate the current
-seven-table hierarchy; the empty arena topology is Host Tested, Cross Compiled, and Runtime
-Pending rather than inferred from the older five-table output. The live leaf mapper is likewise
-Host Tested and Cross Compiled. Its bounded `kernel-map-probe` instantiation is Cross Compiled and
-ELF Inspected but has not executed on target.
+eight-table hierarchy; the empty arena topology and exact GIC mappings are Host Tested, Cross
+Compiled, and Runtime Pending rather than inferred from the older five-table output. The live leaf
+mapper is likewise Host Tested and Cross Compiled. Its bounded `kernel-map-probe` instantiation is
+Cross Compiled and ELF Inspected but has not executed on target.
 
 ## TODO
 

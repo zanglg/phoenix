@@ -1,6 +1,12 @@
-//! Host-testable GICv3 private-interrupt preparation state machine.
+//! Host-testable GICv3 discovery and private-interrupt preparation.
 
 use core::num::NonZeroU32;
+#[cfg(target_arch = "aarch64")]
+use core::{arch::asm, ptr};
+
+#[cfg(target_arch = "aarch64")]
+use crate::arch::aarch64::kernel_page_table::MaterializedKernelPageTables;
+use crate::memory::{AddressRange, PAGE_SIZE, PhysAddr, VirtAddr};
 
 const GICD_CTLR: usize = 0x0000;
 const GICD_PIDR2: usize = 0xffe8;
@@ -10,6 +16,7 @@ const GICD_CTLR_ARE_NS: u32 = 1 << 4;
 const GICD_CTLR_RWP: u32 = 1 << 31;
 
 const GICR_CTLR: usize = 0x0000;
+const GICR_TYPER: usize = 0x0008;
 const GICR_WAKER: usize = 0x0014;
 const GICR_PIDR2: usize = 0xffe8;
 const GICR_SGI_BASE: usize = 0x1_0000;
@@ -24,6 +31,9 @@ const GICR_IGRPMODR0: usize = GICR_SGI_BASE + 0x0d00;
 const GICR_CTLR_RWP: u32 = 1 << 3;
 const GICR_WAKER_PROCESSOR_SLEEP: u32 = 1 << 1;
 const GICR_WAKER_CHILDREN_ASLEEP: u32 = 1 << 2;
+const GICR_TYPER_VLPIS: u64 = 1 << 1;
+const GICR_TYPER_LAST: u64 = 1 << 4;
+const GICR_TYPER_AFFINITY_SHIFT: u32 = 32;
 
 const GIC_PIDR2_ARCHITECTURE_SHIFT: u32 = 4;
 const GIC_PIDR2_ARCHITECTURE_MASK: u32 = 0x0f;
@@ -42,6 +52,324 @@ const PRIVATE_INTERRUPT_MASK: u32 = u32::MAX;
 pub const PPI_INTID_MIN: u16 = 16;
 /// Highest architectural private peripheral interrupt ID.
 pub const PPI_INTID_MAX: u16 = 31;
+/// Size of one GICv3 redistributor RD plus SGI frame pair.
+pub const GIC_REDISTRIBUTOR_FRAME_SIZE: usize = 128 * 1024;
+/// Minimum distributor range needed by the GICv3 programming model.
+pub const GIC_DISTRIBUTOR_MIN_SIZE: usize = 64 * 1024;
+
+/// Packed `Aff3:Aff2:Aff1:Aff0` identity used by `GICR_TYPER`.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct CpuAffinity(u32);
+
+impl CpuAffinity {
+    /// Extract the four affinity levels from an `MPIDR_EL1` value.
+    pub const fn from_mpidr(mpidr: u64) -> Self {
+        let aff0 = mpidr & 0xff;
+        let aff1 = (mpidr >> 8) & 0xff;
+        let aff2 = (mpidr >> 16) & 0xff;
+        let aff3 = (mpidr >> 32) & 0xff;
+        Self(((aff3 << 24) | (aff2 << 16) | (aff1 << 8) | aff0) as u32)
+    }
+
+    /// Return the packed affinity value compared with `GICR_TYPER[63:32]`.
+    pub const fn raw(self) -> u32 {
+        self.0
+    }
+
+    /// Read the affinity of the current AArch64 processing element.
+    #[cfg(target_arch = "aarch64")]
+    pub fn current() -> Self {
+        let mpidr: u64;
+        // SAFETY: reading `MPIDR_EL1` has no memory side effects and is
+        // available at EL1 in the AArch64 execution state used by Phoenix.
+        unsafe {
+            asm!(
+                "mrs {mpidr}, MPIDR_EL1",
+                mpidr = out(reg) mpidr,
+                options(nomem, nostack, preserves_flags)
+            );
+        }
+        Self::from_mpidr(mpidr)
+    }
+}
+
+/// Fallible read access used while selecting the current CPU redistributor.
+pub trait GicRedistributorDiscoveryAccess {
+    /// Backend-specific read failure.
+    type Error;
+
+    /// Read one aligned 32-bit physical MMIO register.
+    fn read_u32(&mut self, address: PhysAddr) -> Result<u32, Self::Error>;
+
+    /// Read one aligned 64-bit physical MMIO register.
+    fn read_u64(&mut self, address: PhysAddr) -> Result<u64, Self::Error>;
+}
+
+/// Exact 128 KiB redistributor RD/SGI pair selected for one CPU.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SelectedRedistributor {
+    range: AddressRange<PhysAddr>,
+    typer: u64,
+}
+
+impl SelectedRedistributor {
+    /// Return the exact RD/SGI frame pair; optional VLPI pages are excluded.
+    pub const fn range(self) -> AddressRange<PhysAddr> {
+        self.range
+    }
+
+    /// Return the observed `GICR_TYPER` value.
+    pub const fn typer(self) -> u64 {
+        self.typer
+    }
+}
+
+/// Failure while selecting one CPU's redistributor from a discovered region.
+#[derive(Debug, Eq, PartialEq)]
+pub enum RedistributorSelectionError<E> {
+    /// A physical register address overflowed.
+    AddressOverflow,
+    /// A candidate does not contain a complete RD/SGI frame pair.
+    TruncatedFrame {
+        /// Candidate physical base.
+        base: usize,
+    },
+    /// A candidate PIDR2 does not report GICv3 or GICv4.
+    UnsupportedArchitecture {
+        /// Candidate physical base.
+        base: usize,
+        /// Observed four-bit architecture revision.
+        revision: u8,
+    },
+    /// A physical MMIO read failed.
+    Access {
+        /// Register address that could not be read.
+        address: usize,
+        /// Backend-specific failure.
+        error: E,
+    },
+    /// More than one redistributor advertises the requested affinity.
+    DuplicateAffinity {
+        /// Duplicated packed affinity.
+        affinity: u32,
+    },
+    /// No redistributor advertises the requested affinity before `Last`.
+    AffinityNotFound {
+        /// Missing packed affinity.
+        affinity: u32,
+    },
+    /// The discovered range ended without a `GICR_TYPER.Last` frame.
+    MissingLast,
+}
+
+/// Select one CPU's exact redistributor RD/SGI pair without retaining MMIO.
+pub fn select_redistributor<A: GicRedistributorDiscoveryAccess>(
+    region: AddressRange<PhysAddr>,
+    affinity: CpuAffinity,
+    access: &mut A,
+) -> Result<SelectedRedistributor, RedistributorSelectionError<A::Error>> {
+    let end = region.end().as_usize();
+    let mut base = region.start().as_usize();
+    let mut selected = None;
+    while base < end {
+        let frame_end = base
+            .checked_add(GIC_REDISTRIBUTOR_FRAME_SIZE)
+            .ok_or(RedistributorSelectionError::AddressOverflow)?;
+        if frame_end > end {
+            return Err(RedistributorSelectionError::TruncatedFrame { base });
+        }
+
+        let pidr2_address = base
+            .checked_add(GICR_PIDR2)
+            .ok_or(RedistributorSelectionError::AddressOverflow)?;
+        let pidr2 = access
+            .read_u32(PhysAddr::new(pidr2_address))
+            .map_err(|error| RedistributorSelectionError::Access {
+                address: pidr2_address,
+                error,
+            })?;
+        let revision =
+            ((pidr2 >> GIC_PIDR2_ARCHITECTURE_SHIFT) & GIC_PIDR2_ARCHITECTURE_MASK) as u8;
+        if !matches!(revision, GIC_ARCHITECTURE_V3 | GIC_ARCHITECTURE_V4) {
+            return Err(RedistributorSelectionError::UnsupportedArchitecture { base, revision });
+        }
+
+        let typer_address = base
+            .checked_add(GICR_TYPER)
+            .ok_or(RedistributorSelectionError::AddressOverflow)?;
+        let typer = access
+            .read_u64(PhysAddr::new(typer_address))
+            .map_err(|error| RedistributorSelectionError::Access {
+                address: typer_address,
+                error,
+            })?;
+        let candidate_affinity = (typer >> GICR_TYPER_AFFINITY_SHIFT) as u32;
+        if candidate_affinity == affinity.raw() {
+            if selected.is_some() {
+                return Err(RedistributorSelectionError::DuplicateAffinity {
+                    affinity: affinity.raw(),
+                });
+            }
+            let range = AddressRange::new(PhysAddr::new(base), PhysAddr::new(frame_end))
+                .map_err(|_| RedistributorSelectionError::AddressOverflow)?;
+            selected = Some(SelectedRedistributor { range, typer });
+        }
+        if typer & GICR_TYPER_LAST != 0 {
+            return selected.ok_or(RedistributorSelectionError::AffinityNotFound {
+                affinity: affinity.raw(),
+            });
+        }
+
+        let stride = if typer & GICR_TYPER_VLPIS != 0 {
+            GIC_REDISTRIBUTOR_FRAME_SIZE
+                .checked_mul(2)
+                .ok_or(RedistributorSelectionError::AddressOverflow)?
+        } else {
+            GIC_REDISTRIBUTOR_FRAME_SIZE
+        };
+        base = base
+            .checked_add(stride)
+            .ok_or(RedistributorSelectionError::AddressOverflow)?;
+    }
+    Err(RedistributorSelectionError::MissingLast)
+}
+
+/// Checked virtual ranges used by the concrete GICv3 register backend.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct GicV3MmioLayout {
+    distributor: AddressRange<VirtAddr>,
+    redistributor: AddressRange<VirtAddr>,
+}
+
+/// Invalid mapped GIC register ownership or access.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GicV3MmioError {
+    /// One range is misaligned or too short for required registers.
+    InvalidRange {
+        /// `GICD` or `GICR`.
+        component: &'static str,
+    },
+    /// Distributor and redistributor virtual ranges overlap.
+    OverlappingRanges,
+    /// A register offset is not aligned for a 32-bit access.
+    MisalignedOffset {
+        /// `GICD` or `GICR`.
+        component: &'static str,
+        /// Rejected byte offset.
+        offset: usize,
+    },
+    /// A register lies outside its exact mapped range.
+    RegisterOutOfRange {
+        /// `GICD` or `GICR`.
+        component: &'static str,
+        /// Rejected byte offset.
+        offset: usize,
+    },
+    /// Virtual address arithmetic overflowed.
+    AddressOverflow,
+}
+
+impl GicV3MmioLayout {
+    /// Validate exact mapped distributor and selected-redistributor ranges.
+    pub fn new(
+        distributor: AddressRange<VirtAddr>,
+        redistributor: AddressRange<VirtAddr>,
+    ) -> Result<Self, GicV3MmioError> {
+        if !valid_mmio_range(distributor, GIC_DISTRIBUTOR_MIN_SIZE, false) {
+            return Err(GicV3MmioError::InvalidRange { component: "GICD" });
+        }
+        if !valid_mmio_range(redistributor, GIC_REDISTRIBUTOR_FRAME_SIZE, true) {
+            return Err(GicV3MmioError::InvalidRange { component: "GICR" });
+        }
+        if distributor.overlaps(redistributor) {
+            return Err(GicV3MmioError::OverlappingRanges);
+        }
+        Ok(Self {
+            distributor,
+            redistributor,
+        })
+    }
+
+    /// Return the complete mapped distributor range.
+    pub const fn distributor(self) -> AddressRange<VirtAddr> {
+        self.distributor
+    }
+
+    /// Return the selected mapped redistributor RD/SGI pair.
+    pub const fn redistributor(self) -> AddressRange<VirtAddr> {
+        self.redistributor
+    }
+
+    #[cfg(any(target_arch = "aarch64", test))]
+    fn distributor_register(self, offset: usize) -> Result<usize, GicV3MmioError> {
+        register_address("GICD", self.distributor, offset)
+    }
+
+    #[cfg(any(target_arch = "aarch64", test))]
+    fn redistributor_register(self, offset: usize) -> Result<usize, GicV3MmioError> {
+        register_address("GICR", self.redistributor, offset)
+    }
+}
+
+fn valid_mmio_range(range: AddressRange<VirtAddr>, minimum: usize, exact: bool) -> bool {
+    range.start().as_usize().is_multiple_of(PAGE_SIZE)
+        && range.end().as_usize().is_multiple_of(PAGE_SIZE)
+        && if exact {
+            range.len() == minimum
+        } else {
+            range.len() >= minimum
+        }
+}
+
+#[cfg(any(target_arch = "aarch64", test))]
+fn register_address(
+    component: &'static str,
+    range: AddressRange<VirtAddr>,
+    offset: usize,
+) -> Result<usize, GicV3MmioError> {
+    if !offset.is_multiple_of(size_of::<u32>()) {
+        return Err(GicV3MmioError::MisalignedOffset { component, offset });
+    }
+    let end = offset
+        .checked_add(size_of::<u32>())
+        .ok_or(GicV3MmioError::AddressOverflow)?;
+    if end > range.len() {
+        return Err(GicV3MmioError::RegisterOutOfRange { component, offset });
+    }
+    range
+        .start()
+        .as_usize()
+        .checked_add(offset)
+        .ok_or(GicV3MmioError::AddressOverflow)
+}
+
+/// Concrete volatile GICv3 backend tied to an active final TTBR1 owner.
+#[cfg(target_arch = "aarch64")]
+pub struct MappedGicV3Registers<'a, const TABLES: usize> {
+    _tables: &'a MaterializedKernelPageTables<TABLES>,
+    layout: GicV3MmioLayout,
+}
+
+#[cfg(target_arch = "aarch64")]
+impl<'a, const TABLES: usize> MappedGicV3Registers<'a, TABLES> {
+    /// Bind checked GIC device ranges to their permanently retained hierarchy.
+    ///
+    /// # Safety
+    ///
+    /// `tables` must be the active TTBR1 hierarchy that maps every byte in
+    /// `layout` as EL1-only Device-nGnRnE RW/NX memory. The caller must grant
+    /// this value unique ownership of those GICD/GICR ranges and current-CPU
+    /// `ICC_*_EL1` state, keep IRQs masked, and prevent concurrent CPU access.
+    pub const unsafe fn assume_active(
+        tables: &'a MaterializedKernelPageTables<TABLES>,
+        layout: GicV3MmioLayout,
+    ) -> Self {
+        Self {
+            _tables: tables,
+            layout,
+        }
+    }
+}
 
 /// Trigger mode supported for a standard private peripheral interrupt.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -143,6 +471,135 @@ pub unsafe trait GicV3RegisterAccess {
 
     /// Complete earlier register writes before subsequent observations.
     fn synchronize(&mut self);
+}
+
+#[cfg(target_arch = "aarch64")]
+// SAFETY: construction is unsafe and binds this backend to exact Device-nGnRnE
+// ranges, one active table owner, and unique current-CPU interface ownership.
+// Every implementation method uses volatile MMIO or one named system register;
+// `synchronize` supplies the required device completion and context barrier.
+unsafe impl<const TABLES: usize> GicV3RegisterAccess for MappedGicV3Registers<'_, TABLES> {
+    type Error = GicV3MmioError;
+
+    fn read_distributor(&mut self, offset: usize) -> Result<u32, Self::Error> {
+        let address = self.layout.distributor_register(offset)? as *const u32;
+        // SAFETY: the unsafe constructor proves this exact checked address is
+        // an owned, active GICD Device mapping. Volatile preserves MMIO access.
+        Ok(unsafe { ptr::read_volatile(address) })
+    }
+
+    fn write_distributor(&mut self, offset: usize, value: u32) -> Result<(), Self::Error> {
+        let address = self.layout.distributor_register(offset)? as *mut u32;
+        // SAFETY: the unsafe constructor proves unique access to this checked
+        // active GICD Device mapping. Volatile preserves the register write.
+        unsafe {
+            ptr::write_volatile(address, value);
+        }
+        Ok(())
+    }
+
+    fn read_redistributor(&mut self, offset: usize) -> Result<u32, Self::Error> {
+        let address = self.layout.redistributor_register(offset)? as *const u32;
+        // SAFETY: the unsafe constructor proves this exact checked address is
+        // in the selected current-CPU GICR mapping and is uniquely owned.
+        Ok(unsafe { ptr::read_volatile(address) })
+    }
+
+    fn write_redistributor(&mut self, offset: usize, value: u32) -> Result<(), Self::Error> {
+        let address = self.layout.redistributor_register(offset)? as *mut u32;
+        // SAFETY: the unsafe constructor proves unique access to this checked
+        // selected-GICR Device mapping. Volatile preserves the register write.
+        unsafe {
+            ptr::write_volatile(address, value);
+        }
+        Ok(())
+    }
+
+    fn read_cpu_interface(&mut self, register: CpuInterfaceRegister) -> Result<u64, Self::Error> {
+        let value: u64;
+        // SAFETY: backend construction grants unique access to the current
+        // CPU interface, IRQs remain masked, and each match names the exact
+        // architected EL1 system register represented by `register`.
+        unsafe {
+            match register {
+                CpuInterfaceRegister::Sre => asm!(
+                    "mrs {value}, ICC_SRE_EL1",
+                    value = out(reg) value,
+                    options(nomem, nostack, preserves_flags)
+                ),
+                CpuInterfaceRegister::PriorityMask => asm!(
+                    "mrs {value}, ICC_PMR_EL1",
+                    value = out(reg) value,
+                    options(nomem, nostack, preserves_flags)
+                ),
+                CpuInterfaceRegister::BinaryPoint1 => asm!(
+                    "mrs {value}, ICC_BPR1_EL1",
+                    value = out(reg) value,
+                    options(nomem, nostack, preserves_flags)
+                ),
+                CpuInterfaceRegister::GroupEnable1 => asm!(
+                    "mrs {value}, ICC_IGRPEN1_EL1",
+                    value = out(reg) value,
+                    options(nomem, nostack, preserves_flags)
+                ),
+                CpuInterfaceRegister::Control => asm!(
+                    "mrs {value}, ICC_CTLR_EL1",
+                    value = out(reg) value,
+                    options(nomem, nostack, preserves_flags)
+                ),
+            }
+        }
+        Ok(value)
+    }
+
+    fn write_cpu_interface(
+        &mut self,
+        register: CpuInterfaceRegister,
+        value: u64,
+    ) -> Result<(), Self::Error> {
+        // SAFETY: backend construction grants unique access to the current
+        // CPU interface with IRQs masked; the match writes only the selected
+        // architected EL1 system register and does not access memory.
+        unsafe {
+            match register {
+                CpuInterfaceRegister::Sre => asm!(
+                    "msr ICC_SRE_EL1, {value}",
+                    value = in(reg) value,
+                    options(nomem, nostack, preserves_flags)
+                ),
+                CpuInterfaceRegister::PriorityMask => asm!(
+                    "msr ICC_PMR_EL1, {value}",
+                    value = in(reg) value,
+                    options(nomem, nostack, preserves_flags)
+                ),
+                CpuInterfaceRegister::BinaryPoint1 => asm!(
+                    "msr ICC_BPR1_EL1, {value}",
+                    value = in(reg) value,
+                    options(nomem, nostack, preserves_flags)
+                ),
+                CpuInterfaceRegister::GroupEnable1 => asm!(
+                    "msr ICC_IGRPEN1_EL1, {value}",
+                    value = in(reg) value,
+                    options(nomem, nostack, preserves_flags)
+                ),
+                CpuInterfaceRegister::Control => asm!(
+                    "msr ICC_CTLR_EL1, {value}",
+                    value = in(reg) value,
+                    options(nomem, nostack, preserves_flags)
+                ),
+            }
+        }
+        Ok(())
+    }
+
+    fn synchronize(&mut self) {
+        // SAFETY: this barrier sequence accesses no memory through raw
+        // pointers. It completes earlier device writes and synchronizes later
+        // system-register observations on the uniquely owned boot CPU.
+        unsafe {
+            asm!("dsb sy", "isb", options(nostack, preserves_flags));
+        }
+    }
 }
 
 /// Configuration for preparing one boot-CPU timer PPI.
@@ -627,14 +1084,50 @@ mod tests {
     use std::vec::Vec;
 
     use super::{
-        CpuInterfaceRegister, GICD_CTLR, GICD_CTLR_ARE_NS, GICD_CTLR_ENABLE_G1,
-        GICD_CTLR_ENABLE_G1A, GICD_PIDR2, GICR_ICACTIVER0, GICR_ICENABLER0, GICR_ICFGR1,
-        GICR_ICPENDR0, GICR_IGROUPR0, GICR_IGRPMODR0, GICR_IPRIORITYR, GICR_ISENABLER0, GICR_PIDR2,
-        GICR_WAKER, GICR_WAKER_CHILDREN_ASLEEP, GICR_WAKER_PROCESSOR_SLEEP, GicV3Configuration,
-        GicV3ConfigurationError, GicV3PreparationError, GicV3PreparationStage, GicV3RegisterAccess,
-        ICC_SRE_EL1_SRE, InterruptTrigger, PrivateInterruptError, PrivatePeripheralInterrupt,
-        prepare,
+        CpuAffinity, CpuInterfaceRegister, GIC_DISTRIBUTOR_MIN_SIZE, GIC_REDISTRIBUTOR_FRAME_SIZE,
+        GICD_CTLR, GICD_CTLR_ARE_NS, GICD_CTLR_ENABLE_G1, GICD_CTLR_ENABLE_G1A, GICD_PIDR2,
+        GICR_ICACTIVER0, GICR_ICENABLER0, GICR_ICFGR1, GICR_ICPENDR0, GICR_IGROUPR0,
+        GICR_IGRPMODR0, GICR_IPRIORITYR, GICR_ISENABLER0, GICR_PIDR2, GICR_TYPER, GICR_TYPER_LAST,
+        GICR_TYPER_VLPIS, GICR_WAKER, GICR_WAKER_CHILDREN_ASLEEP, GICR_WAKER_PROCESSOR_SLEEP,
+        GicRedistributorDiscoveryAccess, GicV3Configuration, GicV3ConfigurationError,
+        GicV3MmioError, GicV3MmioLayout, GicV3PreparationError, GicV3PreparationStage,
+        GicV3RegisterAccess, ICC_SRE_EL1_SRE, InterruptTrigger, PrivateInterruptError,
+        PrivatePeripheralInterrupt, RedistributorSelectionError, prepare, select_redistributor,
     };
+    use crate::memory::{AddressRange, PAGE_SIZE, PhysAddr, VirtAddr};
+
+    #[derive(Default)]
+    struct DiscoveryRegisters {
+        values: BTreeMap<usize, u64>,
+    }
+
+    impl DiscoveryRegisters {
+        fn add_frame(&mut self, base: usize, affinity: u32, flags: u64, revision: u8) {
+            self.values
+                .insert(base + GICR_PIDR2, u64::from(revision) << 4);
+            self.values
+                .insert(base + GICR_TYPER, u64::from(affinity) << 32 | flags);
+        }
+    }
+
+    impl GicRedistributorDiscoveryAccess for DiscoveryRegisters {
+        type Error = usize;
+
+        fn read_u32(&mut self, address: PhysAddr) -> Result<u32, Self::Error> {
+            self.values
+                .get(&address.as_usize())
+                .copied()
+                .map(|value| value as u32)
+                .ok_or(address.as_usize())
+        }
+
+        fn read_u64(&mut self, address: PhysAddr) -> Result<u64, Self::Error> {
+            self.values
+                .get(&address.as_usize())
+                .copied()
+                .ok_or(address.as_usize())
+        }
+    }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum MockError {
@@ -786,6 +1279,160 @@ mod tests {
         fn synchronize(&mut self) {
             self.operations.push(Operation::Synchronize);
         }
+    }
+
+    #[test]
+    fn affinity_selection_skips_vlpi_frames_and_returns_exact_rd_sgi_pair() {
+        let base = 0x080a_0000;
+        let affinity = CpuAffinity::from_mpidr(0x0000_00aa_00bb_ccdd);
+        assert_eq!(affinity.raw(), 0xaabb_ccdd);
+        let mut registers = DiscoveryRegisters::default();
+        registers.add_frame(base, 0x0000_0001, GICR_TYPER_VLPIS, 3);
+        let selected_base = base + 2 * GIC_REDISTRIBUTOR_FRAME_SIZE;
+        registers.add_frame(selected_base, affinity.raw(), GICR_TYPER_LAST, 4);
+        let region = AddressRange::new(
+            PhysAddr::new(base),
+            PhysAddr::new(selected_base + GIC_REDISTRIBUTOR_FRAME_SIZE),
+        )
+        .unwrap();
+
+        let selected = select_redistributor(region, affinity, &mut registers).unwrap();
+        assert_eq!(selected.range().start(), PhysAddr::new(selected_base));
+        assert_eq!(selected.range().len(), GIC_REDISTRIBUTOR_FRAME_SIZE);
+        assert_eq!(selected.typer() & GICR_TYPER_LAST, GICR_TYPER_LAST);
+    }
+
+    #[test]
+    fn affinity_selection_rejects_ambiguous_invalid_and_unterminated_regions() {
+        let base = 0x080a_0000;
+        let affinity = CpuAffinity::from_mpidr(2);
+        let two_frames = AddressRange::new(
+            PhysAddr::new(base),
+            PhysAddr::new(base + 2 * GIC_REDISTRIBUTOR_FRAME_SIZE),
+        )
+        .unwrap();
+
+        let mut duplicate = DiscoveryRegisters::default();
+        duplicate.add_frame(base, affinity.raw(), 0, 3);
+        duplicate.add_frame(
+            base + GIC_REDISTRIBUTOR_FRAME_SIZE,
+            affinity.raw(),
+            GICR_TYPER_LAST,
+            3,
+        );
+        assert_eq!(
+            select_redistributor(two_frames, affinity, &mut duplicate),
+            Err(RedistributorSelectionError::DuplicateAffinity {
+                affinity: affinity.raw()
+            })
+        );
+
+        let mut unsupported = DiscoveryRegisters::default();
+        unsupported.add_frame(base, affinity.raw(), GICR_TYPER_LAST, 2);
+        assert_eq!(
+            select_redistributor(two_frames, affinity, &mut unsupported),
+            Err(RedistributorSelectionError::UnsupportedArchitecture { base, revision: 2 })
+        );
+
+        let one_frame = AddressRange::new(
+            PhysAddr::new(base),
+            PhysAddr::new(base + GIC_REDISTRIBUTOR_FRAME_SIZE),
+        )
+        .unwrap();
+        let mut unterminated = DiscoveryRegisters::default();
+        unterminated.add_frame(base, affinity.raw(), 0, 3);
+        assert_eq!(
+            select_redistributor(one_frame, affinity, &mut unterminated),
+            Err(RedistributorSelectionError::MissingLast)
+        );
+
+        let truncated = AddressRange::new(
+            PhysAddr::new(base),
+            PhysAddr::new(base + GIC_REDISTRIBUTOR_FRAME_SIZE + PAGE_SIZE),
+        )
+        .unwrap();
+        assert_eq!(
+            select_redistributor(truncated, affinity, &mut unterminated),
+            Err(RedistributorSelectionError::TruncatedFrame {
+                base: base + GIC_REDISTRIBUTOR_FRAME_SIZE
+            })
+        );
+
+        let mut other = DiscoveryRegisters::default();
+        other.add_frame(base, affinity.raw() + 1, GICR_TYPER_LAST, 3);
+        assert_eq!(
+            select_redistributor(one_frame, affinity, &mut other),
+            Err(RedistributorSelectionError::AffinityNotFound {
+                affinity: affinity.raw()
+            })
+        );
+
+        let missing_address = base + GICR_PIDR2;
+        assert_eq!(
+            select_redistributor(one_frame, affinity, &mut DiscoveryRegisters::default()),
+            Err(RedistributorSelectionError::Access {
+                address: missing_address,
+                error: missing_address,
+            })
+        );
+    }
+
+    #[test]
+    fn mapped_register_layout_checks_exact_ownership_and_every_offset() {
+        let distributor_start = 0xffff_ff80_0800_0000;
+        let redistributor_start = 0xffff_ff80_080a_0000;
+        let distributor = AddressRange::new(
+            VirtAddr::new(distributor_start),
+            VirtAddr::new(distributor_start + GIC_DISTRIBUTOR_MIN_SIZE),
+        )
+        .unwrap();
+        let redistributor = AddressRange::new(
+            VirtAddr::new(redistributor_start),
+            VirtAddr::new(redistributor_start + GIC_REDISTRIBUTOR_FRAME_SIZE),
+        )
+        .unwrap();
+        let layout = GicV3MmioLayout::new(distributor, redistributor).unwrap();
+        assert_eq!(
+            layout.distributor_register(GICD_PIDR2),
+            Ok(distributor_start + GICD_PIDR2)
+        );
+        assert_eq!(
+            layout.redistributor_register(GICR_PIDR2),
+            Ok(redistributor_start + GICR_PIDR2)
+        );
+        assert_eq!(
+            layout.distributor_register(1),
+            Err(GicV3MmioError::MisalignedOffset {
+                component: "GICD",
+                offset: 1
+            })
+        );
+        assert_eq!(
+            layout.redistributor_register(GIC_REDISTRIBUTOR_FRAME_SIZE),
+            Err(GicV3MmioError::RegisterOutOfRange {
+                component: "GICR",
+                offset: GIC_REDISTRIBUTOR_FRAME_SIZE
+            })
+        );
+
+        let short = AddressRange::new(
+            VirtAddr::new(redistributor_start),
+            VirtAddr::new(redistributor_start + GIC_REDISTRIBUTOR_FRAME_SIZE - PAGE_SIZE),
+        )
+        .unwrap();
+        assert_eq!(
+            GicV3MmioLayout::new(distributor, short),
+            Err(GicV3MmioError::InvalidRange { component: "GICR" })
+        );
+        let overlapping = AddressRange::new(
+            VirtAddr::new(distributor_start),
+            VirtAddr::new(distributor_start + GIC_REDISTRIBUTOR_FRAME_SIZE),
+        )
+        .unwrap();
+        assert_eq!(
+            GicV3MmioLayout::new(distributor, overlapping),
+            Err(GicV3MmioError::OverlappingRanges)
+        );
     }
 
     fn timer(trigger: InterruptTrigger) -> PrivatePeripheralInterrupt {

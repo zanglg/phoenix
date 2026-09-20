@@ -150,9 +150,10 @@ layout.
 
 That recorded final-map run predates the bounded heap and runtime-stack paths, did not emit
 `PHOENIX_KERNEL_HEAP_OK` or `PHOENIX_KERNEL_STACK_OK`, and used five table frames before the
-runtime-stack arena gained two prelinked empty tables. It remains evidence for final TTBR1 publication, not for the current
-seven-table heap-and-stack protocol, `RUN-KHEAP-001`, or runtime-stack publication; those
-boundaries remain Runtime Pending until a new run is captured.
+runtime-stack arena gained two prelinked empty tables and GIC mapping gained another L3 table with
+48 leaves. It remains evidence for historical final TTBR1 publication, not for the current
+eight-table heap/stack/GIC protocol, `RUN-KHEAP-001`, `RUN-IRQ-001`, or runtime-stack publication;
+those boundaries remain Runtime Pending until a new run is captured.
 
 ## How to report a run
 

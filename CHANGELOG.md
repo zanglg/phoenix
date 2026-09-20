@@ -31,6 +31,9 @@ numbers and remains explicitly unstable before 1.0.0. During construction, chang
   contract, checked PPI/priority configuration, PIDR/SRE validation, one-way ARE preservation,
   finite RWP/wake polling, isolated field updates, closed delivery gates, and retained primary and
   best-effort recovery failures.
+- Boot-CPU GICv3 redistributor selection from packed `MPIDR_EL1` affinity with PIDR/TYPER checks,
+  VLPI-aware bounded scanning, exact final-TTBR1 GICD/GICR L3 device mappings, retained layout
+  evidence, and a concrete bounds-checked volatile MMIO/`ICC_*_EL1` backend that remains inactive.
 - Checked architecture-neutral physical/virtual addresses, pages, frames, and half-open ranges.
 - Strict allocation-free DTB parsing with boot CPU, bootargs, memory-region, and reservation extraction.
 - Fixed-capacity physical memory normalization, conservative reservation, and first-fit frame allocation.
