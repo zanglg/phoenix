@@ -165,18 +165,25 @@ Host-verifiable foundation now available:
   bounded activation/recovery/shutdown evidence, and never changes `DAIF.I`;
 - one exclusive acknowledgement token separates special INTIDs 1020–1023 from real timer or
   unexpected INTIDs, requires combined `ICC_EOIR1_EL1` completion for every real result, and
-  retains the outstanding token on failure;
+  retains the outstanding token on failure; the active owner also remembers an abandoned
+  obligation and blocks re-acknowledgement or shutdown;
 - an allocation-free IRQ-save spinlock supplies Host Tested Acquire/Release exclusion and exact
   local-mask restoration, with a Cross Compiled AArch64 `DAIF.I` backend that no subsystem uses
-  at boot;
+  in a boot path;
 - an architecture-neutral locked timer controller transactionally couples queue mutations to
   earliest-deadline rearm/disarm, returns due batches only after unlock, restores exact queue state
-  on programming failure, and closes permanently if hardware recovery also fails;
+  on programming failure, closes permanently if hardware recovery also fails, and requires a
+  private active-runtime permit for every hardware command;
+- a pinned single-CPU interrupt runtime publishes stable dispatcher lookup before activation,
+  checks the exact timer PPI, orders outer runtime/GIC locking before the timer lock, reprograms
+  before EOI, rejects shutdown with pending events, and disarms before closing GIC delivery;
+- the non-transferable AArch64 physical timer implements the locked service backend, but only the
+  unintegrated runtime can create its post-activation programming permit;
 - host tests cover boundaries, selection failures, exact page mappings, register update isolation,
-  finite polling, injected failure, gate ordering, special/unexpected acknowledgements, retryable
-  EOI, shutdown ownership, and ordered output protocol; boot still retains prepared state, so real
-  dispatch, the two-stage AArch64 timer/GIC publication adapter, sleep integration, and all current
-  target execution remain pending.
+  finite polling, injected failure, gate ordering, special/unexpected acknowledgements, abandoned
+  completion ownership, pinned publication, timer-before-EOI dispatch, shutdown ordering, and
+  ordered output protocol; boot still retains prepared state, so static dispatcher installation,
+  `DAIF.I` unmask/removal, sleep integration, and all current target execution remain pending.
 
 Observable result: timer interrupts advance a monotonic time source and scheduled callbacks fire
 under an automated QEMU test.
@@ -196,10 +203,12 @@ Host-verifiable foundation now available:
   guards preserve an outer mask in LIFO order;
 - the AArch64 backend changes only `DAIF.I` with compiler barriers and `ISB`, and is Cross Compiled
   but not invoked by any boot path;
-- an architecture-neutral timer controller is the first consumer and proves transactional
-  queue/programming plus callbacks-after-unlock in host tests; and
-- the primitive has no allocation, poisoning, fairness, scheduler/preemption integration, or
-  published production lock order; subsystem adoption and all target evidence remain pending.
+- an architecture-neutral timer controller and pinned AArch64 interrupt runtime prove
+  transactional queue/programming, runtime-before-timer lock order, and callbacks-after-unlock in
+  host tests; and
+- the primitive has no allocation, poisoning, fairness, or scheduler/preemption integration; the
+  runtime-before-timer order is published, while boot adoption and all target evidence remain
+  pending.
 
 Observable result: multiple kernel threads make independently verified progress under timer-driven
 scheduling.

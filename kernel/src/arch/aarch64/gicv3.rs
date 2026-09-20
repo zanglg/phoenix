@@ -803,6 +803,24 @@ pub struct PreparedGicV3<B> {
 }
 
 impl<B> PreparedGicV3<B> {
+    /// Construct prepared ownership around a deterministic test backend.
+    ///
+    /// # Safety
+    ///
+    /// The backend must model every post-preparation invariant, including
+    /// closed delivery gates, affinity routing, combined EOI mode, and the
+    /// configured enabled PPI. This helper exists only in host test builds.
+    #[cfg(test)]
+    pub(crate) const unsafe fn assume_prepared_for_test(
+        backend: B,
+        configuration: GicV3Configuration,
+    ) -> Self {
+        Self {
+            backend,
+            configuration,
+        }
+    }
+
     /// Return the retained timer configuration.
     pub const fn configuration(&self) -> GicV3Configuration {
         self.configuration
@@ -877,6 +895,9 @@ impl PublishedIrqDispatcher {
             _not_send_or_sync: PhantomData,
         }
     }
+
+    /// Consume the proof after GIC delivery has been closed.
+    pub(crate) const fn retire(self) {}
 }
 
 /// Delivery transition or interrupt-cycle phase.
@@ -935,6 +956,11 @@ pub enum GicV3DeliveryError<E> {
         /// Observed `ICC_CTLR_EL1` value.
         observed: u64,
     },
+    /// A real interrupt remains acknowledged but not completed.
+    OutstandingInterrupt {
+        /// Architectural INTID whose completion obligation is still live.
+        intid: u32,
+    },
 }
 
 /// Failed activation retaining register and dispatcher ownership.
@@ -987,6 +1013,7 @@ pub struct ActiveGicV3<B> {
     backend: B,
     configuration: GicV3Configuration,
     dispatcher: PublishedIrqDispatcher,
+    outstanding: Option<u32>,
 }
 
 impl<B> ActiveGicV3<B> {
@@ -1066,6 +1093,8 @@ impl<'a, B: GicV3RegisterAccess> AcknowledgedGicV3Interrupt<'a, B> {
             });
         }
         controller.backend.synchronize();
+        debug_assert_eq!(controller.outstanding, Some(intid));
+        controller.outstanding = None;
         Ok(())
     }
 }
@@ -1149,6 +1178,7 @@ pub unsafe fn activate<B: GicV3RegisterAccess>(
             backend,
             configuration,
             dispatcher,
+            outstanding: None,
         }),
         Err(error) => {
             let recovery_error = close_delivery(&mut backend, configuration);
@@ -1170,6 +1200,9 @@ impl<B: GicV3RegisterAccess> ActiveGicV3<B> {
     /// token and must not be EOI'd. Every other result exclusively borrows the
     /// controller until `AcknowledgedGicV3Interrupt::complete` succeeds.
     pub fn acknowledge(&mut self) -> Result<GicV3Acknowledge<'_, B>, GicV3DeliveryError<B::Error>> {
+        if let Some(intid) = self.outstanding {
+            return Err(GicV3DeliveryError::OutstandingInterrupt { intid });
+        }
         let raw =
             self.backend
                 .acknowledge_group1()
@@ -1187,6 +1220,7 @@ impl<B: GicV3RegisterAccess> ActiveGicV3<B> {
         } else {
             GicV3InterruptSource::Unexpected
         };
+        self.outstanding = Some(intid);
         Ok(GicV3Acknowledge::Interrupt(AcknowledgedGicV3Interrupt {
             controller: self,
             intid,
@@ -1199,15 +1233,31 @@ impl<B: GicV3RegisterAccess> ActiveGicV3<B> {
     /// # Safety
     ///
     /// The caller must first mask `PSTATE.I`, prevent new handler entry, and
-    /// ensure that no acknowledgement token is outstanding. The exclusive
-    /// `self` value enforces only the last condition.
+    /// ensure that no acknowledgement token is outstanding. A live token's
+    /// exclusive borrow prevents the call; if a token was dropped, the owner
+    /// remembers and rejects that outstanding obligation.
     pub unsafe fn shutdown(
         self,
     ) -> Result<(PreparedGicV3<B>, PublishedIrqDispatcher), GicV3ShutdownFailure<B>> {
+        if let Some(intid) = self.outstanding {
+            let Self {
+                backend,
+                configuration,
+                dispatcher,
+                outstanding: _,
+            } = self;
+            return Err(GicV3ShutdownFailure {
+                backend,
+                configuration,
+                dispatcher,
+                error: GicV3DeliveryError::OutstandingInterrupt { intid },
+            });
+        }
         let Self {
             mut backend,
             configuration,
             dispatcher,
+            outstanding: _,
         } = self;
         if let Some(error) = close_delivery(&mut backend, configuration) {
             return Err(GicV3ShutdownFailure {
@@ -2480,5 +2530,48 @@ mod tests {
         let (registers, _, _dispatcher, _) = failure.into_parts();
         assert_eq!(registers.cpu(CpuInterfaceRegister::GroupEnable1), 1);
         assert_eq!(registers.distributor(GICD_CTLR), GICD_CTLR_ARE_NS);
+    }
+
+    #[test]
+    fn dropped_acknowledgement_blocks_reacknowledgement_and_shutdown() {
+        let mut prepared = prepared_registers();
+        prepared.backend.acknowledgements = std::vec![30, 29];
+        // SAFETY: the mock models a published dispatcher with external IRQ
+        // masking across this activation transition.
+        let mut active = match unsafe { activate(prepared, published_dispatcher()) } {
+            Ok(active) => active,
+            Err(failure) => panic!("activation failed unexpectedly: {:?}", failure.error()),
+        };
+        let acknowledgement = match active.acknowledge().unwrap() {
+            GicV3Acknowledge::Interrupt(interrupt) => interrupt,
+            GicV3Acknowledge::Spurious { .. } => panic!("timer became spurious"),
+        };
+        drop(acknowledgement);
+        assert!(matches!(
+            active.acknowledge(),
+            Err(GicV3DeliveryError::OutstandingInterrupt { intid: 30 })
+        ));
+
+        // SAFETY: the mock keeps DAIF.I masked. Shutdown must reject the
+        // deliberately abandoned completion obligation before closing gates.
+        let failure = match unsafe { active.shutdown() } {
+            Ok(_) => panic!("shutdown ignored an outstanding interrupt"),
+            Err(failure) => failure,
+        };
+        assert_eq!(
+            failure.error(),
+            &GicV3DeliveryError::OutstandingInterrupt { intid: 30 }
+        );
+        let (registers, _, _dispatcher, _) = failure.into_parts();
+        assert_eq!(registers.cpu(CpuInterfaceRegister::GroupEnable1), 1);
+        assert_eq!(
+            registers.distributor(GICD_CTLR),
+            GICD_CTLR_ARE_NS | GICD_CTLR_ENABLE_G1A
+        );
+        assert!(
+            !registers
+                .operations
+                .contains(&Operation::AcknowledgeGroup1(29))
+        );
     }
 }

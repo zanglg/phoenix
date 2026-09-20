@@ -46,7 +46,12 @@ numbers and remains explicitly unstable before 1.0.0. During construction, chang
   Cross Compiled AArch64 `DAIF.I` masking backend.
 - A Host Tested locked timer controller with transactional earliest-deadline rearm/disarm,
   deterministic fixed-capacity due batches returned after unlock, exact queue rollback, hardware
-  recovery evidence, and permanent closure after failed recovery.
+  recovery evidence, permanent closure after failed recovery, private programming permits, and
+  pending-event rejection before explicit hardware quiescence.
+- A Host Tested pinned AArch64 interrupt runtime that publishes stable vector lookup before GIC
+  activation, enforces exact timer-PPI binding and runtime-before-timer lock order, reprograms the
+  timer before EOI, retains abandoned acknowledgement obligations, and disarms before ordered GIC
+  shutdown; the concrete non-transferable physical-timer service adapter Cross Compiles.
 - Checked architecture-neutral physical/virtual addresses, pages, frames, and half-open ranges.
 - Strict allocation-free DTB parsing with boot CPU, bootargs, memory-region, and reservation extraction.
 - Fixed-capacity physical memory normalization, conservative reservation, and first-fit frame allocation.

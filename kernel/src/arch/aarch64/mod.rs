@@ -11,6 +11,7 @@ use crate::sync::LocalIrqControl;
 pub mod asid;
 pub mod exception;
 pub mod gicv3;
+pub mod interrupt_runtime;
 pub mod kernel_page_table;
 pub mod paging;
 pub mod syscall;

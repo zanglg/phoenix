@@ -5,6 +5,7 @@ use crate::time::{
     FiredTimer, MonotonicClock, MonotonicTimeError, TickInstant, TimerEvent, TimerId, TimerQueue,
     TimerQueueCheckpoint, TimerQueueError,
 };
+use core::marker::PhantomData;
 
 /// Complete hardware programming state requested by the timer controller.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -38,6 +39,36 @@ pub trait TimerHardware {
     unsafe fn program(&mut self, programming: TimerProgramming) -> Result<(), Self::Error>;
 }
 
+/// Non-transferable proof that timer interrupt programming is currently safe.
+///
+/// The architecture interrupt runtime creates this proof only after its
+/// dispatcher is published and the matching interrupt-controller route is
+/// active. Dropping the proof revokes permission to issue later programming
+/// commands; it does not itself touch hardware.
+pub struct TimerProgrammingPermit {
+    _not_send_or_sync: PhantomData<*mut ()>,
+}
+
+impl TimerProgrammingPermit {
+    /// Create a current-CPU timer-programming proof.
+    ///
+    /// # Safety
+    ///
+    /// Every vector, interrupt-controller, handler-publication, and
+    /// synchronization invariant required by the concrete [`TimerHardware`]
+    /// backend must already hold and must remain valid until this value is
+    /// dropped. The caller must create no competing permit for the same timer
+    /// owner or CPU.
+    pub(crate) const unsafe fn assume_ready() -> Self {
+        Self {
+            _not_send_or_sync: PhantomData,
+        }
+    }
+
+    /// Consume the proof before its interrupt-controller route is closed.
+    pub(crate) const fn revoke(self) {}
+}
+
 /// Failure while operating an IRQ-safe timer controller.
 #[derive(Debug, Eq, PartialEq)]
 pub enum TimerServiceError<E> {
@@ -50,6 +81,8 @@ pub enum TimerServiceError<E> {
     Monotonic(MonotonicTimeError),
     /// The queue rejected the requested operation before hardware changed.
     Queue(TimerQueueError),
+    /// Deactivation was requested while timers remain queued.
+    PendingTimers,
     /// Hardware programming failed after a tentative queue change.
     Programming {
         /// New state that failed.
@@ -125,9 +158,9 @@ impl<const CAPACITY: usize, H: TimerHardware> LockedTimerQueue<CAPACITY, H> {
     ///
     /// `hardware` must be uniquely owned with interrupt signaling disabled and
     /// masked. `initial` must be an observation from that hardware's fixed
-    /// counter domain. The backend-specific vector, interrupt-controller, and
-    /// publication invariants required by [`TimerHardware::program`] must
-    /// already hold and remain valid for the controller's lifetime.
+    /// counter domain. Construction does not authorize hardware programming;
+    /// every operation that can program the backend separately requires a
+    /// live [`TimerProgrammingPermit`].
     pub const unsafe fn assume_disarmed(initial: TickInstant, hardware: H) -> Self {
         Self {
             state: IrqSpinLock::new(TimerState {
@@ -143,6 +176,7 @@ impl<const CAPACITY: usize, H: TimerHardware> LockedTimerQueue<CAPACITY, H> {
     pub fn schedule<C: LocalIrqControl>(
         &self,
         irq: &C,
+        permit: &TimerProgrammingPermit,
         deadline: TickInstant,
         event: TimerEvent,
     ) -> Result<TimerId, TimerServiceError<H::Error>> {
@@ -164,7 +198,7 @@ impl<const CAPACITY: usize, H: TimerHardware> LockedTimerQueue<CAPACITY, H> {
             .map_err(TimerServiceError::Queue)?;
         let requested = desired_programming(&state.queue);
         if requested != recovery {
-            program_transaction(&mut state, checkpoint, requested, recovery)?;
+            program_transaction(&mut state, permit, checkpoint, requested, recovery)?;
         }
         Ok(id)
     }
@@ -173,6 +207,7 @@ impl<const CAPACITY: usize, H: TimerHardware> LockedTimerQueue<CAPACITY, H> {
     pub fn cancel<C: LocalIrqControl>(
         &self,
         irq: &C,
+        permit: &TimerProgrammingPermit,
         id: TimerId,
     ) -> Result<TimerEvent, TimerServiceError<H::Error>> {
         let mut state = self.state.lock(irq);
@@ -182,7 +217,7 @@ impl<const CAPACITY: usize, H: TimerHardware> LockedTimerQueue<CAPACITY, H> {
         let event = state.queue.cancel(id).map_err(TimerServiceError::Queue)?;
         let requested = desired_programming(&state.queue);
         if requested != recovery {
-            program_transaction(&mut state, checkpoint, requested, recovery)?;
+            program_transaction(&mut state, permit, checkpoint, requested, recovery)?;
         }
         Ok(event)
     }
@@ -196,6 +231,7 @@ impl<const CAPACITY: usize, H: TimerHardware> LockedTimerQueue<CAPACITY, H> {
     pub fn handle_interrupt<C: LocalIrqControl>(
         &self,
         irq: &C,
+        permit: &TimerProgrammingPermit,
     ) -> Result<FiredTimerBatch<CAPACITY>, TimerServiceError<H::Error>> {
         let mut state = self.state.lock(irq);
         ensure_operational(&state)?;
@@ -214,8 +250,33 @@ impl<const CAPACITY: usize, H: TimerHardware> LockedTimerQueue<CAPACITY, H> {
             batch.push(timer);
         }
         let requested = desired_programming(&state.queue);
-        program_transaction(&mut state, checkpoint, requested, recovery)?;
+        program_transaction(&mut state, permit, checkpoint, requested, recovery)?;
         Ok(batch)
+    }
+
+    /// Disable timer signaling before the interrupt-controller route closes.
+    ///
+    /// A nonempty queue is rejected without touching hardware because closing
+    /// delivery would strand owned wakeups. Successful quiescence keeps the
+    /// empty queue and controller reusable for a later activation.
+    pub fn quiesce<C: LocalIrqControl>(
+        &self,
+        irq: &C,
+        permit: &TimerProgrammingPermit,
+    ) -> Result<(), TimerServiceError<H::Error>> {
+        let mut state = self.state.lock(irq);
+        ensure_operational(&state)?;
+        if !state.queue.is_empty() {
+            return Err(TimerServiceError::PendingTimers);
+        }
+        let checkpoint = state.queue.checkpoint();
+        program_transaction(
+            &mut state,
+            permit,
+            checkpoint,
+            TimerProgramming::Disarm,
+            TimerProgramming::Disarm,
+        )
     }
 
     /// Consume the controller and recover all state for diagnostics or a later
@@ -245,14 +306,15 @@ fn desired_programming<const CAPACITY: usize>(queue: &TimerQueue<CAPACITY>) -> T
 
 fn program_transaction<const CAPACITY: usize, H: TimerHardware>(
     state: &mut TimerState<CAPACITY, H>,
+    _permit: &TimerProgrammingPermit,
     checkpoint: TimerQueueCheckpoint<CAPACITY>,
     requested: TimerProgramming,
     recovery: TimerProgramming,
 ) -> Result<(), TimerServiceError<H::Error>> {
     // SAFETY: the containing `IrqSpinLock` guard is live, so ordinary local
     // IRQ delivery is masked and `state` uniquely owns the hardware backend.
-    // `assume_disarmed` requires all backend-specific publication invariants
-    // to remain valid for this controller's lifetime.
+    // The live programming permit proves all backend-specific publication and
+    // interrupt-controller invariants remain valid for this command.
     let result = unsafe { state.hardware.program(requested) };
     let Err(error) = result else {
         return Ok(());
@@ -260,7 +322,7 @@ fn program_transaction<const CAPACITY: usize, H: TimerHardware>(
 
     state.queue.restore(checkpoint);
     // SAFETY: the same live guard, unique backend ownership, and construction-
-    // time publication invariant apply to the recovery command.
+    // time programming permit apply to the recovery command.
     let recovery_error = unsafe { state.hardware.program(recovery) }.err();
     if recovery_error.is_some() {
         state.operational = false;
@@ -285,7 +347,8 @@ mod tests {
     use crate::time::{TickInstant, TimerEvent, TimerQueueError};
 
     use super::{
-        FiredTimerBatch, LockedTimerQueue, TimerHardware, TimerProgramming, TimerServiceError,
+        FiredTimerBatch, LockedTimerQueue, TimerHardware, TimerProgramming, TimerProgrammingPermit,
+        TimerServiceError,
     };
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -374,6 +437,12 @@ mod tests {
         batch.iter().map(|timer| timer.event()).collect()
     }
 
+    fn programming_permit() -> TimerProgrammingPermit {
+        // SAFETY: each test models one published, active interrupt route for
+        // its uniquely owned timer and retains the proof on this host thread.
+        unsafe { TimerProgrammingPermit::assume_ready() }
+    }
+
     #[test]
     fn scheduling_and_cancellation_reprogram_only_when_the_earliest_changes() {
         let operations = RefCell::new(Vec::new());
@@ -383,19 +452,44 @@ mod tests {
             operations: &operations,
         };
         let service = service::<4>(&now, &operations, Vec::new());
+        let permit = programming_permit();
 
         let later = service
-            .schedule(&irq, TickInstant::from_raw(20), TimerEvent::new(20))
+            .schedule(
+                &irq,
+                &permit,
+                TickInstant::from_raw(20),
+                TimerEvent::new(20),
+            )
             .unwrap();
         let non_earliest = service
-            .schedule(&irq, TickInstant::from_raw(30), TimerEvent::new(30))
+            .schedule(
+                &irq,
+                &permit,
+                TickInstant::from_raw(30),
+                TimerEvent::new(30),
+            )
             .unwrap();
         let earliest = service
-            .schedule(&irq, TickInstant::from_raw(10), TimerEvent::new(10))
+            .schedule(
+                &irq,
+                &permit,
+                TickInstant::from_raw(10),
+                TimerEvent::new(10),
+            )
             .unwrap();
-        assert_eq!(service.cancel(&irq, non_earliest), Ok(TimerEvent::new(30)));
-        assert_eq!(service.cancel(&irq, earliest), Ok(TimerEvent::new(10)));
-        assert_eq!(service.cancel(&irq, later), Ok(TimerEvent::new(20)));
+        assert_eq!(
+            service.cancel(&irq, &permit, non_earliest),
+            Ok(TimerEvent::new(30))
+        );
+        assert_eq!(
+            service.cancel(&irq, &permit, earliest),
+            Ok(TimerEvent::new(10))
+        );
+        assert_eq!(
+            service.cancel(&irq, &permit, later),
+            Ok(TimerEvent::new(20))
+        );
 
         let programs: Vec<_> = operations
             .borrow()
@@ -428,19 +522,20 @@ mod tests {
             operations: &operations,
         };
         let service = service::<4>(&now, &operations, Vec::new());
+        let permit = programming_permit();
         service
-            .schedule(&irq, TickInstant::from_raw(10), TimerEvent::new(1))
+            .schedule(&irq, &permit, TickInstant::from_raw(10), TimerEvent::new(1))
             .unwrap();
         service
-            .schedule(&irq, TickInstant::from_raw(10), TimerEvent::new(2))
+            .schedule(&irq, &permit, TickInstant::from_raw(10), TimerEvent::new(2))
             .unwrap();
         service
-            .schedule(&irq, TickInstant::from_raw(20), TimerEvent::new(3))
+            .schedule(&irq, &permit, TickInstant::from_raw(20), TimerEvent::new(3))
             .unwrap();
 
         operations.borrow_mut().clear();
         now.set(TickInstant::from_raw(10));
-        let batch = service.handle_interrupt(&irq).unwrap();
+        let batch = service.handle_interrupt(&irq, &permit).unwrap();
         assert_eq!(events(&batch), vec![TimerEvent::new(1), TimerEvent::new(2)]);
         for timer in batch.iter() {
             operations
@@ -461,7 +556,7 @@ mod tests {
 
         operations.borrow_mut().clear();
         now.set(TickInstant::from_raw(20));
-        let batch = service.handle_interrupt(&irq).unwrap();
+        let batch = service.handle_interrupt(&irq, &permit).unwrap();
         assert_eq!(events(&batch), vec![TimerEvent::new(3)]);
         assert!(
             operations
@@ -479,8 +574,9 @@ mod tests {
             operations: &operations,
         };
         let service = service::<2>(&now, &operations, vec![0]);
+        let permit = programming_permit();
         assert_eq!(
-            service.schedule(&irq, TickInstant::from_raw(10), TimerEvent::new(1),),
+            service.schedule(&irq, &permit, TickInstant::from_raw(10), TimerEvent::new(1),),
             Err(TimerServiceError::Programming {
                 requested: TimerProgramming::Arm(TickInstant::from_raw(10)),
                 error: MockError::Injected,
@@ -502,8 +598,9 @@ mod tests {
             operations: &operations,
         };
         let failed_service = service::<1>(&now, &operations, vec![0, 1]);
+        let permit = programming_permit();
         assert!(matches!(
-            failed_service.schedule(&irq, TickInstant::from_raw(10), TimerEvent::new(1),),
+            failed_service.schedule(&irq, &permit, TickInstant::from_raw(10), TimerEvent::new(1),),
             Err(TimerServiceError::Programming {
                 recovery_error: Some(MockError::Injected),
                 ..
@@ -511,7 +608,7 @@ mod tests {
         ));
         let operations_after_failure = operations.borrow().len();
         assert_eq!(
-            failed_service.schedule(&irq, TickInstant::from_raw(11), TimerEvent::new(2),),
+            failed_service.schedule(&irq, &permit, TickInstant::from_raw(11), TimerEvent::new(2),),
             Err(TimerServiceError::Unavailable)
         );
         assert_eq!(operations.borrow().len(), operations_after_failure + 2);
@@ -526,7 +623,12 @@ mod tests {
             operations: &clean_operations,
         };
         assert_eq!(
-            clean.schedule(&clean_irq, TickInstant::from_raw(10), TimerEvent::new(3),),
+            clean.schedule(
+                &clean_irq,
+                &permit,
+                TickInstant::from_raw(10),
+                TimerEvent::new(3),
+            ),
             Err(TimerServiceError::Queue(TimerQueueError::CapacityExhausted))
         );
         assert!(

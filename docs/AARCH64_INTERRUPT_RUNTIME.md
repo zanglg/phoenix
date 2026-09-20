@@ -1,0 +1,116 @@
+# AArch64 Interrupt Runtime Publication
+
+Phoenix has a Host Tested, allocation-free type state that jointly owns one prepared GICv3
+controller and one locked physical-timer service at a pinned address. It resolves the publication
+cycle between the two devices: vector lookup is established while GIC delivery is closed, and
+timer programming becomes possible only after matching GIC activation succeeds. The real boot
+paths do not construct this runtime, route IRQ vector slots to it, or unmask `DAIF.I`; target
+delivery remains Runtime Pending.
+
+## Current implementation
+
+`kernel/src/arch/aarch64/interrupt_runtime.rs` defines:
+
+- `InterruptRuntime<B, CAPACITY, H>`, a non-`Send`, non-`Sync`, non-`Unpin` slot containing its
+  lifecycle under an outer `IrqSpinLock`;
+- an unsafe one-way `publish` transition from `Unpublished` to `Prepared`, which requires a pinned
+  permanent address plus already-installed current-CPU vector lookup and exception-stack state;
+- a non-transferable `PublishedInterruptRuntime` handle for phase observation, activation, timer
+  scheduling/cancellation, one complete interrupt dispatch cycle, and deactivation;
+- an activation transition that verifies the timer service PPI exactly matches the prepared GIC
+  PPI, constructs the GIC dispatcher proof only after publication, and creates a private timer
+  programming permit only after both Group-1 delivery gates open successfully;
+- one dispatch operation that distinguishes special, timer, and unexpected INTIDs, reprograms the
+  timer before combined EOI/deactivation, and returns due events only after both locks release; and
+- a deactivation transition that rejects a nonempty timer queue, explicitly disarms empty timer
+  hardware, revokes its programming permit, then closes the CPU and distributor GIC gates.
+
+The stable slot owns every phase in place. An activation or shutdown failure retains the device
+owners in an inaccessible terminal state instead of manufacturing a valid prepared owner. An
+acknowledgement or EOI failure closes the active state to all later safe operations. The lower GIC
+owner now remembers a real acknowledged INTID until EOI succeeds, so dropping a completion token
+cannot permit another acknowledge or a shutdown.
+
+`kernel/src/timer_service.rs` separates initially disarmed ownership from programming authority.
+Constructing `LockedTimerQueue` no longer assumes that vectors and GIC delivery are already live.
+Every command-capable operation requires the private, non-transferable `TimerProgrammingPermit`
+held only by the active runtime. `quiesce` rejects pending timers and applies an explicit `Disarm`
+transaction before the permit is revoked.
+
+On AArch64, `PhysicalTimer` is now deliberately non-`Send` and non-`Sync` and implements
+`TimerHardware`. `Arm` programs `CNTP_CVAL_EL0` while signaling is masked, then unmasks the timer;
+`Disarm` disables and masks it. The unsafe hardware call remains reachable only through the locked
+service and a live runtime permit. Register operations are infallible at the Rust API boundary;
+architectural traps remain outside that error model.
+
+## Invariants and failure semantics
+
+- The runtime address is pinned before publication and remains valid through its final active
+  interval. The unsafe publisher must make every current-CPU EL1 IRQ vector able to recover the
+  same slot before activation.
+- Publication, activation, dispatch, scheduling, cancellation, and deactivation are single-CPU
+  operations. Their handles and the concrete GIC/timer backends cannot move to another CPU.
+- The outer runtime lock is always acquired before the inner timer lock. Neither path acquires them
+  in reverse order, sleeps, allocates, schedules, or invokes a callback while guarded.
+- The outer lock masks local IRQ delivery before the distributor gate opens and retains masking
+  until the complete transition is published in the slot. `activate` and `deactivate` preserve the
+  caller's exact preceding mask state; they do not independently enable `DAIF.I`.
+- The timer PPI identity and trigger must exactly match the prepared GIC configuration. A mismatch
+  leaves the slot prepared and touches neither controller.
+- No safe timer programming method is reachable before successful activation or after permit
+  revocation. The timer is rearmed or disarmed before EOI, preventing a level-triggered source from
+  being completed while stale comparator state remains.
+- Special INTIDs 1020 through 1023 require no EOI. Every other INTID creates one remembered
+  completion obligation. A dropped or twice-failed token leaves the GIC owner unusable for a later
+  acknowledge or shutdown.
+- An unexpected real INTID is completed before it is returned to policy code. The current runtime
+  reports it but does not decide whether the kernel should continue or terminate.
+- A recoverable timer programming failure rolls the queue back and reapplies prior hardware state.
+  Failed recovery, GIC acknowledge failure, or EOI failure makes the runtime unavailable.
+- Deactivation never abandons queued events. `PendingTimers` leaves delivery active; callers must
+  cancel or dispatch every owned timer before retrying.
+- Due batches contain data only. Callbacks run after the runtime and timer guards have released and
+  after successful GIC completion.
+
+## Validation
+
+Host tests cover one-way publication, PPI mismatch without hardware mutation, distributor-before-
+CPU activation, timer reprogramming before EOI, timer-disarm-before-CPU-before-distributor
+shutdown, exact prior IRQ-mask restoration, pending-timer shutdown rejection and retry, terminal
+activation failure, and terminal EOI failure. The GIC tests separately verify that abandoning an
+acknowledgement blocks both a second acknowledge and shutdown without closing active gates.
+
+Canonical checks cross-compile `PhysicalTimer`'s `TimerHardware` adapter, the permit-gated service,
+and the runtime state machine for every AArch64 kernel variant. Static ELF inspection continues to
+validate those images. These results are Host Tested, Cross Compiled, and ELF Inspected only; no
+new QEMU command was run.
+
+## TODO
+
+- Replace the boot-only prepared-GIC slot with permanent pinned runtime storage that also owns the
+  claimed physical timer and its initial counter observation.
+- Publish a global lookup handle reachable from all EL1 IRQ vector slots before calling activation,
+  while keeping synchronous user-fault and syscall handling unchanged.
+- Add an explicit final transition that unmasks `DAIF.I` only after runtime publication and
+  activation, and a symmetric removal protocol that prevents new handler entry.
+- Define the kernel policy for an unexpected completed INTID and for terminal acknowledge/EOI
+  failure, including diagnostic output that does not invert locks.
+- Connect returned timer events to sleeping kernel threads and the tickless scheduler.
+- Add a bounded target probe for publication, one timer event, EOI, interrupt return, lock
+  exclusion, and continued execution.
+
+## Deliberately skipped
+
+This checkpoint does not change `phoenix_exception_dispatch`, install a global runtime pointer,
+claim `PhysicalTimer` during boot, activate the retained boot GIC, program a target comparator,
+unmask `DAIF.I`, return through a real IRQ vector, or run QEMU. It does not add nested interrupts,
+FIQ/NMI handling, SMP/per-CPU slots, scheduler callbacks, dynamic timer capacity, allocation in
+interrupt context, or a general interrupt-controller abstraction. The final-map and loaded-init
+paths continue to retain `PreparedGicV3` with delivery closed.
+
+## Runtime Pending
+
+`RUN-SYNC-001`, `RUN-IRQ-001`, and `RUN-TIME-001` in `docs/RUNTIME_VALIDATION.md` remain Runtime
+Pending. Host mocks and cross-compilation cannot prove that the pinned board accepts the register
+sequence, that a physical timer PPI reaches the published slot, that `DAIF.I` restoration excludes
+same-CPU re-entry, that EOI permits later delivery, or that target execution returns and continues.

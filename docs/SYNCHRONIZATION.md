@@ -2,9 +2,9 @@
 
 This document defines Phoenix's first synchronization primitive: an architecture-neutral
 IRQ-save spinlock with an AArch64 `DAIF.I` backend. The lock algorithm is Host Tested and the
-AArch64 masking path is Cross Compiled. An architecture-neutral timer controller now adopts it,
-but no boot owner uses either component, IRQ delivery remains closed, and target behavior is
-Runtime Pending.
+AArch64 masking path is Cross Compiled. An architecture-neutral timer controller and a Host Tested
+pinned AArch64 interrupt runtime now adopt it, but no boot owner uses those components, IRQ
+delivery remains closed, and target behavior is Runtime Pending.
 
 ## Current implementation
 
@@ -32,8 +32,10 @@ masking transition. Debug, SError, and FIQ masks are not changed.
 
 `kernel/src/timer_service.rs` is the first consumer. It keeps a monotonic clock, timer queue, and
 abstract hardware owner under one lock, performs no callback while guarded, and transactionally
-restores queue state if programming fails. Because only one lock is involved, this does not yet
-publish a nested subsystem lock order.
+restores queue state if programming fails. `kernel/src/arch/aarch64/interrupt_runtime.rs` adds an
+outer GIC/publication lock and publishes the first subsystem order: runtime lock before timer lock.
+Activation, scheduling, dispatch, cancellation, and deactivation all follow that direction; no
+timer-guarded path attempts to acquire the runtime lock.
 
 ## Invariants and memory ordering
 
@@ -59,8 +61,8 @@ publish a nested subsystem lock order.
 - Safe shared access exists only through a live guard. `T: Send` is required before the lock itself
   can be moved or shared across Rust concurrency domains.
 - Lock holders must not sleep, schedule, invoke arbitrary callbacks, or enter an allocator whose
-  lock order is not explicitly below the current lock. No nested production lock order is published
-  yet because no subsystem has adopted this primitive.
+  lock order is not explicitly below the current lock. The current nested order is runtime/GIC
+  before timer; allocator, scheduler, console, and process locks remain outside that graph.
 
 The unsafe architecture contract is necessary because a backend that reports masking without
 actually preventing same-CPU IRQ re-entry could permit two mutable accesses to the same protected
@@ -73,6 +75,8 @@ masked-state preservation, LIFO restoration, contended `try_lock` rollback, and 
 performing 8,000 serialized updates through the Acquire/Release path. Formatting, checks, Clippy,
 and all existing host tests run through canonical CI. Timer-controller tests additionally verify
 that comparator operations occur while masked and returned callbacks occur after restoration.
+Interrupt-runtime tests cover nested mask preservation, the runtime-before-timer order,
+timer-before-EOI service, pending-timer deactivation rejection, and terminal controller failures.
 
 Every AArch64 kernel variant Cross Compiles the real `MRS DAIF`, `MSR DAIFSet`, `MSR DAIFClr`, and
 `ISB` backend. Existing ELF inspection continues to validate each kernel artifact, but static
@@ -81,9 +85,8 @@ cycle in a future dispatcher.
 
 ## TODO
 
-- Publish the first explicit subsystem lock order when the GIC owner and timer queue are connected.
-- Add the two-stage AArch64 timer publication adapter without weakening the locked controller's
-  construction invariant.
+- Adopt the published runtime-before-timer order in the real boot dispatcher without adding a
+  console, allocator, or scheduler edge while either lock is held.
 - Decide the kernel-heap and runtime-stack policies for normal-context versus interrupt-context
   access before wrapping either owner.
 - Add preemption-count integration before a scheduler can migrate or switch a lock holder.
@@ -97,8 +100,8 @@ cycle in a future dispatcher.
 This checkpoint does not add a sleeping mutex, reader/writer lock, condition variable, seqlock,
 RCU, priority inheritance, fairness guarantee, lock dependency graph, timeout, NMI/FIQ-safe lock,
 per-CPU storage, scheduler preemption control, or SMP bring-up. It does not wrap the heap, frame
-allocator, runtime-stack pool, process table, file table, boot timer owner, GIC owner, or console.
-It does not publish an IRQ dispatcher, activate Group-1 delivery, or unmask boot IRQs.
+allocator, runtime-stack pool, process table, file table, boot-owned interrupt runtime, or console.
+It does not publish a boot IRQ dispatcher, activate target Group-1 delivery, or unmask boot IRQs.
 
 ## Runtime Pending
 

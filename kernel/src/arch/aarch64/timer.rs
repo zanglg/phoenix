@@ -3,9 +3,11 @@
 use core::num::NonZeroU32;
 
 #[cfg(target_arch = "aarch64")]
-use core::arch::asm;
+use core::{arch::asm, convert::Infallible, marker::PhantomData};
 
 use crate::time::{MonotonicTimeError, TickDuration, TickInstant};
+#[cfg(target_arch = "aarch64")]
+use crate::timer_service::{TimerHardware, TimerProgramming};
 
 /// Number of nanoseconds in one second.
 pub const NANOS_PER_SECOND: u64 = 1_000_000_000;
@@ -157,7 +159,7 @@ impl PhysicalTimerControl {
 #[cfg(target_arch = "aarch64")]
 #[derive(Debug)]
 pub struct PhysicalTimer {
-    _exclusive: (),
+    _not_send_or_sync: PhantomData<*mut ()>,
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -171,7 +173,9 @@ impl PhysicalTimer {
     /// Before calling [`Self::unmask`], the caller must also establish its IRQ
     /// dispatch and synchronization invariants.
     pub const unsafe fn claim() -> Self {
-        Self { _exclusive: () }
+        Self {
+            _not_send_or_sync: PhantomData,
+        }
     }
 
     /// Read and validate `CNTFRQ_EL0`.
@@ -297,6 +301,31 @@ impl PhysicalTimer {
                 options(nomem, nostack, preserves_flags)
             );
         }
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+impl TimerHardware for PhysicalTimer {
+    type Error = Infallible;
+
+    fn counter(&mut self) -> Result<TickInstant, Self::Error> {
+        Ok(PhysicalTimer::counter(self))
+    }
+
+    unsafe fn program(&mut self, programming: TimerProgramming) -> Result<(), Self::Error> {
+        match programming {
+            TimerProgramming::Arm(deadline) => {
+                self.program_masked(deadline);
+                // SAFETY: `TimerHardware::program` requires the caller to hold
+                // the architecture runtime's live programming permit while
+                // local IRQ delivery is masked. The compare value is now set.
+                unsafe {
+                    self.unmask();
+                }
+            }
+            TimerProgramming::Disarm => self.disable(),
+        }
+        Ok(())
     }
 }
 

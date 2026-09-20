@@ -15,14 +15,14 @@ narrow support claim:
 - rust-analyzer can use the configured kernel target from an x86_64 development host;
 - host-side unit tests and validation are available through `cargo xtask`;
 - architecture-neutral monotonic raw ticks, a fixed-capacity deadline queue, checked AArch64
-  frequency conversion, and masked physical-timer programming are Host Tested/Cross Compiled,
-  while boot activation, GIC delivery, target IRQ synchronization, and sleep remain pending;
+  frequency conversion, and a permit-gated physical-timer adapter are Host Tested/Cross Compiled,
+  while boot activation, target GIC delivery, IRQ synchronization, and sleep remain pending;
 - an allocation-free IRQ-save spinlock is Host Tested with Acquire/Release contention and exact
-  nested mask restoration; its AArch64 `DAIF.I` backend Cross Compiles, but no boot subsystem uses
-  it and IRQ delivery remains masked;
+  nested mask restoration; its AArch64 `DAIF.I` backend and runtime-before-timer lock order Cross
+  Compile, but no boot subsystem uses them and IRQ delivery remains masked;
 - a locked, fixed-capacity timer controller is Host Tested with earliest-only reprogramming,
   deterministic due batches, callbacks-after-unlock, exact queue rollback, and explicit hardware
-  recovery failure; it has no concrete AArch64 adapter or boot owner yet;
+  recovery failure; pending timers block delivery shutdown, and no boot owner exists yet;
 - strict QEMU `virt` DTB discovery validates GICv3 MMIO ranges, interrupt-parent ownership, and
   the architected-timer PPIs; the final-map paths select the current CPU redistributor by affinity
   and map only it plus GICD as exact device pages without enabling interrupts;
@@ -31,9 +31,9 @@ narrow support claim:
   evidence while distributor and CPU Group-1 delivery remain disabled; both final-map paths now
   construct that concrete volatile MMIO/`ICC_*_EL1` owner after TTBR1 publication, execute the
   preparation transaction with a fixed poll budget, and retain its closed-gate type state; a
-  separate Host Tested, dispatcher-gated type state models ordered activation, special/timer/
-  unexpected acknowledgement, mandatory combined EOI/deactivation, and recoverable shutdown,
-  but no boot path activates it or unmasks IRQs;
+  separate Host Tested pinned runtime publishes dispatcher state before ordered activation, binds
+  the matching timer PPI, reprograms before mandatory combined EOI/deactivation, and disarms before
+  shutdown, but no boot path installs its vector lookup, activates it, or unmasks IRQs;
 - a bounded QEMU runner and boot-test harness are implemented and host tested;
 - bounded QEMU probes have verified direct boot, DTB/allocator access, final TTBR1 publication,
   the first EL0 transition, and the loaded-init/file-I/O path on the pinned board;
@@ -160,6 +160,8 @@ The IRQ-save spinlock, memory-ordering contract, lock-context restrictions, and 
 are documented in [`docs/SYNCHRONIZATION.md`](docs/SYNCHRONIZATION.md).
 The GICv3/timer topology contract, ownership boundary, rejected forms, and target deferrals are in
 [`docs/AARCH64_INTERRUPTS.md`](docs/AARCH64_INTERRUPTS.md).
+The pinned GIC/timer publication cycle, lock order, failure closure, and boot boundary are in
+[`docs/AARCH64_INTERRUPT_RUNTIME.md`](docs/AARCH64_INTERRUPT_RUNTIME.md).
 
 ## LSP target
 
