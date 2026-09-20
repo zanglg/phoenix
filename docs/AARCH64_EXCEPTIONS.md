@@ -43,12 +43,17 @@ dispatcher returns, assembly writes back mutable SP/PC/status state, restores al
 uses `eret`. Current-EL `SP_EL0` slots switch to `SP_EL1` before touching memory, so they do not
 trust the interrupted stack.
 
-The default Rust dispatcher is deliberately fatal. It emits `PHOENIX_EXCEPTION`, the decoded
+The default Rust dispatcher is deliberately fatal for every asynchronous slot. It emits `PHOENIX_EXCEPTION`, the decoded
 vector, PC, saved status, syndrome, and fault address, then halts. The opt-in EL0 paths first
 recognize their narrow `SVC #0` contract and exercise the assembly return epilogue. Other
 consistent lower-AArch64 synchronous exceptions are classified as terminal user faults; current-EL,
 asynchronous, SError, and inconsistent exception classes retain the fatal kernel path. General
 recovery and production syscall dispatch are not enabled. See `docs/USER_FAULTS.md`.
+
+The architecture GIC module now has a Host Tested type-state API that can activate delivery behind
+an unsafe `PublishedIrqDispatcher` proof, classify one `ICC_IAR1_EL1` result, and require EOI of
+every non-special INTID. No current vector path constructs that proof or owns an `ActiveGicV3`, so
+this protocol is not yet wired into `phoenix_exception_dispatch` and makes no target IRQ claim.
 
 ## Syndrome decoding
 
@@ -84,6 +89,8 @@ syndrome and only retaining `FAR_EL1` when valid.
 - only a lower-AArch64 synchronous vector with a consistent syndrome class can be classified as a
   user fault;
 - changing the frame ABI requires coordinated source, assembly, inspection, and document changes.
+- Group-1 delivery must remain closed until all EL1 IRQ slots can find a non-transferable active
+  GIC owner and complete timer as well as unexpected acknowledgements.
 
 ## Validation
 
@@ -103,6 +110,8 @@ fault output remain Runtime Pending in `docs/RUNTIME_VALIDATION.md`.
 - validate vector installation and every save/restore path on QEMU;
 - choose dedicated exception-stack and nested-exception policies;
 - dispatch current-EL faults, IRQ, FIQ, and SError separately;
+- connect EL1 IRQ slots to the prepared GIC delivery type state only after publishing controller
+  lookup, stack, and IRQ-safe shared state;
 - validate `FAR_EL1` only for classes and syndrome values where the architecture defines it;
 - expand diagnostic formatting with class-specific detail without allocation;
 - add recoverable user page-fault policy before terminal classification;

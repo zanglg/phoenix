@@ -37,6 +37,10 @@ numbers and remains explicitly unstable before 1.0.0. During construction, chang
 - EL2 bootstrap permission for the GIC system-register interface plus one-time post-TTBR1 GICv3
   preparation in both final-map paths, with checked IRQ masking, a 100,000-read per-wait budget,
   permanently retained closed-delivery ownership, and an ordered static/runtime marker.
+- A non-transferable dispatcher-publication proof plus Host Tested GICv3 delivery type state with
+  ordered and bounded gate activation/recovery/shutdown, special-INTID handling, exclusive timer
+  and unexpected acknowledgement tokens, combined EOI/deactivation, and retained failure
+  ownership; boot deliberately remains in the closed prepared state.
 - Checked architecture-neutral physical/virtual addresses, pages, frames, and half-open ranges.
 - Strict allocation-free DTB parsing with boot CPU, bootargs, memory-region, and reservation extraction.
 - Fixed-capacity physical memory normalization, conservative reservation, and first-fit frame allocation.

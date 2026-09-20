@@ -2,7 +2,8 @@
 
 Phoenix currently provides an architecture-neutral, allocation-free foundation for monotonic
 time and deadline ordering plus a deliberately unintegrated AArch64 physical generic-timer
-register owner. The final-map boot paths prepare the GIC timer PPI with delivery closed, but do not
+register owner. A Host Tested GIC type state can activate and classify the timer PPI behind an
+unsafe dispatcher-publication proof, but the final-map boot paths retain delivery closed and do not
 construct or program the timer owner, deliver timer interrupts, block a thread, or run callbacks.
 
 ## Current implementation
@@ -25,8 +26,9 @@ construct or program the timer owner, deliver timer interrupts, block a thread, 
 
 The QEMU `virt` platform layer also strictly discovers all four architected-timer PPIs from the
 DTB and selects the second, non-secure physical entry for the `CNTP_*` contract. That descriptive
-topology now feeds the boot GIC preparation transaction, but is not yet connected to the physical-
-timer owner or an interrupt dispatcher.
+topology now feeds the boot GIC preparation transaction. The GIC layer can classify an acknowledged
+INTID against that configured PPI, but is not yet connected to the physical-timer owner or a real
+interrupt dispatcher.
 
 The target owner programs an absolute compare value only while signaling is disabled and masked,
 then leaves the timer enabled but masked. Unmasking is an unsafe operation whose caller must first
@@ -85,7 +87,8 @@ compilation and static artifact contracts, not target execution.
 
 ## TODO
 
-- Open GIC delivery only after publishing the interrupt dispatcher and its synchronization state.
+- Publish the interrupt dispatcher and its synchronization state, then consume the existing GIC
+  activation proof without weakening its masked-transition contract.
 - Connect the exclusive physical-timer owner to boot after GIC and IRQ state are ready.
 - Introduce the IRQ-safe synchronization and memory-ordering contract described above.
 - Connect due events to sleeping threads and tickless scheduler wakeups.
@@ -96,9 +99,10 @@ compilation and static artifact contracts, not target execution.
 ## Deliberately skipped
 
 This checkpoint does not implement wall time, calendar time, periodic timers, callback storage,
-dynamic queue growth, kernel-thread sleep, scheduler preemption, idle `WFI`, SMP, GIC access,
-delivery activation, IRQ acknowledgement, or boot-time timer activation. GIC discovery and
-closed-gate PPI preparation belong to the separate interrupt module. This checkpoint does not
+dynamic queue growth, kernel-thread sleep, scheduler preemption, idle `WFI`, SMP, boot-time GIC
+delivery activation, target IRQ acknowledgement, or boot-time timer activation. GIC discovery,
+closed-gate PPI preparation, and the unintegrated Host Tested delivery protocol belong to the
+separate interrupt module. This checkpoint does not
 claim a target frequency or precision because `CNTFRQ_EL0` has not been read during target
 execution.
 

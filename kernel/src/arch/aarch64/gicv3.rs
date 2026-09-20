@@ -1,5 +1,6 @@
-//! Host-testable GICv3 discovery and private-interrupt preparation.
+//! Host-testable GICv3 discovery, preparation, and delivery type state.
 
+use core::marker::PhantomData;
 use core::num::NonZeroU32;
 #[cfg(target_arch = "aarch64")]
 use core::{arch::asm, ptr};
@@ -12,6 +13,9 @@ const GICD_CTLR: usize = 0x0000;
 const GICD_PIDR2: usize = 0xffe8;
 const GICD_CTLR_ENABLE_G1: u32 = 1 << 0;
 const GICD_CTLR_ENABLE_G1A: u32 = 1 << 1;
+// Bit 1 is the Non-secure Group-1 enable in the Non-secure register view and
+// the Group-1 enable when the GIC implements a single Security state.
+const GICD_CTLR_ENABLE_NONSECURE_GROUP1: u32 = GICD_CTLR_ENABLE_G1A;
 const GICD_CTLR_ARE_NS: u32 = 1 << 4;
 const GICD_CTLR_RWP: u32 = 1 << 31;
 
@@ -47,6 +51,9 @@ const ICC_CTLR_EL1_EOI_MODE: u64 = 1 << 1;
 const DEFAULT_PRIORITY: u8 = 0xa0;
 const PRIORITY_MASK_ALLOW_ALL: u64 = 0xff;
 const PRIVATE_INTERRUPT_MASK: u32 = u32::MAX;
+const ICC_IAR1_INTID_MASK: u32 = 0x00ff_ffff;
+const SPECIAL_INTID_MIN: u32 = 1020;
+const SPECIAL_INTID_MAX: u32 = 1023;
 
 /// Lowest architectural private peripheral interrupt ID.
 pub const PPI_INTID_MIN: u16 = 16;
@@ -348,6 +355,7 @@ fn register_address(
 pub struct MappedGicV3Registers<'a, const TABLES: usize> {
     _tables: &'a MaterializedKernelPageTables<TABLES>,
     layout: GicV3MmioLayout,
+    _not_send_or_sync: PhantomData<*mut ()>,
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -359,7 +367,9 @@ impl<'a, const TABLES: usize> MappedGicV3Registers<'a, TABLES> {
     /// `tables` must be the active TTBR1 hierarchy that maps every byte in
     /// `layout` as EL1-only Device-nGnRnE RW/NX memory. The caller must grant
     /// this value unique ownership of those GICD/GICR ranges and current-CPU
-    /// `ICC_*_EL1` state, keep IRQs masked, and prevent concurrent CPU access.
+    /// `ICC_*_EL1` state, keep IRQs masked until an `ActiveGicV3` is created
+    /// behind a published dispatcher, and prevent concurrent CPU access. The
+    /// resulting backend is deliberately neither `Send` nor `Sync`.
     pub const unsafe fn assume_active(
         tables: &'a MaterializedKernelPageTables<TABLES>,
         layout: GicV3MmioLayout,
@@ -367,6 +377,7 @@ impl<'a, const TABLES: usize> MappedGicV3Registers<'a, TABLES> {
         Self {
             _tables: tables,
             layout,
+            _not_send_or_sync: PhantomData,
         }
     }
 }
@@ -441,8 +452,11 @@ pub enum CpuInterfaceRegister {
 /// frames and current-CPU `ICC_*_EL1` registers they uniquely own. MMIO reads
 /// and writes must be volatile, correctly sized, and unable to alias ordinary
 /// memory. `synchronize` must complete preceding device/system-register writes
-/// before later polling or state publication. No interrupt handler or other
-/// CPU may access the same mutable controller state concurrently.
+/// before later polling or state publication. `acknowledge_group1` must return
+/// the raw `ICC_IAR1_EL1` value, and `end_group1` must write the supplied INTID
+/// to `ICC_EOIR1_EL1` in the prepared combined-deactivation mode. No interrupt
+/// handler or other CPU may access the same mutable controller state
+/// concurrently.
 pub unsafe trait GicV3RegisterAccess {
     /// Backend-specific access failure.
     type Error;
@@ -468,6 +482,13 @@ pub unsafe trait GicV3RegisterAccess {
         register: CpuInterfaceRegister,
         value: u64,
     ) -> Result<(), Self::Error>;
+
+    /// Acknowledge the highest-priority pending Group-1 interrupt.
+    fn acknowledge_group1(&mut self) -> Result<u32, Self::Error>;
+
+    /// Perform combined priority drop and deactivation for one acknowledged
+    /// Group-1 interrupt while `ICC_CTLR_EL1.EOImode == 0`.
+    fn end_group1(&mut self, intid: u32) -> Result<(), Self::Error>;
 
     /// Complete earlier register writes before subsequent observations.
     fn synchronize(&mut self);
@@ -588,6 +609,36 @@ unsafe impl<const TABLES: usize> GicV3RegisterAccess for MappedGicV3Registers<'_
                     options(nomem, nostack, preserves_flags)
                 ),
             }
+        }
+        Ok(())
+    }
+
+    fn acknowledge_group1(&mut self) -> Result<u32, Self::Error> {
+        let value: u64;
+        // SAFETY: backend construction grants unique access to the current
+        // CPU interface. Reading ICC_IAR1_EL1 acknowledges at most one
+        // Group-1 interrupt; the ActiveGicV3 owner serializes this side effect.
+        unsafe {
+            asm!(
+                "mrs {value}, ICC_IAR1_EL1",
+                value = out(reg) value,
+                options(nomem, nostack, preserves_flags)
+            );
+        }
+        Ok(value as u32)
+    }
+
+    fn end_group1(&mut self, intid: u32) -> Result<(), Self::Error> {
+        let value = u64::from(intid & ICC_IAR1_INTID_MASK);
+        // SAFETY: the ActiveGicV3 acknowledgement token proves this exact
+        // INTID was returned by ICC_IAR1_EL1 and remains outstanding. The
+        // prepared CPU interface selected combined EOI/deactivation mode.
+        unsafe {
+            asm!(
+                "msr ICC_EOIR1_EL1, {value}",
+                value = in(reg) value,
+                options(nomem, nostack, preserves_flags)
+            );
         }
         Ok(())
     }
@@ -802,6 +853,555 @@ pub unsafe fn prepare<B: GicV3RegisterAccess>(
             })
         }
     }
+}
+
+/// Proof that an IRQ dispatcher capable of handling timer and unexpected
+/// Group-1 results has been permanently published for the current CPU.
+#[derive(Debug)]
+pub struct PublishedIrqDispatcher {
+    _not_send_or_sync: PhantomData<*mut ()>,
+}
+
+impl PublishedIrqDispatcher {
+    /// Create the one-way dispatcher-publication proof.
+    ///
+    /// # Safety
+    ///
+    /// The caller must have installed a dispatcher reachable from every EL1
+    /// IRQ vector that can run on this CPU. Its storage, exception stack, GIC
+    /// owner lookup, and synchronization state must remain valid until the GIC
+    /// is shut down. The dispatcher must complete every acknowledged non-
+    /// special INTID, including unexpected ones, before returning.
+    pub const unsafe fn assume_published() -> Self {
+        Self {
+            _not_send_or_sync: PhantomData,
+        }
+    }
+}
+
+/// Delivery transition or interrupt-cycle phase.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GicV3DeliveryStage {
+    /// Validate and open Non-secure Group-1 distribution.
+    EnableDistributor,
+    /// Validate and open the current CPU's Group-1 interface.
+    EnableCpuInterface,
+    /// Read `ICC_IAR1_EL1`.
+    Acknowledge,
+    /// Write `ICC_EOIR1_EL1` in combined deactivate mode.
+    EndOfInterrupt,
+    /// Close the current CPU's Group-1 interface.
+    DisableCpuInterface,
+    /// Close distributor delivery and wait for completion.
+    DisableDistributor,
+}
+
+/// Failure while changing delivery state or completing one IRQ cycle.
+#[derive(Debug, Eq, PartialEq)]
+pub enum GicV3DeliveryError<E> {
+    /// One backend register operation failed.
+    Access {
+        /// Operation phase.
+        stage: GicV3DeliveryStage,
+        /// Backend-specific failure.
+        error: E,
+    },
+    /// A distributor write-pending transition exceeded the configured budget.
+    Timeout {
+        /// Timed-out phase.
+        stage: GicV3DeliveryStage,
+    },
+    /// Affinity routing was unexpectedly clear.
+    AffinityRoutingUnavailable {
+        /// Observed `GICD_CTLR` value.
+        observed: u32,
+    },
+    /// Distributor Group-1 gates were not in the required state.
+    DistributorGateState {
+        /// Required enabled state.
+        expected_enabled: bool,
+        /// Observed `GICD_CTLR` value.
+        observed: u32,
+    },
+    /// The current CPU Group-1 gate was not in the required state.
+    CpuInterfaceGateState {
+        /// Required enabled state.
+        expected_enabled: bool,
+        /// Observed `ICC_IGRPEN1_EL1` value.
+        observed: u64,
+    },
+    /// `ICC_CTLR_EL1` did not retain combined EOI/deactivation mode.
+    SplitEoiMode {
+        /// Observed `ICC_CTLR_EL1` value.
+        observed: u64,
+    },
+}
+
+/// Failed activation retaining register and dispatcher ownership.
+pub struct GicV3ActivationFailure<B: GicV3RegisterAccess> {
+    backend: B,
+    configuration: GicV3Configuration,
+    dispatcher: PublishedIrqDispatcher,
+    error: GicV3DeliveryError<B::Error>,
+    recovery_error: Option<GicV3DeliveryError<B::Error>>,
+}
+
+/// Recoverable parts of a failed delivery activation.
+pub type GicV3ActivationFailureParts<B> = (
+    B,
+    GicV3Configuration,
+    PublishedIrqDispatcher,
+    GicV3DeliveryError<<B as GicV3RegisterAccess>::Error>,
+    Option<GicV3DeliveryError<<B as GicV3RegisterAccess>::Error>>,
+);
+
+impl<B: GicV3RegisterAccess> GicV3ActivationFailure<B> {
+    /// Return the failure that stopped activation.
+    pub const fn error(&self) -> &GicV3DeliveryError<B::Error> {
+        &self.error
+    }
+
+    /// Return the first failure while attempting to close delivery again.
+    pub const fn recovery_error(&self) -> Option<&GicV3DeliveryError<B::Error>> {
+        self.recovery_error.as_ref()
+    }
+
+    /// Recover all ownership and failure evidence.
+    ///
+    /// Neither a successful recovery nor the absence of `recovery_error`
+    /// authorizes IRQ unmasking; the caller must re-run preparation before a
+    /// later activation attempt.
+    pub fn into_parts(self) -> GicV3ActivationFailureParts<B> {
+        (
+            self.backend,
+            self.configuration,
+            self.dispatcher,
+            self.error,
+            self.recovery_error,
+        )
+    }
+}
+
+/// GICv3 owner with Group-1 distributor and CPU delivery enabled.
+pub struct ActiveGicV3<B> {
+    backend: B,
+    configuration: GicV3Configuration,
+    dispatcher: PublishedIrqDispatcher,
+}
+
+impl<B> ActiveGicV3<B> {
+    /// Return the retained timer configuration.
+    pub const fn configuration(&self) -> GicV3Configuration {
+        self.configuration
+    }
+
+    /// Borrow the backend for read-only diagnostics.
+    pub const fn backend(&self) -> &B {
+        &self.backend
+    }
+}
+
+/// Interrupt classification produced by one Group-1 acknowledgement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GicV3InterruptSource {
+    /// The configured non-secure physical timer PPI.
+    Timer,
+    /// An acknowledged INTID for which Phoenix has no published handler.
+    Unexpected,
+}
+
+/// Result of reading `ICC_IAR1_EL1`.
+#[must_use = "a non-spurious GIC acknowledgement must be completed"]
+pub enum GicV3Acknowledge<'a, B: GicV3RegisterAccess> {
+    /// One of the architectural special INTIDs 1020 through 1023. It must not
+    /// be written to `ICC_EOIR1_EL1`.
+    Spurious {
+        /// Exact special INTID returned by the CPU interface.
+        intid: u32,
+    },
+    /// A real acknowledged interrupt whose token must be completed.
+    Interrupt(AcknowledgedGicV3Interrupt<'a, B>),
+}
+
+/// One outstanding Group-1 interrupt, borrowing the controller exclusively.
+#[must_use = "dropping an acknowledged interrupt without completion leaves it active"]
+pub struct AcknowledgedGicV3Interrupt<'a, B: GicV3RegisterAccess> {
+    controller: &'a mut ActiveGicV3<B>,
+    intid: u32,
+    source: GicV3InterruptSource,
+}
+
+impl<'a, B: GicV3RegisterAccess> AcknowledgedGicV3Interrupt<'a, B> {
+    /// Return the acknowledged architectural INTID.
+    pub const fn intid(&self) -> u32 {
+        self.intid
+    }
+
+    /// Classify the INTID against the configured timer PPI.
+    pub const fn source(&self) -> GicV3InterruptSource {
+        self.source
+    }
+
+    /// Perform combined priority drop and deactivation.
+    ///
+    /// On access failure, ownership of the still-outstanding token is returned
+    /// so the caller can retry or retain explicit terminal failure evidence.
+    pub fn complete(self) -> Result<(), GicV3CompletionFailure<'a, B>> {
+        let Self {
+            controller,
+            intid,
+            source,
+        } = self;
+        if let Err(error) = controller.backend.end_group1(intid) {
+            return Err(GicV3CompletionFailure {
+                acknowledgement: AcknowledgedGicV3Interrupt {
+                    controller,
+                    intid,
+                    source,
+                },
+                error: GicV3DeliveryError::Access {
+                    stage: GicV3DeliveryStage::EndOfInterrupt,
+                    error,
+                },
+            });
+        }
+        controller.backend.synchronize();
+        Ok(())
+    }
+}
+
+/// Failed EOI retaining the outstanding acknowledgement token.
+pub struct GicV3CompletionFailure<'a, B: GicV3RegisterAccess> {
+    acknowledgement: AcknowledgedGicV3Interrupt<'a, B>,
+    error: GicV3DeliveryError<B::Error>,
+}
+
+impl<'a, B: GicV3RegisterAccess> GicV3CompletionFailure<'a, B> {
+    /// Return the exact completion failure.
+    pub const fn error(&self) -> &GicV3DeliveryError<B::Error> {
+        &self.error
+    }
+
+    /// Recover the outstanding token and failure evidence.
+    pub fn into_parts(
+        self,
+    ) -> (
+        AcknowledgedGicV3Interrupt<'a, B>,
+        GicV3DeliveryError<B::Error>,
+    ) {
+        (self.acknowledgement, self.error)
+    }
+}
+
+/// Failed shutdown retaining indeterminate hardware ownership.
+pub struct GicV3ShutdownFailure<B: GicV3RegisterAccess> {
+    backend: B,
+    configuration: GicV3Configuration,
+    dispatcher: PublishedIrqDispatcher,
+    error: GicV3DeliveryError<B::Error>,
+}
+
+/// Recoverable parts of a failed delivery shutdown.
+pub type GicV3ShutdownFailureParts<B> = (
+    B,
+    GicV3Configuration,
+    PublishedIrqDispatcher,
+    GicV3DeliveryError<<B as GicV3RegisterAccess>::Error>,
+);
+
+impl<B: GicV3RegisterAccess> GicV3ShutdownFailure<B> {
+    /// Return the first shutdown failure.
+    pub const fn error(&self) -> &GicV3DeliveryError<B::Error> {
+        &self.error
+    }
+
+    /// Recover ownership and explicit indeterminate-state evidence.
+    pub fn into_parts(self) -> GicV3ShutdownFailureParts<B> {
+        (
+            self.backend,
+            self.configuration,
+            self.dispatcher,
+            self.error,
+        )
+    }
+}
+
+/// Open Group-1 delivery only after the IRQ dispatcher is published.
+///
+/// This transition does not change `DAIF.I`; the caller controls the separate
+/// architectural exception mask.
+///
+/// # Safety
+///
+/// `PSTATE.I` must remain masked throughout this transition. The dispatcher
+/// proof must describe the current CPU and this exact retained GIC owner, and
+/// no other context may access the controller concurrently.
+pub unsafe fn activate<B: GicV3RegisterAccess>(
+    prepared: PreparedGicV3<B>,
+    dispatcher: PublishedIrqDispatcher,
+) -> Result<ActiveGicV3<B>, GicV3ActivationFailure<B>> {
+    let PreparedGicV3 {
+        mut backend,
+        configuration,
+    } = prepared;
+    match enable_delivery(&mut backend, configuration) {
+        Ok(()) => Ok(ActiveGicV3 {
+            backend,
+            configuration,
+            dispatcher,
+        }),
+        Err(error) => {
+            let recovery_error = close_delivery(&mut backend, configuration);
+            Err(GicV3ActivationFailure {
+                backend,
+                configuration,
+                dispatcher,
+                error,
+                recovery_error,
+            })
+        }
+    }
+}
+
+impl<B: GicV3RegisterAccess> ActiveGicV3<B> {
+    /// Acknowledge at most one Group-1 interrupt.
+    ///
+    /// Special INTIDs 1020 through 1023 are returned without an outstanding
+    /// token and must not be EOI'd. Every other result exclusively borrows the
+    /// controller until `AcknowledgedGicV3Interrupt::complete` succeeds.
+    pub fn acknowledge(&mut self) -> Result<GicV3Acknowledge<'_, B>, GicV3DeliveryError<B::Error>> {
+        let raw =
+            self.backend
+                .acknowledge_group1()
+                .map_err(|error| GicV3DeliveryError::Access {
+                    stage: GicV3DeliveryStage::Acknowledge,
+                    error,
+                })?;
+        self.backend.synchronize();
+        let intid = raw & ICC_IAR1_INTID_MASK;
+        if (SPECIAL_INTID_MIN..=SPECIAL_INTID_MAX).contains(&intid) {
+            return Ok(GicV3Acknowledge::Spurious { intid });
+        }
+        let source = if intid == u32::from(self.configuration.timer().intid()) {
+            GicV3InterruptSource::Timer
+        } else {
+            GicV3InterruptSource::Unexpected
+        };
+        Ok(GicV3Acknowledge::Interrupt(AcknowledgedGicV3Interrupt {
+            controller: self,
+            intid,
+            source,
+        }))
+    }
+
+    /// Close CPU and distributor Group-1 delivery and recover prepared state.
+    ///
+    /// # Safety
+    ///
+    /// The caller must first mask `PSTATE.I`, prevent new handler entry, and
+    /// ensure that no acknowledgement token is outstanding. The exclusive
+    /// `self` value enforces only the last condition.
+    pub unsafe fn shutdown(
+        self,
+    ) -> Result<(PreparedGicV3<B>, PublishedIrqDispatcher), GicV3ShutdownFailure<B>> {
+        let Self {
+            mut backend,
+            configuration,
+            dispatcher,
+        } = self;
+        if let Some(error) = close_delivery(&mut backend, configuration) {
+            return Err(GicV3ShutdownFailure {
+                backend,
+                configuration,
+                dispatcher,
+                error,
+            });
+        }
+        Ok((
+            PreparedGicV3 {
+                backend,
+                configuration,
+            },
+            dispatcher,
+        ))
+    }
+}
+
+fn enable_delivery<B: GicV3RegisterAccess>(
+    backend: &mut B,
+    configuration: GicV3Configuration,
+) -> Result<(), GicV3DeliveryError<B::Error>> {
+    let cpu_stage = GicV3DeliveryStage::EnableCpuInterface;
+    let cpu = delivery_read_cpu(backend, cpu_stage, CpuInterfaceRegister::GroupEnable1)?;
+    if cpu & 1 != 0 {
+        return Err(GicV3DeliveryError::CpuInterfaceGateState {
+            expected_enabled: false,
+            observed: cpu,
+        });
+    }
+    let control = delivery_read_cpu(backend, cpu_stage, CpuInterfaceRegister::Control)?;
+    if control & ICC_CTLR_EL1_EOI_MODE != 0 {
+        return Err(GicV3DeliveryError::SplitEoiMode { observed: control });
+    }
+
+    let distributor_stage = GicV3DeliveryStage::EnableDistributor;
+    let control = delivery_read_distributor(backend, distributor_stage)?;
+    if control & GICD_CTLR_ARE_NS == 0 {
+        return Err(GicV3DeliveryError::AffinityRoutingUnavailable { observed: control });
+    }
+    if control & (GICD_CTLR_ENABLE_G1 | GICD_CTLR_ENABLE_G1A) != 0 {
+        return Err(GicV3DeliveryError::DistributorGateState {
+            expected_enabled: false,
+            observed: control,
+        });
+    }
+    delivery_write_distributor(
+        backend,
+        distributor_stage,
+        control | GICD_CTLR_ENABLE_NONSECURE_GROUP1,
+    )?;
+    backend.synchronize();
+    delivery_poll_distributor(backend, configuration, distributor_stage)?;
+    let observed = delivery_read_distributor(backend, distributor_stage)?;
+    if observed & GICD_CTLR_ARE_NS == 0 {
+        return Err(GicV3DeliveryError::AffinityRoutingUnavailable { observed });
+    }
+    if observed & GICD_CTLR_ENABLE_NONSECURE_GROUP1 == 0 || observed & GICD_CTLR_ENABLE_G1 != 0 {
+        return Err(GicV3DeliveryError::DistributorGateState {
+            expected_enabled: true,
+            observed,
+        });
+    }
+
+    delivery_write_cpu(backend, cpu_stage, CpuInterfaceRegister::GroupEnable1, 1)?;
+    backend.synchronize();
+    let observed = delivery_read_cpu(backend, cpu_stage, CpuInterfaceRegister::GroupEnable1)?;
+    if observed & 1 == 0 {
+        return Err(GicV3DeliveryError::CpuInterfaceGateState {
+            expected_enabled: true,
+            observed,
+        });
+    }
+    Ok(())
+}
+
+fn close_delivery<B: GicV3RegisterAccess>(
+    backend: &mut B,
+    configuration: GicV3Configuration,
+) -> Option<GicV3DeliveryError<B::Error>> {
+    let mut first = None;
+    let cpu_stage = GicV3DeliveryStage::DisableCpuInterface;
+    if let Err(error) =
+        delivery_write_cpu(backend, cpu_stage, CpuInterfaceRegister::GroupEnable1, 0)
+    {
+        first = Some(error);
+    }
+    backend.synchronize();
+    match delivery_read_cpu(backend, cpu_stage, CpuInterfaceRegister::GroupEnable1) {
+        Ok(observed) if observed & 1 != 0 && first.is_none() => {
+            first = Some(GicV3DeliveryError::CpuInterfaceGateState {
+                expected_enabled: false,
+                observed,
+            });
+        }
+        Err(error) if first.is_none() => first = Some(error),
+        Ok(_) | Err(_) => {}
+    }
+
+    let distributor_stage = GicV3DeliveryStage::DisableDistributor;
+    match delivery_read_distributor(backend, distributor_stage) {
+        Ok(control) => {
+            if let Err(error) = delivery_write_distributor(
+                backend,
+                distributor_stage,
+                control & !(GICD_CTLR_ENABLE_G1 | GICD_CTLR_ENABLE_G1A),
+            ) && first.is_none()
+            {
+                first = Some(error);
+            }
+            backend.synchronize();
+            if let Err(error) = delivery_poll_distributor(backend, configuration, distributor_stage)
+                && first.is_none()
+            {
+                first = Some(error);
+            }
+            match delivery_read_distributor(backend, distributor_stage) {
+                Ok(observed) => {
+                    let error = if observed & GICD_CTLR_ARE_NS == 0 {
+                        Some(GicV3DeliveryError::AffinityRoutingUnavailable { observed })
+                    } else if observed & (GICD_CTLR_ENABLE_G1 | GICD_CTLR_ENABLE_G1A) != 0 {
+                        Some(GicV3DeliveryError::DistributorGateState {
+                            expected_enabled: false,
+                            observed,
+                        })
+                    } else {
+                        None
+                    };
+                    if first.is_none() {
+                        first = error;
+                    }
+                }
+                Err(error) if first.is_none() => first = Some(error),
+                Err(_) => {}
+            }
+        }
+        Err(error) if first.is_none() => first = Some(error),
+        Err(_) => {}
+    }
+    first
+}
+
+fn delivery_poll_distributor<B: GicV3RegisterAccess>(
+    backend: &mut B,
+    configuration: GicV3Configuration,
+    stage: GicV3DeliveryStage,
+) -> Result<(), GicV3DeliveryError<B::Error>> {
+    for _ in 0..configuration.poll_budget().get() {
+        if delivery_read_distributor(backend, stage)? & GICD_CTLR_RWP == 0 {
+            return Ok(());
+        }
+    }
+    Err(GicV3DeliveryError::Timeout { stage })
+}
+
+fn delivery_read_distributor<B: GicV3RegisterAccess>(
+    backend: &mut B,
+    stage: GicV3DeliveryStage,
+) -> Result<u32, GicV3DeliveryError<B::Error>> {
+    backend
+        .read_distributor(GICD_CTLR)
+        .map_err(|error| GicV3DeliveryError::Access { stage, error })
+}
+
+fn delivery_write_distributor<B: GicV3RegisterAccess>(
+    backend: &mut B,
+    stage: GicV3DeliveryStage,
+    value: u32,
+) -> Result<(), GicV3DeliveryError<B::Error>> {
+    backend
+        .write_distributor(GICD_CTLR, value)
+        .map_err(|error| GicV3DeliveryError::Access { stage, error })
+}
+
+fn delivery_read_cpu<B: GicV3RegisterAccess>(
+    backend: &mut B,
+    stage: GicV3DeliveryStage,
+    register: CpuInterfaceRegister,
+) -> Result<u64, GicV3DeliveryError<B::Error>> {
+    backend
+        .read_cpu_interface(register)
+        .map_err(|error| GicV3DeliveryError::Access { stage, error })
+}
+
+fn delivery_write_cpu<B: GicV3RegisterAccess>(
+    backend: &mut B,
+    stage: GicV3DeliveryStage,
+    register: CpuInterfaceRegister,
+    value: u64,
+) -> Result<(), GicV3DeliveryError<B::Error>> {
+    backend
+        .write_cpu_interface(register, value)
+        .map_err(|error| GicV3DeliveryError::Access { stage, error })
 }
 
 struct Preparation<B> {
@@ -1085,14 +1685,16 @@ mod tests {
 
     use super::{
         CpuAffinity, CpuInterfaceRegister, GIC_DISTRIBUTOR_MIN_SIZE, GIC_REDISTRIBUTOR_FRAME_SIZE,
-        GICD_CTLR, GICD_CTLR_ARE_NS, GICD_CTLR_ENABLE_G1, GICD_CTLR_ENABLE_G1A, GICD_PIDR2,
-        GICR_ICACTIVER0, GICR_ICENABLER0, GICR_ICFGR1, GICR_ICPENDR0, GICR_IGROUPR0,
+        GICD_CTLR, GICD_CTLR_ARE_NS, GICD_CTLR_ENABLE_G1, GICD_CTLR_ENABLE_G1A, GICD_CTLR_RWP,
+        GICD_PIDR2, GICR_ICACTIVER0, GICR_ICENABLER0, GICR_ICFGR1, GICR_ICPENDR0, GICR_IGROUPR0,
         GICR_IGRPMODR0, GICR_IPRIORITYR, GICR_ISENABLER0, GICR_PIDR2, GICR_TYPER, GICR_TYPER_LAST,
         GICR_TYPER_VLPIS, GICR_WAKER, GICR_WAKER_CHILDREN_ASLEEP, GICR_WAKER_PROCESSOR_SLEEP,
-        GicRedistributorDiscoveryAccess, GicV3Configuration, GicV3ConfigurationError,
+        GicRedistributorDiscoveryAccess, GicV3Acknowledge, GicV3Configuration,
+        GicV3ConfigurationError, GicV3DeliveryError, GicV3DeliveryStage, GicV3InterruptSource,
         GicV3MmioError, GicV3MmioLayout, GicV3PreparationError, GicV3PreparationStage,
-        GicV3RegisterAccess, ICC_SRE_EL1_SRE, InterruptTrigger, PrivateInterruptError,
-        PrivatePeripheralInterrupt, RedistributorSelectionError, prepare, select_redistributor,
+        GicV3RegisterAccess, ICC_CTLR_EL1_EOI_MODE, ICC_SRE_EL1_SRE, InterruptTrigger,
+        PrivateInterruptError, PrivatePeripheralInterrupt, PublishedIrqDispatcher,
+        RedistributorSelectionError, SPECIAL_INTID_MAX, activate, prepare, select_redistributor,
     };
     use crate::memory::{AddressRange, PAGE_SIZE, PhysAddr, VirtAddr};
 
@@ -1142,6 +1744,8 @@ mod tests {
         WriteRedistributor(usize, u32),
         ReadCpu(CpuInterfaceRegister),
         WriteCpu(CpuInterfaceRegister, u64),
+        AcknowledgeGroup1(u32),
+        EndGroup1(u32),
         Synchronize,
     }
 
@@ -1156,6 +1760,9 @@ mod tests {
         sre_sticks: bool,
         children_asleep_reads: usize,
         children_asleep_forever: bool,
+        distributor_rwp_forever: bool,
+        acknowledgements: Vec<u32>,
+        next_acknowledgement: usize,
     }
 
     impl MockRegisters {
@@ -1184,6 +1791,9 @@ mod tests {
                 sre_sticks: true,
                 children_asleep_reads: 1,
                 children_asleep_forever: false,
+                distributor_rwp_forever: false,
+                acknowledgements: Vec::new(),
+                next_acknowledgement: 0,
             }
         }
 
@@ -1217,7 +1827,11 @@ mod tests {
         fn read_distributor(&mut self, offset: usize) -> Result<u32, Self::Error> {
             self.before_operation()?;
             self.operations.push(Operation::ReadDistributor(offset));
-            Ok(self.distributor(offset))
+            let mut value = self.distributor(offset);
+            if offset == GICD_CTLR && self.distributor_rwp_forever {
+                value |= GICD_CTLR_RWP;
+            }
+            Ok(value)
         }
 
         fn write_distributor(&mut self, offset: usize, value: u32) -> Result<(), Self::Error> {
@@ -1273,6 +1887,24 @@ mod tests {
             if register != CpuInterfaceRegister::Sre || self.sre_sticks {
                 self.cpu.insert(register, value);
             }
+            Ok(())
+        }
+
+        fn acknowledge_group1(&mut self) -> Result<u32, Self::Error> {
+            self.before_operation()?;
+            let value = self
+                .acknowledgements
+                .get(self.next_acknowledgement)
+                .copied()
+                .unwrap_or(SPECIAL_INTID_MAX);
+            self.next_acknowledgement += 1;
+            self.operations.push(Operation::AcknowledgeGroup1(value));
+            Ok(value)
+        }
+
+        fn end_group1(&mut self, intid: u32) -> Result<(), Self::Error> {
+            self.before_operation()?;
+            self.operations.push(Operation::EndGroup1(intid));
             Ok(())
         }
 
@@ -1602,5 +2234,251 @@ mod tests {
                 .operations
                 .contains(&Operation::WriteRedistributor(GICR_ICENABLER0, u32::MAX))
         );
+    }
+
+    fn prepared_registers() -> super::PreparedGicV3<MockRegisters> {
+        // SAFETY: the deterministic mock is uniquely owned and models the
+        // required externally masked, single-CPU preparation environment.
+        unsafe {
+            prepare(
+                MockRegisters::valid(),
+                configuration(InterruptTrigger::LevelHigh),
+            )
+        }
+        .unwrap()
+    }
+
+    fn published_dispatcher() -> PublishedIrqDispatcher {
+        // SAFETY: delivery tests model a permanently published dispatcher
+        // that classifies every result and completes every real INTID.
+        unsafe { PublishedIrqDispatcher::assume_published() }
+    }
+
+    #[test]
+    fn activation_opens_only_non_secure_group1_and_shutdown_restores_prepared_state() {
+        let mut prepared = prepared_registers();
+        prepared.backend.operations.clear();
+        prepared.backend.operation_count = 0;
+        // SAFETY: the mock models masked IRQs, one CPU, and the dispatcher
+        // token above models a handler published before either gate opens.
+        let active = match unsafe { activate(prepared, published_dispatcher()) } {
+            Ok(active) => active,
+            Err(failure) => panic!("activation failed unexpectedly: {:?}", failure.error()),
+        };
+        assert_eq!(
+            active.backend().distributor(GICD_CTLR),
+            GICD_CTLR_ARE_NS | GICD_CTLR_ENABLE_G1A
+        );
+        assert_eq!(active.backend().cpu(CpuInterfaceRegister::GroupEnable1), 1);
+        let operations = &active.backend().operations;
+        let distributor_enable = operations
+            .iter()
+            .position(|operation| {
+                *operation
+                    == Operation::WriteDistributor(
+                        GICD_CTLR,
+                        GICD_CTLR_ARE_NS | GICD_CTLR_ENABLE_G1A,
+                    )
+            })
+            .unwrap();
+        let cpu_enable = operations
+            .iter()
+            .position(|operation| {
+                *operation == Operation::WriteCpu(CpuInterfaceRegister::GroupEnable1, 1)
+            })
+            .unwrap();
+        assert!(distributor_enable < cpu_enable);
+
+        // SAFETY: the mock models DAIF.I masked and no outstanding token.
+        let (prepared, _dispatcher) = match unsafe { active.shutdown() } {
+            Ok(parts) => parts,
+            Err(failure) => panic!("shutdown failed unexpectedly: {:?}", failure.error()),
+        };
+        assert_eq!(prepared.backend().distributor(GICD_CTLR), GICD_CTLR_ARE_NS);
+        assert_eq!(
+            prepared.backend().cpu(CpuInterfaceRegister::GroupEnable1),
+            0
+        );
+        let operations = &prepared.backend().operations;
+        let cpu_disable = operations
+            .iter()
+            .rposition(|operation| {
+                *operation == Operation::WriteCpu(CpuInterfaceRegister::GroupEnable1, 0)
+            })
+            .unwrap();
+        let distributor_disable = operations
+            .iter()
+            .rposition(|operation| {
+                *operation == Operation::WriteDistributor(GICD_CTLR, GICD_CTLR_ARE_NS)
+            })
+            .unwrap();
+        assert!(cpu_disable < distributor_disable);
+    }
+
+    #[test]
+    fn activation_failure_closes_gates_and_retains_recovery_evidence() {
+        let mut prepared = prepared_registers();
+        prepared.backend.operations.clear();
+        prepared.backend.operation_count = 0;
+        prepared.backend.fail_at = Some(7);
+        // SAFETY: the deterministic mock satisfies the masked single-owner
+        // activation contract and injects one CPU-gate write failure.
+        let failure = match unsafe { activate(prepared, published_dispatcher()) } {
+            Ok(_) => panic!("injected activation failure unexpectedly succeeded"),
+            Err(failure) => failure,
+        };
+        assert_eq!(
+            failure.error(),
+            &GicV3DeliveryError::Access {
+                stage: GicV3DeliveryStage::EnableCpuInterface,
+                error: MockError::Injected,
+            }
+        );
+        assert_eq!(failure.recovery_error(), None);
+        let (registers, _, _dispatcher, _, _) = failure.into_parts();
+        assert_eq!(registers.distributor(GICD_CTLR), GICD_CTLR_ARE_NS);
+        assert_eq!(registers.cpu(CpuInterfaceRegister::GroupEnable1), 0);
+
+        let mut split_eoi = prepared_registers();
+        let control = split_eoi.backend.cpu(CpuInterfaceRegister::Control);
+        split_eoi.backend.cpu.insert(
+            CpuInterfaceRegister::Control,
+            control | ICC_CTLR_EL1_EOI_MODE,
+        );
+        // SAFETY: the mock satisfies the ownership contract and deliberately
+        // violates the required combined EOI/deactivation readback.
+        let failure = match unsafe { activate(split_eoi, published_dispatcher()) } {
+            Ok(_) => panic!("split EOI mode unexpectedly activated"),
+            Err(failure) => failure,
+        };
+        assert_eq!(
+            failure.error(),
+            &GicV3DeliveryError::SplitEoiMode {
+                observed: control | ICC_CTLR_EL1_EOI_MODE,
+            }
+        );
+
+        let mut timeout = prepared_registers();
+        timeout.backend.distributor_rwp_forever = true;
+        // SAFETY: the mock satisfies the activation contract but models a
+        // distributor whose write-pending indication never clears.
+        let failure = match unsafe { activate(timeout, published_dispatcher()) } {
+            Ok(_) => panic!("stuck distributor unexpectedly activated"),
+            Err(failure) => failure,
+        };
+        assert_eq!(
+            failure.error(),
+            &GicV3DeliveryError::Timeout {
+                stage: GicV3DeliveryStage::EnableDistributor,
+            }
+        );
+        assert_eq!(
+            failure.recovery_error(),
+            Some(&GicV3DeliveryError::Timeout {
+                stage: GicV3DeliveryStage::DisableDistributor,
+            })
+        );
+    }
+
+    #[test]
+    fn acknowledgement_classifies_special_timer_and_unexpected_intids() {
+        let mut prepared = prepared_registers();
+        prepared.backend.acknowledgements = std::vec![1020, 1021, 1022, 1023, 0xab00_001e, 29,];
+        // SAFETY: the mock models a published dispatcher with IRQs externally
+        // masked during gate activation.
+        let mut active = match unsafe { activate(prepared, published_dispatcher()) } {
+            Ok(active) => active,
+            Err(failure) => panic!("activation failed unexpectedly: {:?}", failure.error()),
+        };
+        active.backend.operations.clear();
+        for expected in 1020..=1023 {
+            match active.acknowledge().unwrap() {
+                GicV3Acknowledge::Spurious { intid } => assert_eq!(intid, expected),
+                GicV3Acknowledge::Interrupt(_) => panic!("special INTID became a real interrupt"),
+            }
+        }
+
+        let timer = match active.acknowledge().unwrap() {
+            GicV3Acknowledge::Interrupt(interrupt) => interrupt,
+            GicV3Acknowledge::Spurious { .. } => panic!("timer became spurious"),
+        };
+        assert_eq!(timer.intid(), 30);
+        assert_eq!(timer.source(), GicV3InterruptSource::Timer);
+        timer.complete().unwrap_or_else(|failure| {
+            panic!("timer EOI failed unexpectedly: {:?}", failure.error())
+        });
+
+        let unexpected = match active.acknowledge().unwrap() {
+            GicV3Acknowledge::Interrupt(interrupt) => interrupt,
+            GicV3Acknowledge::Spurious { .. } => panic!("unexpected INTID became spurious"),
+        };
+        assert_eq!(unexpected.intid(), 29);
+        assert_eq!(unexpected.source(), GicV3InterruptSource::Unexpected);
+        unexpected
+            .complete()
+            .unwrap_or_else(|failure| panic!("unexpected INTID EOI failed: {:?}", failure.error()));
+
+        assert_eq!(
+            active
+                .backend()
+                .operations
+                .iter()
+                .filter(|operation| matches!(operation, Operation::EndGroup1(_)))
+                .copied()
+                .collect::<Vec<_>>(),
+            std::vec![Operation::EndGroup1(30), Operation::EndGroup1(29)]
+        );
+    }
+
+    #[test]
+    fn failed_eoi_returns_the_outstanding_token_and_shutdown_failure_is_explicit() {
+        let mut prepared = prepared_registers();
+        prepared.backend.acknowledgements = std::vec![30];
+        // SAFETY: the mock models a published dispatcher with IRQs externally
+        // masked during activation.
+        let mut active = match unsafe { activate(prepared, published_dispatcher()) } {
+            Ok(active) => active,
+            Err(failure) => panic!("activation failed unexpectedly: {:?}", failure.error()),
+        };
+        active.backend.operation_count = 0;
+        active.backend.fail_at = Some(2);
+        let acknowledgement = match active.acknowledge().unwrap() {
+            GicV3Acknowledge::Interrupt(interrupt) => interrupt,
+            GicV3Acknowledge::Spurious { .. } => panic!("timer became spurious"),
+        };
+        let failure = match acknowledgement.complete() {
+            Ok(()) => panic!("injected EOI failure unexpectedly succeeded"),
+            Err(failure) => failure,
+        };
+        assert_eq!(
+            failure.error(),
+            &GicV3DeliveryError::Access {
+                stage: GicV3DeliveryStage::EndOfInterrupt,
+                error: MockError::Injected,
+            }
+        );
+        let (acknowledgement, _) = failure.into_parts();
+        acknowledgement
+            .complete()
+            .unwrap_or_else(|failure| panic!("EOI retry failed: {:?}", failure.error()));
+
+        active.backend.operation_count = 0;
+        active.backend.fail_at = Some(1);
+        // SAFETY: the acknowledgement completed and the mock models DAIF.I
+        // masked before the shutdown attempt.
+        let failure = match unsafe { active.shutdown() } {
+            Ok(_) => panic!("injected shutdown failure unexpectedly succeeded"),
+            Err(failure) => failure,
+        };
+        assert_eq!(
+            failure.error(),
+            &GicV3DeliveryError::Access {
+                stage: GicV3DeliveryStage::DisableCpuInterface,
+                error: MockError::Injected,
+            }
+        );
+        let (registers, _, _dispatcher, _) = failure.into_parts();
+        assert_eq!(registers.cpu(CpuInterfaceRegister::GroupEnable1), 1);
+        assert_eq!(registers.distributor(GICD_CTLR), GICD_CTLR_ARE_NS);
     }
 }

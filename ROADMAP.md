@@ -160,9 +160,17 @@ Host-verifiable foundation now available:
 - the EL2 bootstrap permits the GIC system-register interface, and both final-map paths check
   `DAIF.I`, construct the backend only after TTBR1 publication, prepare the DTB-selected timer PPI
   with a fixed 100,000-read per-wait budget, and permanently retain the closed-gate type state;
+- a non-`Send`, non-`Sync` dispatcher-publication proof gates a Host Tested transition that opens
+  only affinity-routed Non-secure Group-1 distribution before the current CPU interface, retains
+  bounded activation/recovery/shutdown evidence, and never changes `DAIF.I`;
+- one exclusive acknowledgement token separates special INTIDs 1020–1023 from real timer or
+  unexpected INTIDs, requires combined `ICC_EOIR1_EL1` completion for every real result, and
+  retains the outstanding token on failure;
 - host tests cover boundaries, selection failures, exact page mappings, register update isolation,
-  finite polling, injected failure, and ordered output protocol, while delivery/dispatch, IRQ-safe
-  synchronization, sleep integration, and all target execution remain pending.
+  finite polling, injected failure, gate ordering, special/unexpected acknowledgements, retryable
+  EOI, shutdown ownership, and ordered output protocol; boot still retains prepared state, so real
+  dispatch, IRQ-safe synchronization, sleep integration, and all current target execution remain
+  pending.
 
 Observable result: timer interrupts advance a monotonic time source and scheduled callbacks fire
 under an automated QEMU test.

@@ -1,9 +1,11 @@
 # AArch64 Interrupt Topology
 
-Phoenix currently discovers, maps, and prepares—but does not activate—the GICv3 and
-architected-timer interrupt topology emitted for the pinned AArch64 QEMU `virt` platform.
-Discovery is strict, allocation-free, and isolated under the platform implementation; generic DTB
-traversal remains independent of GIC concepts.
+Phoenix currently discovers, maps, and prepares the GICv3 and architected-timer interrupt
+topology emitted for the pinned AArch64 QEMU `virt` platform. A separate Host Tested delivery
+state machine models activation, acknowledgement, EOI/deactivation, and shutdown, but the boot
+paths deliberately retain the prepared state with delivery closed. Discovery is strict,
+allocation-free, and isolated under the platform implementation; generic DTB traversal remains
+independent of GIC concepts.
 
 ## Current implementation
 
@@ -25,15 +27,22 @@ The timer must resolve to that exact GIC through its own or the root's `interrup
 requires the pinned four-entry `interrupts` form and validates every entry as a distinct standard
 PPI. The second entry becomes the non-secure physical PPI paired with the current `CNTP_*` owner.
 
-`kernel/src/arch/aarch64/gicv3.rs` now provides the architecture-side preparation state machine:
+`kernel/src/arch/aarch64/gicv3.rs` provides the architecture-side preparation and delivery state
+machines:
 
 - `PrivatePeripheralInterrupt` admits only INTIDs 16 through 31 and carries the checked trigger;
 - `GicV3RegisterAccess` is an unsafe backend contract for unique ordered GICD, selected-GICR, and
   current-CPU `ICC_*_EL1` access;
 - `GicV3Configuration` carries the timer PPI, a deliverable priority below `0xff`, and a nonzero
-  per-poll read budget; and
+  per-poll read budget;
 - `prepare` consumes the backend and returns `PreparedGicV3` only while every delivery gate remains
-  closed.
+  closed;
+- `PublishedIrqDispatcher` is a non-`Send`, non-`Sync` unsafe proof that every EL1 IRQ vector can
+  reach a permanent current-CPU dispatcher, stack, controller-lookup, and synchronization state;
+- `activate` consumes both prepared ownership and that proof, opens only Non-secure Group-1
+  distribution followed by the current CPU Group-1 interface, and returns `ActiveGicV3`; and
+- one `acknowledge` result is either a special INTID with no EOI obligation or a unique token that
+  must perform combined EOI/deactivation before the controller can be borrowed again.
 
 Preparation validates GICD/GICR PIDR2 as GICv3 or GICv4, enables and reads back
 `ICC_SRE_EL1.SRE`, closes CPU Group-1 and priority gates, disables distributor groups without ever
@@ -42,6 +51,24 @@ redistributor, and bounds every `RWP`/`ChildrenAsleep` poll. It then disables an
 and PPIs, assigns them to non-secure Group 1, updates only the selected PPI's trigger and priority
 fields, enables that PPI, selects combined EOI/deactivation, and leaves both distributor and CPU
 Group-1 delivery disabled.
+
+Activation is a separate unsafe transition and never changes `DAIF.I`. It first requires the CPU
+gate and both visible distributor group gates to be closed, affinity routing to remain enabled,
+and `ICC_CTLR_EL1.EOImode` to retain the prepared combined priority-drop/deactivation mode. It
+then enables `GICD_CTLR.EnableGrp1A`, the affinity-routing alias for Non-secure Group 1 (and the
+single-Security-state Group-1 bit), waits with the retained finite budget, verifies the result, and
+only then enables `ICC_IGRPEN1_EL1`. Activation failure attempts best-effort closure and retains
+the primary error, any recovery error, the backend, configuration, and dispatcher proof.
+
+An active owner reads `ICC_IAR1_EL1`, keeps only the architectural 24-bit INTID, returns IDs
+1020 through 1023 as special without writing EOI, and classifies every other value as the configured
+timer or an unexpected interrupt. Both classifications carry the same exclusive acknowledgement
+token: even an unexpected real INTID must be completed. Completion writes `ICC_EOIR1_EL1` in
+combined mode and returns the still-outstanding token on access failure. Unsafe shutdown requires
+the caller to mask `DAIF.I`, prevent handler entry, and have no outstanding token; it closes the CPU
+gate before both distributor aliases and returns prepared ownership plus the dispatcher proof.
+Shutdown failure retains the backend as explicitly indeterminate rather than manufacturing a
+prepared state.
 
 The final-map and loaded-init builders now connect topology discovery to the real boot DTB. While
 the bootstrap low Device-nGnRnE identity window is still active, a checked exclusive reader:
@@ -104,7 +131,18 @@ the architectural IRQ mask remain closed.
   authorize a register access.
 - Concrete backend construction remains unsafe because uniqueness across GICD, the selected GICR,
   and current-CPU `ICC_*_EL1` state cannot be proven by the copyable offline layout. Its contract
-  requires the exact active tables, masked IRQs, and no concurrent CPU or handler access.
+  requires the exact active tables, masked IRQs until dispatcher-backed activation, and no
+  concurrent CPU or handler access. The concrete backend itself is neither `Send` nor `Sync`.
+- Delivery activation requires a non-transferable published-dispatcher proof and keeps `DAIF.I`
+  under caller control. Distributor delivery opens before the CPU gate; shutdown closes the CPU
+  gate before distributor delivery. Every wait remains bounded.
+- `EnableGrp1A` is used only while affinity routing is enabled. The legacy `EnableGrp1` alias and
+  the Group-0 path remain closed; activation readback rejects any contradictory gate state.
+- Combined EOI/deactivation is revalidated before activation. IDs 1020 through 1023 are never
+  written to `ICC_EOIR1_EL1`; every other acknowledged ID, including an unexpected one, retains an
+  exclusive completion obligation. An EOI failure cannot silently discard that obligation.
+- Failed activation retains both primary and recovery evidence. Failed shutdown retains an
+  indeterminate active owner and cannot be mistaken for `PreparedGicV3`.
 - `InterruptTopology` is descriptive evidence only. Possessing it does not authorize MMIO access,
   map device pages, enable the distributor/redistributor, unmask `DAIF.I`, or satisfy the unsafe
   preconditions of `PhysicalTimer::unmask`.
@@ -119,16 +157,19 @@ topology values.
 
 ## Synchronization and ownership boundary
 
-The final-map boot paths now construct and permanently retain the unique owner binding the mapped
+The final-map boot paths construct and permanently retain the unique owner binding the mapped
 GICD, selected boot CPU GICR, current CPU interface, and active final tables. Preparation occurs
 with IRQs masked and before delivery is enabled. The owner is not exposed to general kernel code.
-Once IRQ dispatch exists, normal context and handlers must share state only through an IRQ-safe
-lock or a documented single-owner protocol with acquire/release ordering. No callback, scheduler
-action, allocator use, or lock acquisition with an inverted order may occur while acknowledging an
-interrupt.
+The delivery API additionally makes the dispatcher publication proof and concrete mapped backend
+non-transferable across CPUs. This is type-state scaffolding, not a lock: before boot may create
+the proof, normal context and handlers must share state only through an IRQ-safe lock or a
+documented single-owner protocol with acquire/release ordering. No callback, scheduler action,
+allocator use, or lock acquisition with an inverted order may occur while an interrupt is
+outstanding.
 
-The current boot path still does not open Group-1 delivery, unmask `DAIF.I`, acknowledge an INTID,
-or define the interrupt-context lock hierarchy.
+The current boot path still retains `PreparedGicV3`, never creates `PublishedIrqDispatcher`, does
+not call `activate`, does not unmask `DAIF.I`, and does not acknowledge an INTID. IRQ/FIQ vector
+slots therefore continue to use the fatal exception path.
 
 ## Validation
 
@@ -137,25 +178,31 @@ roles, inherited and local parent links, disabled nodes, duplicate controllers, 
 interrupt lists, range alignment, non-PPI entries, reserved flag bits, and duplicate INTIDs.
 Architecture tests additionally cover PPI/priority validation, level/edge read-modify-write fields,
 closed delivery gates, SRE/PIDR rejection, repeated preparation without ARE rollback, bounded wake
-timeout, injected access failure, stage attribution, and best-effort recovery. Canonical CI
+timeout, injected access failure, stage attribution, and best-effort recovery. Delivery tests cover
+distributor-before-CPU activation, CPU-before-distributor shutdown, exact gate-bit isolation,
+combined-mode rejection, finite activation and recovery timeouts, special-ID handling, 24-bit INTID
+masking, timer and unexpected classification, EOI ordering, retained EOI retry ownership, and
+indeterminate shutdown failure. Canonical CI
 also covers MPIDR packing, VLPI-aware redistributor stride, exact affinity selection, `Last`,
 duplicate/missing/truncated/access failures, bootstrap-window bounds, register-range checks, and
 all 48 final GIC L3 leaves in the pinned 8-table/815-leaf plan. It cross-compiles the volatile
-MMIO/system-register backend, `ICC_SRE_EL2` setup, checked `DAIF.I` observation, one-time retained
-preparation in both final-map consumers, and the `PHOENIX_GIC_PREPARED` static/protocol contract.
+MMIO/system-register backend including `ICC_IAR1_EL1` and `ICC_EOIR1_EL1`, `ICC_SRE_EL2` setup,
+checked `DAIF.I` observation, one-time retained preparation in both final-map consumers, and the
+`PHOENIX_GIC_PREPARED` static/protocol contract.
 Manual ELF disassembly of `boot_drop_el2_to_el1` also confirms the ordered
 `MRS ICC_SRE_EL2`/`ORR #0xf`/`MSR ICC_SRE_EL2`/`ISB` sequence in the built default kernel.
 These checks do not prove that the recorded QEMU board emits the expected nodes, that selection or
-preparation succeeds on target, or that any final GIC register can be accessed.
+preparation succeeds on target, that any final GIC register can be accessed, or that the Host
+Tested delivery transaction can handle a real target interrupt.
 
 ## TODO
 
-- Add a separate type-state transition that opens Group-1 delivery only after IRQ dispatch is
-  published, then define a recoverable shutdown transition.
-- Define IRQ entry/exit, spurious-ID handling, priority, acknowledge/deactivate/EOI ordering, and
-  explicit behavior for an unexpected enabled interrupt.
-- Add IRQ-safe synchronization, connect the timer queue, and program the discovered non-secure
-  physical PPI only after the handler is ready.
+- Publish a real dispatcher and controller lookup reachable from the EL1 IRQ vector slots, then
+  integrate the existing activation/acknowledgement/shutdown type state into boot.
+- Define the fatal/recovery policy after an unexpected real INTID is completed and preserve full
+  IRQ entry/exit register-state evidence.
+- Add IRQ-safe synchronization, connect the timer queue, construct/program the physical-timer
+  owner, and unmask `DAIF.I` only after every shared-state invariant is live.
 - Add a bounded target probe that records the actual topology, one timer interrupt, ordered event
   dispatch, EOI, and continued execution.
 
@@ -164,15 +211,16 @@ preparation succeeds on target, or that any final GIC register can be accessed.
 This checkpoint does not support GICv2, multiple redistributor regions, legacy GICC/GICH/GICV
 ranges, ITS/MSI/LPI, shared peripheral interrupts, four-cell PPI partitions, `interrupts-extended`,
 the optional VHE virtual timer interrupt, SMP routing, priority policy, or nested interrupts. The
-concrete backend and boot preparation path are Cross Compiled but have not executed on target.
-Phoenix does not enable distributor/CPU group delivery, acknowledge an interrupt, write EOI,
-deactivate, or return through an IRQ vector. Those behaviors are not inferred from valid topology,
-offline mappings, a Host Tested register protocol, or the unobserved preparation marker.
+concrete backend and boot preparation path are Cross Compiled but have not executed on target. A
+Host Tested API models distributor/CPU delivery, acknowledgement, EOI/deactivation, and shutdown;
+no boot path calls it, so Phoenix still does none of those operations on target and cannot return
+through an IRQ vector. Those behaviors are not inferred from valid topology, offline mappings, the
+Host Tested register protocol, or the unobserved preparation marker.
 
 ## Runtime Pending
 
 `RUN-IRQ-001` and `RUN-TIME-001` in `docs/RUNTIME_VALIDATION.md` remain Runtime Pending. The prior
 positive QEMU runs predate boot-time GIC selection and the current eight-table final image.
 Host-built fixtures cannot prove the content of QEMU's generated DTB, redistributor selection,
-EL2/EL1 SRE behavior, preparation completion, GIC register semantics, PPI delivery,
-acknowledgement ordering, or interrupt return.
+EL2/EL1 SRE behavior, preparation completion, delivery-gate semantics, PPI delivery,
+acknowledgement/EOI ordering, or interrupt return.

@@ -24,7 +24,10 @@ narrow support claim:
   selected redistributor, configures one timer PPI with bounded waits, and preserves recovery
   evidence while distributor and CPU Group-1 delivery remain disabled; both final-map paths now
   construct that concrete volatile MMIO/`ICC_*_EL1` owner after TTBR1 publication, execute the
-  preparation transaction with a fixed poll budget, and retain its closed-gate type state;
+  preparation transaction with a fixed poll budget, and retain its closed-gate type state; a
+  separate Host Tested, dispatcher-gated type state models ordered activation, special/timer/
+  unexpected acknowledgement, mandatory combined EOI/deactivation, and recoverable shutdown,
+  but no boot path activates it or unmasks IRQs;
 - a bounded QEMU runner and boot-test harness are implemented and host tested;
 - bounded QEMU probes have verified direct boot, DTB/allocator access, final TTBR1 publication,
   the first EL0 transition, and the loaded-init/file-I/O path on the pinned board;
