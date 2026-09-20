@@ -166,11 +166,14 @@ Host-verifiable foundation now available:
 - one exclusive acknowledgement token separates special INTIDs 1020–1023 from real timer or
   unexpected INTIDs, requires combined `ICC_EOIR1_EL1` completion for every real result, and
   retains the outstanding token on failure;
+- an allocation-free IRQ-save spinlock supplies Host Tested Acquire/Release exclusion and exact
+  local-mask restoration, with a Cross Compiled AArch64 `DAIF.I` backend that no subsystem uses
+  yet;
 - host tests cover boundaries, selection failures, exact page mappings, register update isolation,
   finite polling, injected failure, gate ordering, special/unexpected acknowledgements, retryable
   EOI, shutdown ownership, and ordered output protocol; boot still retains prepared state, so real
-  dispatch, IRQ-safe synchronization, sleep integration, and all current target execution remain
-  pending.
+  dispatch, dispatcher/timer adoption of IRQ-safe synchronization, sleep integration, and all
+  current target execution remain pending.
 
 Observable result: timer interrupts advance a monotonic time source and scheduled callbacks fire
 under an automated QEMU test.
@@ -180,6 +183,18 @@ under an automated QEMU test.
 Introduce synchronization primitives, kernel threads, architecture context switching, idle,
 scheduling, and preemption rules. Interfaces must already account for future SMP ordering even
 though the first release remains single-core.
+
+Host-verifiable foundation now available:
+
+- an architecture-neutral `IrqSpinLock<T>` masks local IRQ delivery before acquisition, uses
+  Acquire/Release ownership, restores the exact prior IRQ state, and keeps its guard on the
+  acquiring CPU;
+- contended `try_lock` restores IRQ state without changing ownership, while nested different-lock
+  guards preserve an outer mask in LIFO order;
+- the AArch64 backend changes only `DAIF.I` with compiler barriers and `ISB`, and is Cross Compiled
+  but not invoked by any boot path; and
+- the primitive has no allocation, poisoning, fairness, scheduler/preemption integration, or
+  published production lock order; subsystem adoption and all target evidence remain pending.
 
 Observable result: multiple kernel threads make independently verified progress under timer-driven
 scheduling.

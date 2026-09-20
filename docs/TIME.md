@@ -67,9 +67,9 @@ No unsafe code or architecture-specific state is present in this module.
 ## Synchronization boundary
 
 The current API requires one exclusive mutable owner. This is sufficient for host tests and the
-single-threaded pre-interrupt construction path, but it is not an IRQ-safe synchronization policy.
-Before an interrupt handler and normal kernel context share a queue, Phoenix must add a lock or
-critical-section abstraction that:
+single-threaded pre-interrupt construction path, but it is not yet wrapped in an IRQ-safe
+synchronization policy. Phoenix now has a Host Tested IRQ-save spinlock; before an interrupt
+handler and normal kernel context share a queue, their owning wrapper must use it and:
 
 - prevents same-core interrupt re-entry while queue metadata is borrowed;
 - defines acquire/release ordering for producers, the interrupt handler, and future SMP users;
@@ -90,7 +90,7 @@ compilation and static artifact contracts, not target execution.
 - Publish the interrupt dispatcher and its synchronization state, then consume the existing GIC
   activation proof without weakening its masked-transition contract.
 - Connect the exclusive physical-timer owner to boot after GIC and IRQ state are ready.
-- Introduce the IRQ-safe synchronization and memory-ordering contract described above.
+- Wrap shared timer state in the existing IRQ-save lock and publish its place in the lock order.
 - Connect due events to sleeping threads and tickless scheduler wakeups.
 - Decide whether a queue-instance namespace is worth the identifier and initialization cost.
 - Add a bounded target probe for counter monotonicity, compare programming, interrupt delivery,

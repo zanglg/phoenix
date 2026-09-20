@@ -77,8 +77,8 @@ _No unclassified entries._
 
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
-| CONC-001 | Atomics and memory-ordering policy | Planned | 0.1.0 | Document per abstraction |
-| CONC-002 | Spinlocks and IRQ-safe synchronization | Planned | 0.1.0 | Define interrupt-context rules |
+| CONC-001 | Atomics and memory-ordering policy | In Progress | 0.1.0 | IRQ-save spinlock ownership uses documented Acquire/Release ordering; publication, device, page-table, and future scheduler primitives retain their own contracts |
+| CONC-002 | Spinlocks and IRQ-safe synchronization | In Progress | 0.1.0 | Architecture-neutral IRQ-save lock is Host Tested and the AArch64 `DAIF.I` backend Cross Compiles; subsystem adoption, preemption/migration rules, lock ordering, and target evidence remain |
 | SCHED-001 | Kernel threads and context switching | Planned | 0.1.0 | Architecture boundary required |
 | SCHED-002 | Scheduler, preemption, and idle | Planned | 0.1.0 | Policy remains open |
 | TIME-001 | Monotonic clock and generic timer | In Progress | 0.1.0 | Checked non-wrapping raw ticks, frequency/conversion models, and an exclusive masked-programming CNTP owner are Host Tested/Cross Compiled; boot activation, GIC delivery, observed frequency, and runtime evidence remain |

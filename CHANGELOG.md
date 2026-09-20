@@ -41,6 +41,9 @@ numbers and remains explicitly unstable before 1.0.0. During construction, chang
   ordered and bounded gate activation/recovery/shutdown, special-INTID handling, exclusive timer
   and unexpected acknowledgement tokens, combined EOI/deactivation, and retained failure
   ownership; boot deliberately remains in the closed prepared state.
+- An allocation-free IRQ-save spinlock with Acquire/Release ownership, exact nested IRQ-state
+  restoration, contended try-lock rollback, non-transferable guards, host contention tests, and a
+  Cross Compiled AArch64 `DAIF.I` masking backend.
 - Checked architecture-neutral physical/virtual addresses, pages, frames, and half-open ranges.
 - Strict allocation-free DTB parsing with boot CPU, bootargs, memory-region, and reservation extraction.
 - Fixed-capacity physical memory normalization, conservative reservation, and first-fit frame allocation.

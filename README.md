@@ -16,7 +16,10 @@ narrow support claim:
 - host-side unit tests and validation are available through `cargo xtask`;
 - architecture-neutral monotonic raw ticks, a fixed-capacity deadline queue, checked AArch64
   frequency conversion, and masked physical-timer programming are Host Tested/Cross Compiled,
-  while boot activation, GIC delivery, IRQ synchronization, and sleep remain pending;
+  while boot activation, GIC delivery, subsystem IRQ synchronization, and sleep remain pending;
+- an allocation-free IRQ-save spinlock is Host Tested with Acquire/Release contention and exact
+  nested mask restoration; its AArch64 `DAIF.I` backend Cross Compiles, but no boot subsystem uses
+  it and IRQ delivery remains masked;
 - strict QEMU `virt` DTB discovery validates GICv3 MMIO ranges, interrupt-parent ownership, and
   the architected-timer PPIs; the final-map paths select the current CPU redistributor by affinity
   and map only it plus GICD as exact device pages without enabling interrupts;
@@ -150,6 +153,8 @@ The reservation-filtered final RAM proof and retained-table access boundary are 
 [`docs/FINAL_DIRECT_MAP.md`](docs/FINAL_DIRECT_MAP.md).
 The raw-tick model, fixed-capacity timer queue, synchronization boundary, and hardware deferrals
 are documented in [`docs/TIME.md`](docs/TIME.md).
+The IRQ-save spinlock, memory-ordering contract, lock-context restrictions, and target deferrals
+are documented in [`docs/SYNCHRONIZATION.md`](docs/SYNCHRONIZATION.md).
 The GICv3/timer topology contract, ownership boundary, rejected forms, and target deferrals are in
 [`docs/AARCH64_INTERRUPTS.md`](docs/AARCH64_INTERRUPTS.md).
 

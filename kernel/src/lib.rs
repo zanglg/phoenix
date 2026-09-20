@@ -16,6 +16,7 @@ pub mod initramfs;
 pub mod memory;
 pub mod process;
 pub mod process_image;
+pub mod sync;
 pub mod time;
 pub mod user;
 pub mod user_copy;

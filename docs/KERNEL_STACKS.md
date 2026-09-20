@@ -157,8 +157,9 @@ stack and the path has not run on target.
   valid-to-valid replacement is outside this backend and would require break-before-make;
 - mapped ownership cannot be sent or shared across Rust concurrency domains in the current
   single-core policy;
-- current pool mutation requires one non-reentrant mutable owner. IRQ, preemption, and SMP sharing
-  require an IRQ-safe lock plus documented acquire/release ordering before use.
+- current pool mutation requires one non-reentrant mutable owner. An IRQ-save lock now exists, but
+  IRQ, preemption, and SMP sharing still require an owning wrapper plus documented allocation and
+  lock ordering before use.
 
 ## Validation
 

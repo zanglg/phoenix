@@ -72,9 +72,9 @@ claim. No other boot variant or subsystem consumes heap allocations yet.
 - lifecycle epochs prevent a token from an earlier initialization of the same heap object from
   freeing a new allocation;
 - the current type has one mutable owner and contains no synchronization. It may be used only
-  during single-core, non-reentrant execution. Before IRQ handlers, preemption, or SMP share it,
-  Phoenix must add an IRQ-safe lock and document acquire/release ordering around both heap
-  metadata and object publication.
+  during single-core, non-reentrant execution. Phoenix now has an IRQ-save lock primitive, but
+  before IRQ handlers, preemption, or SMP share the heap an owning wrapper must adopt it and define
+  interrupt-context allocation, lock ordering, and publication policy.
 
 ## Validation
 
@@ -102,8 +102,8 @@ Static inclusion does not prove that the AArch64 path initialized or used the he
   ownership boundary; backing initialization is currently fully cleared;
 - add bounded allocation accounting, subsystem quotas, and useful OOM diagnostics without
   allocating in the failure path;
-- define an IRQ-safe lock, interrupt-context allocation policy, lock ordering, and memory-ordering
-  rules before concurrent use;
+- wrap the heap in the existing IRQ-save lock only after defining interrupt-context allocation,
+  lock ordering, and object-publication rules;
 - evaluate a more scalable allocator only after real allocation-size and lifetime traces exist.
 
 ## Skipped work

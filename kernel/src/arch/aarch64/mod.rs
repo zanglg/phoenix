@@ -2,6 +2,11 @@
 
 #[cfg(target_arch = "aarch64")]
 use core::arch::asm;
+#[cfg(target_arch = "aarch64")]
+use core::marker::PhantomData;
+
+#[cfg(target_arch = "aarch64")]
+use crate::sync::LocalIrqControl;
 
 pub mod asid;
 pub mod exception;
@@ -61,6 +66,77 @@ pub fn irqs_masked() -> bool {
         );
     }
     daif & DAIF_IRQ_MASK != 0
+}
+
+/// Current-CPU AArch64 ordinary-IRQ masking backend.
+#[cfg(target_arch = "aarch64")]
+#[derive(Default)]
+pub struct LocalIrq {
+    _private: (),
+}
+
+#[cfg(target_arch = "aarch64")]
+impl LocalIrq {
+    /// Construct a handle to the current CPU's `DAIF.I` state.
+    pub const fn new() -> Self {
+        Self { _private: () }
+    }
+}
+
+/// Saved `DAIF.I` state that must be restored on the acquiring CPU.
+#[cfg(target_arch = "aarch64")]
+#[must_use = "dropping this token directly leaves the captured CPU's IRQ state unrestored"]
+pub struct IrqMaskState {
+    was_masked: bool,
+    _not_send_or_sync: PhantomData<*mut ()>,
+}
+
+#[cfg(target_arch = "aarch64")]
+// SAFETY: the implementation reads the current CPU's exact prior `DAIF.I`
+// state, masks only ordinary IRQ delivery before returning, and restores only
+// that bit. The non-transferable state token and lock guard keep restoration on
+// the acquiring execution context under Phoenix's no-migration critical-section
+// contract.
+unsafe impl LocalIrqControl for LocalIrq {
+    type State = IrqMaskState;
+
+    fn save_and_mask(&self) -> Self::State {
+        const DAIF_IRQ_MASK: u64 = 1 << 7;
+
+        let daif: u64;
+        // SAFETY: reading DAIF and setting its IRQ mask are privileged
+        // current-CPU operations valid at Phoenix EL1. Omitting `nomem` makes
+        // this a compiler barrier around the local masking transition; `isb`
+        // makes the changed interrupt-recognition context visible before the
+        // caller attempts lock acquisition.
+        unsafe {
+            asm!(
+                "mrs {daif}, DAIF",
+                "msr DAIFSet, #2",
+                "isb",
+                daif = out(reg) daif,
+                options(nostack, preserves_flags)
+            );
+        }
+        IrqMaskState {
+            was_masked: daif & DAIF_IRQ_MASK != 0,
+            _not_send_or_sync: PhantomData,
+        }
+    }
+
+    fn restore(&self, state: Self::State) {
+        // SAFETY: `state` was produced on this execution context before the
+        // matching lock acquisition. Guard drop publishes protected writes
+        // before this instruction. Each branch changes only `DAIF.I`; `isb`
+        // makes the restored recognition state visible before later code.
+        unsafe {
+            if state.was_masked {
+                asm!("msr DAIFSet, #2", "isb", options(nostack, preserves_flags));
+            } else {
+                asm!("msr DAIFClr, #2", "isb", options(nostack, preserves_flags));
+            }
+        }
+    }
 }
 
 /// Stop execution while allowing an event to wake the CPU transiently.
