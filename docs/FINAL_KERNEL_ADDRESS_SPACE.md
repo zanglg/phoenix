@@ -125,8 +125,9 @@ kernel linker bounds, reservation-aware frame allocator, and bootstrap physical-
 Before publication it emits
 `PHOENIX_KERNEL_MAP_ENTER`. After the TTBR1 switch it reuses the mapped kernel text, rodata, stack,
 data, PL011, GICD, and selected GICR device pages. It checks `DAIF.I`, runs the fixed-budget GICv3
-preparation transaction, permanently retains the closed-gate owner, and emits
-`PHOENIX_GIC_PREPARED`. It then initializes and exercises the bounded heap, emits
+preparation transaction, claims/disables the physical timer, pins and publishes the combined
+closed-gate runtime plus IRQ lookup, and emits `PHOENIX_GIC_PREPARED` followed by
+`PHOENIX_IRQ_RUNTIME_PUBLISHED`. It then initializes and exercises the bounded heap, emits
 `PHOENIX_KERNEL_HEAP_OK`, publishes and retires one owned stack, verifies its virtual/physical
 alias, scrubs and releases it, emits `PHOENIX_KERNEL_STACK_OK`, then emits `PHOENIX_KERNEL_MAP_OK`
 and halts.

@@ -120,8 +120,8 @@ infallible batch writes, and completes per-page all-ASID TLB maintenance before 
 release; host failure injection covers partial-update prevention. The focused image Cross Compiles
 one bounded post-TTBR1 stack allocation, virtual-alias round trip, retirement, scrub, and release
 with an ordered success marker. Exact GICD and affinity-selected GICR device pages now bring the
-current image to eight tables; both final-map paths now prepare and retain their unique GIC owner
-after TTBR1 publication with delivery closed. That image and mapper still need target execution,
+current image to eight tables; both final-map paths now retain their unique pinned GIC/timer owner
+and IRQ lookup after TTBR1 publication with delivery closed. That image and mapper still need target execution,
 and stack entry, measured sizing, thread switching, and exception-stack activation remain;
 the loaded-init path retires temporary TTBR0 aliases when it installs its user hierarchy.
 
@@ -159,7 +159,8 @@ Host-verifiable foundation now available:
   accesses against the retained table/layout contract;
 - the EL2 bootstrap permits the GIC system-register interface, and both final-map paths check
   `DAIF.I`, construct the backend only after TTBR1 publication, prepare the DTB-selected timer PPI
-  with a fixed 100,000-read per-wait budget, and permanently retain the closed-gate type state;
+  with a fixed 100,000-read per-wait budget, then claim/disable the physical timer and publish the
+  permanently retained closed-gate runtime;
 - a non-`Send`, non-`Sync` dispatcher-publication proof gates a Host Tested transition that opens
   only affinity-routed Non-secure Group-1 distribution before the current CPU interface, retains
   bounded activation/recovery/shutdown evidence, and never changes `DAIF.I`;
@@ -168,8 +169,8 @@ Host-verifiable foundation now available:
   retains the outstanding token on failure; the active owner also remembers an abandoned
   obligation and blocks re-acknowledgement or shutdown;
 - an allocation-free IRQ-save spinlock supplies Host Tested Acquire/Release exclusion and exact
-  local-mask restoration, with a Cross Compiled AArch64 `DAIF.I` backend that no subsystem uses
-  in a boot path;
+  local-mask restoration, with a Cross Compiled AArch64 `DAIF.I` backend now used for closed-gate
+  runtime publication and lookup in both final-map boot paths;
 - an architecture-neutral locked timer controller transactionally couples queue mutations to
   earliest-deadline rearm/disarm, returns due batches only after unlock, restores exact queue state
   on programming failure, closes permanently if hardware recovery also fails, and requires a
@@ -178,12 +179,16 @@ Host-verifiable foundation now available:
   checks the exact timer PPI, orders outer runtime/GIC locking before the timer lock, reprograms
   before EOI, rejects shutdown with pending events, and disarms before closing GIC delivery;
 - the non-transferable AArch64 physical timer implements the locked service backend, but only the
-  unintegrated runtime can create its post-activation programming permit;
+  active runtime can create its post-activation programming permit;
+- both final-map paths now claim and disable the physical timer, capture the initial counter, pin
+  the one-event runtime in static storage, Release-publish its handle, and route IRQ vector slots
+  through an Acquire-checked lookup while delivery remains closed;
 - host tests cover boundaries, selection failures, exact page mappings, register update isolation,
   finite polling, injected failure, gate ordering, special/unexpected acknowledgements, abandoned
   completion ownership, pinned publication, timer-before-EOI dispatch, shutdown ordering, and
-  ordered output protocol; boot still retains prepared state, so static dispatcher installation,
-  `DAIF.I` unmask/removal, sleep integration, and all current target execution remain pending.
+  ordered output protocol; boot still retains prepared state, so a bounded event consumer,
+  activation, `DAIF.I` unmask/removal, sleep integration, and all current target execution remain
+  pending.
 
 Observable result: timer interrupts advance a monotonic time source and scheduled callbacks fire
 under an automated QEMU test.
@@ -202,13 +207,13 @@ Host-verifiable foundation now available:
 - contended `try_lock` restores IRQ state without changing ownership, while nested different-lock
   guards preserve an outer mask in LIFO order;
 - the AArch64 backend changes only `DAIF.I` with compiler barriers and `ISB`, and is Cross Compiled
-  but not invoked by any boot path;
+  in the final-map publication and IRQ lookup paths, but has not handled a target IRQ;
 - an architecture-neutral timer controller and pinned AArch64 interrupt runtime prove
   transactional queue/programming, runtime-before-timer lock order, and callbacks-after-unlock in
   host tests; and
 - the primitive has no allocation, poisoning, fairness, or scheduler/preemption integration; the
-  runtime-before-timer order is published, while boot adoption and all target evidence remain
-  pending.
+  runtime-before-timer order and closed-gate boot lookup are published, while active delivery,
+  scheduler adoption, and all target evidence remain pending.
 
 Observable result: multiple kernel threads make independently verified progress under timer-driven
 scheduling.

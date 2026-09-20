@@ -52,6 +52,10 @@ numbers and remains explicitly unstable before 1.0.0. During construction, chang
   activation, enforces exact timer-PPI binding and runtime-before-timer lock order, reprograms the
   timer before EOI, retains abandoned acknowledgement obligations, and disarms before ordered GIC
   shutdown; the concrete non-transferable physical-timer service adapter Cross Compiles.
+- Closed-gate boot publication of that runtime in both final-map paths: the physical timer is
+  claimed, disabled, and observed once; pinned runtime and handle slots are Release-published; and
+  every IRQ vector reaches an Acquire-checked dispatch/fatal policy without activating GIC delivery
+  or unmasking `DAIF.I`, with a separate statically inspected publication progress marker.
 - Checked architecture-neutral physical/virtual addresses, pages, frames, and half-open ranges.
 - Strict allocation-free DTB parsing with boot CPU, bootargs, memory-region, and reservation extraction.
 - Fixed-capacity physical memory normalization, conservative reservation, and first-fit frame allocation.

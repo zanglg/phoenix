@@ -1260,16 +1260,23 @@ fn inspect_kernel_variant(variant: KernelVariant) -> bool {
     if variant.expects_gic_preparation()
         && let Some(bytes) = kernel_bytes.as_deref()
     {
-        let sentinel = qemu::GIC_PREPARED_SENTINEL;
-        if bytes
-            .windows(sentinel.len())
-            .all(|window| window != sentinel.as_bytes())
-        {
-            errors.push(format!(
-                "final-map ELF does not contain required GIC preparation sentinel: {sentinel}"
-            ));
-        } else {
-            println!("ok: GIC preparation sentinel is embedded: {sentinel}");
+        for (label, sentinel) in [
+            ("GIC preparation", qemu::GIC_PREPARED_SENTINEL),
+            (
+                "IRQ runtime publication",
+                qemu::IRQ_RUNTIME_PUBLISHED_SENTINEL,
+            ),
+        ] {
+            if bytes
+                .windows(sentinel.len())
+                .all(|window| window != sentinel.as_bytes())
+            {
+                errors.push(format!(
+                    "final-map ELF does not contain required {label} sentinel: {sentinel}"
+                ));
+            } else {
+                println!("ok: {label} sentinel is embedded: {sentinel}");
+            }
         }
     }
 

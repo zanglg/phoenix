@@ -3,9 +3,10 @@
 Phoenix has a Host Tested, allocation-free type state that jointly owns one prepared GICv3
 controller and one locked physical-timer service at a pinned address. It resolves the publication
 cycle between the two devices: vector lookup is established while GIC delivery is closed, and
-timer programming becomes possible only after matching GIC activation succeeds. The real boot
-paths do not construct this runtime, route IRQ vector slots to it, or unmask `DAIF.I`; target
-delivery remains Runtime Pending.
+timer programming becomes possible only after matching GIC activation succeeds. Both final-map
+boot paths now construct and publish the real pinned owner and IRQ lookup, but do not activate GIC
+delivery, program a deadline, or unmask `DAIF.I`; target publication and delivery remain Runtime
+Pending.
 
 ## Current implementation
 
@@ -43,11 +44,29 @@ On AArch64, `PhysicalTimer` is now deliberately non-`Send` and non-`Sync` and im
 service and a live runtime permit. Register operations are infallible at the Rust API boundary;
 architectural traps remain outside that error model.
 
+`kernel/src/main.rs` now replaces the former prepared-GIC-only static with a one-event boot runtime
+and a separate permanent published handle. After final TTBR1 activation and bounded GIC
+preparation, the single boot CPU claims `PhysicalTimer`, explicitly disables/masks it, reads the
+initial physical counter, builds the locked service, pins the combined runtime in static storage,
+and publishes its handle. A Release/Acquire atomic flag prevents the common exception dispatcher
+from reading the handle before initialization. `PHOENIX_GIC_PREPARED` followed by
+`PHOENIX_IRQ_RUNTIME_PUBLISHED` is emitted only after this closed-delivery publication completes.
+
+Every IRQ vector already reaches `phoenix_exception_dispatch`. In a final-map build it now checks
+the publication flag and delegates IRQ slots to `dispatch_one`; synchronous syscall and user-fault
+ordering is unchanged. A special INTID or empty timer batch may return. An unexpected completed
+INTID, a nonempty batch with no boot consumer, an unpublished lookup, or any runtime failure emits
+the normal `PHOENIX_EXCEPTION` terminal path with IRQ-specific detail. This policy is dormant
+because the boot path never activates delivery or unmasks IRQs.
+
 ## Invariants and failure semantics
 
 - The runtime address is pinned before publication and remains valid through its final active
   interval. The unsafe publisher must make every current-CPU EL1 IRQ vector able to recover the
   same slot before activation.
+- Static runtime initialization precedes handle initialization, which precedes the Release
+  publication flag. The dispatcher performs an Acquire load before borrowing the handle. Both GIC
+  gates and `DAIF.I` remain closed throughout the sequence.
 - Publication, activation, dispatch, scheduling, cancellation, and deactivation are single-CPU
   operations. Their handles and the concrete GIC/timer backends cannot move to another CPU.
 - The outer runtime lock is always acquired before the inner timer lock. Neither path acquires them
@@ -64,7 +83,8 @@ architectural traps remain outside that error model.
   completion obligation. A dropped or twice-failed token leaves the GIC owner unusable for a later
   acknowledge or shutdown.
 - An unexpected real INTID is completed before it is returned to policy code. The current runtime
-  reports it but does not decide whether the kernel should continue or terminate.
+  reports it without deciding whether the kernel should continue; the current boot wrapper then
+  chooses the terminal `PHOENIX_EXCEPTION` path.
 - A recoverable timer programming failure rolls the queue back and reapplies prior hardware state.
   Failed recovery, GIC acknowledge failure, or EOI failure makes the runtime unavailable.
 - Deactivation never abandons queued events. `PendingTimers` leaves delivery active; callers must
@@ -81,32 +101,32 @@ activation failure, and terminal EOI failure. The GIC tests separately verify th
 acknowledgement blocks both a second acknowledge and shutdown without closing active gates.
 
 Canonical checks cross-compile `PhysicalTimer`'s `TimerHardware` adapter, the permit-gated service,
-and the runtime state machine for every AArch64 kernel variant. Static ELF inspection continues to
-validate those images. These results are Host Tested, Cross Compiled, and ELF Inspected only; no
-new QEMU command was run.
+and the runtime state machine for every AArch64 kernel variant. The final-map and loaded-init
+variants additionally Cross Compile the static owner, physical counter/timer initialization,
+Release/Acquire handle publication, and common IRQ dispatcher branch; static ELF inspection keeps
+requiring both publication markers. These results are Host Tested, Cross Compiled, and ELF
+Inspected only; no new QEMU command was run.
 
 ## TODO
 
-- Replace the boot-only prepared-GIC slot with permanent pinned runtime storage that also owns the
-  claimed physical timer and its initial counter observation.
-- Publish a global lookup handle reachable from all EL1 IRQ vector slots before calling activation,
-  while keeping synchronous user-fault and syscall handling unchanged.
 - Add an explicit final transition that unmasks `DAIF.I` only after runtime publication and
   activation, and a symmetric removal protocol that prevents new handler entry.
-- Define the kernel policy for an unexpected completed INTID and for terminal acknowledge/EOI
-  failure, including diagnostic output that does not invert locks.
+- Add a bounded boot scheduling API and event consumer before activation; the current dispatcher
+  deliberately terminates if it observes a nonempty due batch.
+- Replace the current terminal diagnostic policy with the scheduler-era policy for an unexpected
+  completed INTID or acknowledge/EOI failure.
 - Connect returned timer events to sleeping kernel threads and the tickless scheduler.
 - Add a bounded target probe for publication, one timer event, EOI, interrupt return, lock
   exclusion, and continued execution.
 
 ## Deliberately skipped
 
-This checkpoint does not change `phoenix_exception_dispatch`, install a global runtime pointer,
-claim `PhysicalTimer` during boot, activate the retained boot GIC, program a target comparator,
-unmask `DAIF.I`, return through a real IRQ vector, or run QEMU. It does not add nested interrupts,
-FIQ/NMI handling, SMP/per-CPU slots, scheduler callbacks, dynamic timer capacity, allocation in
-interrupt context, or a general interrupt-controller abstraction. The final-map and loaded-init
-paths continue to retain `PreparedGicV3` with delivery closed.
+This checkpoint does not activate the retained boot GIC, issue `Arm`, program a target comparator,
+unmask `DAIF.I`, observe or return through a real IRQ, or run QEMU. It does not add nested
+interrupts, FIQ/NMI handling, SMP/per-CPU slots, scheduler callbacks, dynamic timer capacity,
+allocation in interrupt context, or a general interrupt-controller abstraction. The final-map and
+loaded-init paths retain the combined runtime in its published `Prepared` phase with delivery
+closed and the physical timer disabled/masked.
 
 ## Runtime Pending
 

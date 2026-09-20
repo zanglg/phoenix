@@ -2,8 +2,9 @@
 
 Phoenix currently provides an architecture-neutral, allocation-free foundation for monotonic
 time and deadline ordering plus an AArch64 physical generic-timer adapter and a Host Tested pinned
-GIC/timer publication runtime. The final-map boot paths still retain delivery closed and do not
-construct or program the timer owner, deliver timer interrupts, block a thread, or run callbacks.
+GIC/timer publication runtime. The final-map boot paths now claim, disable, observe, and publish
+the timer owner but retain delivery closed; they do not schedule/program a deadline, deliver timer
+interrupts, block a thread, or run callbacks.
 
 ## Current implementation
 
@@ -43,15 +44,16 @@ construct or program the timer owner, deliver timer interrupts, block a thread, 
 
 The QEMU `virt` platform layer also strictly discovers all four architected-timer PPIs from the
 DTB and selects the second, non-secure physical entry for the `CNTP_*` contract. That descriptive
-topology now feeds the boot GIC preparation transaction. The unintegrated pinned interrupt runtime
-binds that exact configured PPI to a locked timer service, rejects mismatches before activation,
-and models a complete acknowledge/reprogram/EOI cycle. Boot does not construct this owner or route
-an IRQ vector to it.
+topology now feeds the boot GIC preparation transaction. The pinned interrupt runtime binds that
+exact configured PPI to a locked timer service, rejects mismatches before activation, and models a
+complete acknowledge/reprogram/EOI cycle. Both final-map paths construct and publish this owner;
+the common dispatcher can look it up from IRQ slots, although delivery remains closed.
 
 The target owner programs an absolute compare value only while signaling is disabled and masked.
 Its `TimerHardware` implementation then unmasks signaling only through the unsafe backend call;
 the locked service requires the active runtime's private permit before reaching that call. Phoenix
-does not currently construct this owner from a boot path or issue a real command.
+constructs this owner in both final-map paths only to disable it and obtain the initial counter;
+it does not issue `Arm` or unmask timer signaling.
 
 The queue performs no allocation and invokes no callback. Scheduling scans for the lowest reusable
 slot. Removing a due timer chooses the earliest deadline and then the lowest slot, so equal-deadline
@@ -112,7 +114,8 @@ wrapper to use the Host Tested IRQ-save spinlock and it:
 The Host Tested AArch64 interrupt runtime supplies the first nested production order: acquire its
 outer GIC/publication lock before the inner timer lock. Its pinned slot is published while GIC
 delivery is closed, and it creates the timer permit only after activation. The concrete register
-adapter and state machine Cross Compile, but no static boot owner or vector lookup exists yet.
+adapter, static boot owner, atomic lookup publication, and common IRQ branch Cross Compile. The
+boot owner remains in `Prepared`, so the permit and hardware programming path are unreachable.
 
 ## Validation
 
@@ -129,8 +132,8 @@ kernel variant; this proves compilation and static artifact contracts, not targe
 
 ## TODO
 
-- Install the pinned runtime plus a permanent dispatcher lookup in boot, then connect the exclusive
-  physical-timer owner after the initial counter observation.
+- Add a bounded boot event consumer, schedule its first deadline, then activate the published
+  runtime without exposing an unhandled due batch.
 - Add the explicit final `DAIF.I` unmask/removal transition after every runtime invariant is live.
 - Connect due events to sleeping threads and tickless scheduler wakeups.
 - Decide whether a queue-instance namespace is worth the identifier and initialization cost.
@@ -141,9 +144,9 @@ kernel variant; this proves compilation and static artifact contracts, not targe
 
 This checkpoint does not implement wall time, calendar time, periodic timers, callback storage,
 dynamic queue growth, kernel-thread sleep, scheduler preemption, idle `WFI`, SMP, boot-time GIC
-delivery activation, target IRQ acknowledgement, or
-boot-time timer activation. GIC discovery, closed-gate PPI preparation, and the unintegrated Host
-Tested delivery protocol belong to the separate interrupt module. This checkpoint does not
+delivery activation, target timer programming, target IRQ acknowledgement, or boot-time timer
+activation. GIC discovery, closed-gate PPI preparation, and the still-inactive Host Tested
+delivery protocol belong to the separate interrupt module. This checkpoint does not
 claim a target frequency or precision because `CNTFRQ_EL0` has not been read during target
 execution.
 

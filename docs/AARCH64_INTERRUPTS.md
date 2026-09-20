@@ -3,7 +3,8 @@
 Phoenix currently discovers, maps, and prepares the GICv3 and architected-timer interrupt
 topology emitted for the pinned AArch64 QEMU `virt` platform. Host Tested delivery and pinned
 runtime state machines model publication, activation, timer dispatch, EOI/deactivation, and
-shutdown, but the boot paths deliberately retain the prepared state with delivery closed.
+shutdown. Both final-map boot paths now publish the pinned runtime and dispatcher lookup but
+deliberately retain its prepared phase with delivery closed.
 Discovery is strict, allocation-free, and isolated under the platform implementation; generic
 DTB traversal remains independent of GIC concepts.
 
@@ -102,13 +103,14 @@ entry remains a firmware contract: the higher exception levels must already perm
 register access. The preparation transaction still sets and reads back `ICC_SRE_EL1.SRE`; an
 unpermitted access can trap and therefore is not represented as an ordinary Rust error.
 
-After each final-map path installs its permanent runtime owner and activates TTBR1, it checks that
+After each final-map path installs its permanent memory owner and activates TTBR1, it checks that
 `DAIF.I` is still set, constructs `MappedGicV3Registers` from the retained tables and copied
 discovery evidence, and calls `prepare` with the DTB-selected non-secure physical timer PPI. Every
-hardware wait receives a fixed 100,000-read budget. Success is installed once in a separate static
-`PreparedGicV3<MappedGicV3Registers<...>>`, preserving the table borrow and unique register owner
-for the rest of boot. Only then is `PHOENIX_GIC_PREPARED` emitted. Both Group-1 delivery gates and
-the architectural IRQ mask remain closed.
+hardware wait receives a fixed 100,000-read budget. It then claims and disables the physical
+timer, reads its initial counter, builds the one-event locked service, pins the combined runtime in
+static storage, and Release-publishes a permanent handle used by the common IRQ dispatcher. Only
+then are `PHOENIX_GIC_PREPARED` and `PHOENIX_IRQ_RUNTIME_PUBLISHED` emitted. Both Group-1 delivery
+gates, timer signaling, and the architectural IRQ mask remain closed.
 
 ## Invariants and rejection policy
 
@@ -161,11 +163,12 @@ the architectural IRQ mask remain closed.
 - `InterruptTopology` is descriptive evidence only. Possessing it does not authorize MMIO access,
   map device pages, enable the distributor/redistributor, unmask `DAIF.I`, or satisfy the unsafe
   preconditions of `PhysicalTimer::unmask`.
-- Prepared boot ownership is published exactly once and outlives the active final table hierarchy.
+- Combined boot ownership is published exactly once and outlives the active final table hierarchy.
   A copied topology/layout is evidence, not a second register capability. A preparation failure
-  attempts closed-gate recovery and then terminates boot without publishing a prepared owner.
-- `PHOENIX_GIC_PREPARED` means the bounded transaction returned success with delivery closed; it
-  does not mean an IRQ was delivered, acknowledged, or returned from.
+  attempts closed-gate recovery and then terminates boot before publishing the runtime handle.
+- Ordered `PHOENIX_GIC_PREPARED`/`PHOENIX_IRQ_RUNTIME_PUBLISHED` means bounded GIC preparation plus
+  pinned runtime/IRQ-lookup publication returned success with GIC delivery and timer signaling
+  closed; it does not mean an IRQ was delivered, acknowledged, or returned from.
 
 The parser contains no unsafe code and retains no reference into the DTB after returning copied
 topology values.
@@ -179,12 +182,13 @@ The delivery API additionally makes the dispatcher publication proof and concret
 non-transferable across CPUs. The Host Tested pinned runtime now owns the GIC and timer behind an
 outer IRQ-save lock and acquires the timer's inner lock only in that direction. It returns due data
 after EOI and both locks release. No callback, scheduler action, allocator use, console output, or
-inverted lock acquisition may occur while an interrupt is outstanding. Boot has not adopted this
-owner or its lookup yet.
+inverted lock acquisition may occur while an interrupt is outstanding. Boot now adopts the owner
+and lookup only in the closed-delivery `Prepared` phase.
 
-The current boot path still retains `PreparedGicV3`, never creates `PublishedIrqDispatcher`, does
-not call `activate`, does not unmask `DAIF.I`, and does not acknowledge an INTID. IRQ/FIQ vector
-slots therefore continue to use the fatal exception path.
+The current boot path retains the combined runtime in `Prepared`, so it does not create the
+internal `PublishedIrqDispatcher` activation proof, open either GIC gate, program/unmask the
+timer, or unmask `DAIF.I`. IRQ slots can look up the runtime and apply the documented dispatch/
+fatal policy, but no target IRQ can intentionally reach them; FIQ slots remain purely fatal.
 
 ## Validation
 
@@ -206,7 +210,7 @@ duplicate/missing/truncated/access failures, bootstrap-window bounds, register-r
 all 48 final GIC L3 leaves in the pinned 8-table/815-leaf plan. It cross-compiles the volatile
 MMIO/system-register backend including `ICC_IAR1_EL1` and `ICC_EOIR1_EL1`, `ICC_SRE_EL2` setup,
 checked `DAIF.I` observation, one-time retained preparation in both final-map consumers, and the
-`PHOENIX_GIC_PREPARED` static/protocol contract.
+static runtime/handle publication plus both ordered progress-marker contracts.
 Manual ELF disassembly of `boot_drop_el2_to_el1` also confirms the ordered
 `MRS ICC_SRE_EL2`/`ORR #0xf`/`MSR ICC_SRE_EL2`/`ISB` sequence in the built default kernel.
 These checks do not prove that the recorded QEMU board emits the expected nodes, that selection or
@@ -215,12 +219,12 @@ Tested delivery transaction can handle a real target interrupt.
 
 ## TODO
 
-- Install the pinned runtime and a permanent lookup reachable from the EL1 IRQ vector slots, then
-  activate it from boot without weakening the masked-transition contract.
+- Activate the already-published runtime from boot without weakening the masked-transition
+  contract, after a bounded event consumer is installed.
 - Define the fatal/recovery policy after an unexpected real INTID is completed and preserve full
   IRQ entry/exit register-state evidence.
-- Add the final boot transition that claims the physical timer, observes its initial counter,
-  activates the published runtime, and unmasks `DAIF.I` only after every invariant is live.
+- Add the final boot transition that schedules a bounded event, activates the published runtime,
+  and unmasks `DAIF.I` only after every handler invariant is live.
 - Add a bounded target probe that records the actual topology, one timer interrupt, ordered event
   dispatch, EOI, and continued execution.
 
@@ -230,11 +234,12 @@ This checkpoint does not support GICv2, multiple redistributor regions, legacy G
 ranges, ITS/MSI/LPI, shared peripheral interrupts, four-cell PPI partitions, `interrupts-extended`,
 the optional VHE virtual timer interrupt, SMP routing, priority policy, or nested interrupts. The
 concrete backend, physical-timer adapter, and boot preparation path are Cross Compiled but have not
-executed on target. Host Tested APIs model publication, distributor/CPU delivery, timer dispatch,
-EOI/deactivation, and shutdown; no boot path calls them, so Phoenix still does none of those
-operations on target and cannot return through an IRQ vector. Those behaviors are not inferred
-from valid topology, offline mappings, the Host Tested register protocol, or the unobserved
-preparation marker.
+executed on target. Boot Cross Compiles the publication transition and lookup, while Host Tested
+APIs model distributor/CPU delivery, timer dispatch, EOI/deactivation, and shutdown. No boot path
+calls activation or unmasks IRQs, so Phoenix still performs none of those delivery operations on
+target and cannot claim a return through an IRQ vector. Those behaviors are not inferred from
+valid topology, offline mappings, the Host Tested register protocol, or the unobserved publication
+markers.
 
 ## Runtime Pending
 

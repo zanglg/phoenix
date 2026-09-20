@@ -16,13 +16,15 @@ narrow support claim:
 - host-side unit tests and validation are available through `cargo xtask`;
 - architecture-neutral monotonic raw ticks, a fixed-capacity deadline queue, checked AArch64
   frequency conversion, and a permit-gated physical-timer adapter are Host Tested/Cross Compiled,
-  while boot activation, target GIC delivery, IRQ synchronization, and sleep remain pending;
+  while boot scheduling/activation, target GIC delivery, IRQ synchronization, and sleep remain
+  pending;
 - an allocation-free IRQ-save spinlock is Host Tested with Acquire/Release contention and exact
   nested mask restoration; its AArch64 `DAIF.I` backend and runtime-before-timer lock order Cross
-  Compile, but no boot subsystem uses them and IRQ delivery remains masked;
+  Compile in the final-map publication/lookup path, but IRQ delivery remains masked;
 - a locked, fixed-capacity timer controller is Host Tested with earliest-only reprogramming,
   deterministic due batches, callbacks-after-unlock, exact queue rollback, and explicit hardware
-  recovery failure; pending timers block delivery shutdown, and no boot owner exists yet;
+  recovery failure; pending timers block delivery shutdown, and the published boot owner remains
+  inactive with an empty one-event queue;
 - strict QEMU `virt` DTB discovery validates GICv3 MMIO ranges, interrupt-parent ownership, and
   the architected-timer PPIs; the final-map paths select the current CPU redistributor by affinity
   and map only it plus GICD as exact device pages without enabling interrupts;
@@ -33,7 +35,8 @@ narrow support claim:
   preparation transaction with a fixed poll budget, and retain its closed-gate type state; a
   separate Host Tested pinned runtime publishes dispatcher state before ordered activation, binds
   the matching timer PPI, reprograms before mandatory combined EOI/deactivation, and disarms before
-  shutdown, but no boot path installs its vector lookup, activates it, or unmasks IRQs;
+  shutdown; both final-map paths now claim/disable the timer and publish an Acquire-checked IRQ
+  lookup, but neither activates delivery nor unmasks IRQs;
 - a bounded QEMU runner and boot-test harness are implemented and host tested;
 - bounded QEMU probes have verified direct boot, DTB/allocator access, final TTBR1 publication,
   the first EL0 transition, and the loaded-init/file-I/O path on the pinned board;

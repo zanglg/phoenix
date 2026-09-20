@@ -82,11 +82,11 @@ cargo xtask test-init
 another machine silently. The normal emulator-free `cargo xtask ci` command never launches QEMU.
 
 Static inspection also requires each image variant's own terminal sentinel to be embedded in its
-ELF. Both final-map variants must contain `PHOENIX_GIC_PREPARED`; the standalone final-map image
-must additionally contain `PHOENIX_KERNEL_HEAP_OK` and `PHOENIX_KERNEL_STACK_OK`. EL0-capable variants
-must contain `PHOENIX_USER_FAULT` and their matching failure sentinel. These checks prevent a
-default image or incomplete path built under the wrong feature set from masquerading as a focused
-probe artifact.
+ELF. Both final-map variants must contain `PHOENIX_GIC_PREPARED` and
+`PHOENIX_IRQ_RUNTIME_PUBLISHED`; the standalone final-map image must additionally contain
+`PHOENIX_KERNEL_HEAP_OK` and `PHOENIX_KERNEL_STACK_OK`. EL0-capable variants must contain
+`PHOENIX_USER_FAULT` and their matching failure sentinel. These checks prevent a default image or
+incomplete path built under the wrong feature set from masquerading as a focused probe artifact.
 
 ## Boot-test protocol
 
@@ -100,11 +100,13 @@ terminal sentinel determines the result:
 - `PHOENIX_KERNEL_HEAP_OK`: required progress after TTBR1 publication and bounded heap checks;
 - `PHOENIX_KERNEL_STACK_OK`: required progress after bounded live stack publication, alias
   round-trip, retirement, scrub, and ownership restoration;
-- `PHOENIX_GIC_PREPARED`: required progress after final TTBR1 publication and finite-budget GICv3
-  preparation with distributor and CPU Group-1 delivery still closed;
+- `PHOENIX_GIC_PREPARED`: required progress after final TTBR1 publication, finite-budget GICv3
+  preparation with Group-1 delivery closed;
+- `PHOENIX_IRQ_RUNTIME_PUBLISHED`: required progress after physical-timer disable/observation and
+  pinned runtime/IRQ-lookup publication with timer signaling and `DAIF.I` still closed;
 - `PHOENIX_KERNEL_MAP_OK`: pass for `test-kernel-map` only, after ordered
-  `PHOENIX_KERNEL_MAP_ENTER`, `PHOENIX_GIC_PREPARED`, `PHOENIX_KERNEL_HEAP_OK`, and
-  `PHOENIX_KERNEL_STACK_OK`;
+  `PHOENIX_KERNEL_MAP_ENTER`, `PHOENIX_GIC_PREPARED`, `PHOENIX_IRQ_RUNTIME_PUBLISHED`,
+  `PHOENIX_KERNEL_HEAP_OK`, and `PHOENIX_KERNEL_STACK_OK`;
 - `PHOENIX_KERNEL_MAP_OK` without all earlier required markers in order: protocol fail;
 - `PHOENIX_EL0_OK`: pass for `test-el0` only;
 - `PHOENIX_EL0_FAIL`: fail `test-el0` immediately;
@@ -112,8 +114,9 @@ terminal sentinel determines the result:
   sentinel, which fails that test;
 - `PHOENIX_INIT_OK`: pass for `test-init` only;
 - `PHOENIX_INIT_FAIL`: fail `test-init` immediately;
-- `PHOENIX_INIT_OK` without the earlier ordered final-map enter, GIC-prepared, and success markers,
-  EL0 enter marker, exact greeting, and `etc/motd` output: protocol fail;
+- `PHOENIX_INIT_OK` without the earlier ordered final-map enter, GIC-prepared, IRQ-runtime-
+  published, and success markers, EL0 enter marker, exact greeting, and `etc/motd` output:
+  protocol fail;
 - QEMU exit before the required terminal sentinel: fail;
 - timeout: fail and terminate QEMU;
 - more than 1 MiB without a sentinel: fail and terminate QEMU;
@@ -152,10 +155,11 @@ transactional planner updates; it does not change the 4 KiB granule, QEMU RAM si
 layout.
 
 That recorded final-map run predates the bounded GIC preparation, heap, and runtime-stack paths,
-did not emit `PHOENIX_GIC_PREPARED`, `PHOENIX_KERNEL_HEAP_OK`, or `PHOENIX_KERNEL_STACK_OK`, and used five table frames before the
+did not emit `PHOENIX_GIC_PREPARED`, `PHOENIX_IRQ_RUNTIME_PUBLISHED`,
+`PHOENIX_KERNEL_HEAP_OK`, or `PHOENIX_KERNEL_STACK_OK`, and used five table frames before the
 runtime-stack arena gained two prelinked empty tables and GIC mapping gained another L3 table with
 48 leaves. It remains evidence for historical final TTBR1 publication, not for the current
-eight-table GIC-prepared/heap/stack protocol, `RUN-KHEAP-001`, `RUN-IRQ-001`, or runtime-stack publication;
+eight-table GIC/timer-runtime-published/heap/stack protocol, `RUN-KHEAP-001`, `RUN-IRQ-001`, or runtime-stack publication;
 those boundaries remain Runtime Pending until a new run is captured.
 
 ## How to report a run

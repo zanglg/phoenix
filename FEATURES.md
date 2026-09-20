@@ -78,10 +78,10 @@ _No unclassified entries._
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
 | CONC-001 | Atomics and memory-ordering policy | In Progress | 0.1.0 | IRQ-save spinlock ownership uses documented Acquire/Release ordering; publication, device, page-table, and future scheduler primitives retain their own contracts |
-| CONC-002 | Spinlocks and IRQ-safe synchronization | In Progress | 0.1.0 | IRQ-save lock, transactional timer consumer, and runtime-before-timer nested order are Host Tested; the AArch64 `DAIF.I` backend Cross Compiles, while boot adoption, preemption/migration rules, broader lock graph, and target evidence remain |
+| CONC-002 | Spinlocks and IRQ-safe synchronization | In Progress | 0.1.0 | IRQ-save lock, transactional timer consumer, and runtime-before-timer order are Host Tested; closed-gate boot publication Cross Compiles, while active delivery, preemption/migration rules, broader lock graph, and target evidence remain |
 | SCHED-001 | Kernel threads and context switching | Planned | 0.1.0 | Architecture boundary required |
 | SCHED-002 | Scheduler, preemption, and idle | Planned | 0.1.0 | Policy remains open |
-| TIME-001 | Monotonic clock and generic timer | In Progress | 0.1.0 | Checked ticks/frequency plus the non-transferable CNTP service adapter and permit-gated GIC/timer runtime are Host Tested/Cross Compiled; boot activation, observed frequency, and runtime evidence remain |
+| TIME-001 | Monotonic clock and generic timer | In Progress | 0.1.0 | Checked ticks/frequency plus the non-transferable CNTP adapter/runtime are Host Tested/Cross Compiled; boot claims, disables, observes, and publishes it, while scheduling, activation, observed target frequency, and runtime evidence remain |
 | TIME-002 | Timer queue and sleep | In Progress | 0.1.0 | Fixed deadlines, transactional reprogramming/recovery, due batches, callbacks-after-unlock, and pending-event shutdown rejection are Host Tested; boot publication, sleep, and runtime evidence remain |
 | SMP-001 | Secondary CPU bring-up and per-CPU data | Deferred | Unscheduled | Preserve interfaces before enabling SMP |
 | SMP-002 | IPI and TLB shootdown | Deferred | Unscheduled | Coordinate with virtual memory design |
@@ -116,7 +116,7 @@ _No unclassified entries._
 | --- | --- | --- | --- | --- |
 | DEV-001 | Minimal device and driver lifecycle | Deferred | Unscheduled | Do not build a framework before two users exist |
 | DEV-002 | Early and runtime console | In Progress | 0.1.0 | Polled PL011 positive output/flush passed on QEMU; panic and interrupt-era behavior remain |
-| IRQ-001 | Interrupt controller abstraction and GIC | In Progress | 0.1.0 | DTB/mapping/preparation plus a pinned dispatcher runtime with ordered activation, timer dispatch, EOI, and shutdown are Host Tested/Cross Compiled; boot retains closed delivery, so vector lookup, `DAIF.I` unmask/removal, target delivery, and runtime evidence remain |
+| IRQ-001 | Interrupt controller abstraction and GIC | In Progress | 0.1.0 | DTB/mapping/preparation and the pinned runtime are Host Tested/Cross Compiled; final-map boot publishes an Acquire-checked IRQ lookup but retains closed delivery, so activation, `DAIF.I` unmask/removal, target delivery, and runtime evidence remain |
 | FW-001 | PSCI integration | Deferred | Unscheduled | Power and SMP services |
 | VIRTIO-001 | VirtIO transport and device discovery | Deferred | Unscheduled | MMIO first; PCI may follow |
 | PCI-001 | PCI discovery and configuration | Deferred | Unscheduled | Important for x86_64 and future platforms |

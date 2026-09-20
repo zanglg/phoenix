@@ -46,8 +46,10 @@ read-only, naturally aligned GICR PIDR2/TYPER discovery. Access is bounded below
 current CPU by `MPIDR_EL1` affinity, and is dropped before final-table publication. This is Cross
 Compiled and Host Tested through an abstract register fixture; it remains Runtime Pending and does
 not enable GIC interrupt delivery. After final TTBR1 publication, the final-map consumers check
-that `DAIF.I` remains masked, perform finite-budget GIC preparation, and retain the prepared owner
-with both Group-1 gates closed. That target path is Cross Compiled but remains Runtime Pending.
+that `DAIF.I` remains masked, perform finite-budget GIC preparation, claim and disable the physical
+timer, capture its initial counter, and pin the combined runtime plus IRQ lookup with both Group-1
+gates closed. That target path is Cross Compiled but remains Runtime Pending; it never activates
+delivery or unmasks IRQs.
 
 The linker reserves a zeroed BSS, one page-aligned 4 KiB guard frame, and a 1 MiB,
 16-byte-aligned boot-construction stack. The coarse bootstrap mappings still map the guard; the

@@ -38,9 +38,10 @@ At boot, the focused kernel variant:
     reservation-aware allocator;
 11. drops the bootstrap-memory capability, then permanently stores the user owner, kernel-table
     owner, file table, and remaining allocator before either translation root is published;
-12. emits `PHOENIX_INIT_KERNEL_MAP_ENTER`, publishes TTBR1, checks masked IRQ state, prepares and
-    permanently retains the bounded closed-gate GICv3 owner, emits `PHOENIX_GIC_PREPARED`, and
-    emits `PHOENIX_INIT_KERNEL_MAP_OK` only after those operations complete through the final map;
+12. emits `PHOENIX_INIT_KERNEL_MAP_ENTER`, publishes TTBR1, checks masked IRQ state, prepares GICv3,
+    claims/disables the physical timer, pins and publishes the combined closed-gate runtime plus IRQ
+    lookup, emits ordered `PHOENIX_GIC_PREPARED`/`PHOENIX_IRQ_RUNTIME_PUBLISHED`, and emits
+    `PHOENIX_INIT_KERNEL_MAP_OK` only after those operations complete through the final map;
 13. prints the planned entry, stack pointer, page count, table root, and `PHOENIX_INIT_ENTER`;
 14. allocates nonzero ASID 1, publishes it with TTBR0, performs conservative all-ASID invalidation,
     loads EL0 registers, and executes `eret`;
@@ -117,10 +118,12 @@ built kernel contains the exact initramfs whose `init` entry was accepted by the
 required translation, GIC-preparation, terminal success, and user-fault failure sentinel.
 
 Runtime validation is `RUN-INIT-001`, Runtime Verified for the recorded historical positive probe.
-The current `cargo xtask test-init` protocol additionally requires `PHOENIX_GIC_PREPARED` between
-the final-map enter and post-switch markers, then the EL0 enter marker, both exact userspace lines,
-and `PHOENIX_INIT_OK`. A success marker without that exact ordered sequence is a protocol failure.
-The recorded run predates this GIC step, whose current target execution remains `RUN-IRQ-001`.
+The current `cargo xtask test-init` protocol additionally requires `PHOENIX_GIC_PREPARED` and
+`PHOENIX_IRQ_RUNTIME_PUBLISHED` between the final-map enter and post-switch markers, then the EL0
+enter marker, both exact userspace lines, and `PHOENIX_INIT_OK`. A success marker without that exact
+ordered sequence is a protocol failure.
+The recorded run predates this GIC/timer-runtime publication step, whose current target execution
+remains `RUN-IRQ-001` and `RUN-TIME-001`.
 Panic, exception, `PHOENIX_INIT_FAIL`, early QEMU exit, timeout, excessive output, and stream
 errors all fail.
 

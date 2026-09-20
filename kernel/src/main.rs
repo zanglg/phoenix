@@ -6,7 +6,13 @@ compile_error!("the Phoenix kernel binary currently supports only AArch64");
 
 use core::fmt::Write;
 use core::panic::PanicInfo;
-#[cfg(feature = "loaded-init-probe")]
+#[cfg(any(
+    feature = "loaded-init-probe",
+    all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    )
+))]
 use core::sync::atomic::{AtomicBool, Ordering};
 #[cfg(any(
     feature = "loaded-init-probe",
@@ -15,7 +21,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
         not(any(feature = "el0-probe", feature = "loaded-init-probe"))
     )
 ))]
-use core::{mem::MaybeUninit, num::NonZeroU32};
+use core::{convert::Infallible, mem::MaybeUninit, num::NonZeroU32, pin::Pin};
 
 use phoenix_kernel::arch::aarch64::exception::{ExceptionFrame, VectorSlot};
 #[cfg(any(
@@ -26,8 +32,14 @@ use phoenix_kernel::arch::aarch64::exception::{ExceptionFrame, VectorSlot};
     )
 ))]
 use phoenix_kernel::arch::aarch64::{
-    gicv3::{GicV3Configuration, MappedGicV3Registers, PreparedGicV3, prepare},
+    LocalIrq,
+    gicv3::{GicV3Configuration, GicV3MmioError, MappedGicV3Registers, prepare},
+    interrupt_runtime::{
+        InterruptDispatch, InterruptRuntime, InterruptRuntimeError, InterruptRuntimePhase,
+        PublishedInterruptRuntime,
+    },
     irqs_masked,
+    timer::PhysicalTimer,
 };
 use phoenix_kernel::arch::aarch64::{halt, install_exception_vectors};
 use phoenix_kernel::build_info::BuildInfo;
@@ -35,6 +47,14 @@ use phoenix_kernel::build_info::BuildInfo;
 use phoenix_kernel::console::ByteSink;
 use phoenix_kernel::console::Console;
 use phoenix_kernel::platform::aarch64::qemu_virt::EarlyPl011;
+#[cfg(any(
+    feature = "loaded-init-probe",
+    all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    )
+))]
+use phoenix_kernel::timer_service::LockedTimerQueue;
 
 #[cfg(all(
     feature = "kernel-map-probe",
@@ -100,10 +120,17 @@ use phoenix_kernel::abi::{Errno, NATIVE_SVC_IMMEDIATE, NativeSyscall, SyscallRet
 use phoenix_kernel::arch::aarch64::asid::{AddressSpaceId, AsidAllocator};
 #[cfg(all(feature = "el0-probe", not(feature = "loaded-init-probe")))]
 use phoenix_kernel::arch::aarch64::el0;
+#[cfg(any(
+    feature = "loaded-init-probe",
+    feature = "el0-probe",
+    all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    )
+))]
+use phoenix_kernel::arch::aarch64::exception::ExceptionKind;
 #[cfg(any(feature = "el0-probe", feature = "loaded-init-probe"))]
-use phoenix_kernel::arch::aarch64::exception::{
-    ExceptionClass, ExceptionKind, VectorOrigin, classify_user_fault,
-};
+use phoenix_kernel::arch::aarch64::exception::{ExceptionClass, VectorOrigin, classify_user_fault};
 #[cfg(any(feature = "el0-probe", feature = "loaded-init-probe"))]
 use phoenix_kernel::arch::aarch64::syscall;
 #[cfg(feature = "loaded-init-probe")]
@@ -165,6 +192,14 @@ const KERNEL_STACK_SUCCESS_SENTINEL: &str = "PHOENIX_KERNEL_STACK_OK";
     )
 ))]
 const GIC_PREPARED_SENTINEL: &str = "PHOENIX_GIC_PREPARED";
+#[cfg(any(
+    feature = "loaded-init-probe",
+    all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    )
+))]
+const IRQ_RUNTIME_PUBLISHED_SENTINEL: &str = "PHOENIX_IRQ_RUNTIME_PUBLISHED";
 #[cfg(all(feature = "el0-probe", not(feature = "loaded-init-probe")))]
 const EL0_ENTER_SENTINEL: &str = "PHOENIX_EL0_ENTER";
 #[cfg(all(feature = "el0-probe", not(feature = "loaded-init-probe")))]
@@ -333,14 +368,6 @@ type BootGicV3Registers = MappedGicV3Registers<'static, FINAL_KERNEL_TABLE_CAPAC
         not(any(feature = "el0-probe", feature = "loaded-init-probe"))
     )
 ))]
-type BootPreparedGicV3 = PreparedGicV3<BootGicV3Registers>;
-#[cfg(any(
-    feature = "loaded-init-probe",
-    all(
-        feature = "kernel-map-probe",
-        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
-    )
-))]
 const GIC_PREPARATION_POLL_BUDGET: u32 = 100_000;
 #[cfg(any(
     feature = "loaded-init-probe",
@@ -349,7 +376,71 @@ const GIC_PREPARATION_POLL_BUDGET: u32 = 100_000;
         not(any(feature = "el0-probe", feature = "loaded-init-probe"))
     )
 ))]
-static mut BOOT_PREPARED_GICV3: MaybeUninit<BootPreparedGicV3> = MaybeUninit::uninit();
+const BOOT_TIMER_CAPACITY: usize = 1;
+#[cfg(any(
+    feature = "loaded-init-probe",
+    all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    )
+))]
+type BootInterruptRuntime =
+    InterruptRuntime<BootGicV3Registers, BOOT_TIMER_CAPACITY, PhysicalTimer>;
+#[cfg(any(
+    feature = "loaded-init-probe",
+    all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    )
+))]
+type BootInterruptHandle =
+    PublishedInterruptRuntime<'static, BootGicV3Registers, BOOT_TIMER_CAPACITY, PhysicalTimer>;
+#[cfg(any(
+    feature = "loaded-init-probe",
+    all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    )
+))]
+type BootInterruptError = InterruptRuntimeError<GicV3MmioError, Infallible>;
+#[cfg(any(
+    feature = "loaded-init-probe",
+    all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    )
+))]
+static mut BOOT_INTERRUPT_RUNTIME: MaybeUninit<BootInterruptRuntime> = MaybeUninit::uninit();
+#[cfg(any(
+    feature = "loaded-init-probe",
+    all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    )
+))]
+static mut BOOT_INTERRUPT_HANDLE: MaybeUninit<BootInterruptHandle> = MaybeUninit::uninit();
+#[cfg(any(
+    feature = "loaded-init-probe",
+    all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    )
+))]
+static BOOT_INTERRUPT_PUBLISHED: AtomicBool = AtomicBool::new(false);
+
+#[cfg(any(
+    feature = "loaded-init-probe",
+    all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    )
+))]
+enum BootIrqFailure {
+    Unpublished,
+    Runtime(BootInterruptError),
+    Unexpected { intid: u32 },
+    UnhandledTimerEvents { count: usize },
+}
 #[cfg(all(
     feature = "kernel-map-probe",
     not(any(feature = "el0-probe", feature = "loaded-init-probe"))
@@ -582,15 +673,17 @@ fn run_kernel_map_probe(boot_argument: usize, console: &mut Console<EarlyPl011>)
 
     // SAFETY: the one-time runtime permanently owns the active table hierarchy
     // and copied GIC discovery evidence. IRQs remain masked on the only CPU,
-    // and no other GIC register owner or handler exists.
-    let prepared_gic = unsafe { prepare_and_install_boot_gicv3(runtime.tables, runtime.gic) };
+    // and no other GIC register owner can access the closed delivery state.
+    let gic_configuration =
+        unsafe { prepare_and_publish_boot_interrupt_runtime(runtime.tables, runtime.gic) };
     let _ = writeln!(
         console,
         "gicv3: timer-intid={} poll-budget={} delivery=closed",
-        prepared_gic.configuration().timer().intid(),
-        prepared_gic.configuration().poll_budget(),
+        gic_configuration.timer().intid(),
+        gic_configuration.poll_budget(),
     );
     let _ = writeln!(console, "{GIC_PREPARED_SENTINEL}");
+    let _ = writeln!(console, "{IRQ_RUNTIME_PUBLISHED_SENTINEL}");
     console.sink_mut().flush();
 
     initialize_and_exercise_kernel_heap(
@@ -645,10 +738,10 @@ unsafe fn install_kernel_map_runtime(runtime: KernelMapRuntime) -> KernelMapRunt
         not(any(feature = "el0-probe", feature = "loaded-init-probe"))
     )
 ))]
-unsafe fn prepare_and_install_boot_gicv3(
+unsafe fn prepare_and_publish_boot_interrupt_runtime(
     tables: &'static FinalKernelTables,
     discovery: BootGicV3Discovery,
-) -> &'static BootPreparedGicV3 {
+) -> GicV3Configuration {
     assert!(
         irqs_masked(),
         "boot GICv3 preparation requires DAIF.I to remain masked"
@@ -677,14 +770,48 @@ unsafe fn prepare_and_install_boot_gicv3(
         ),
     };
 
-    let slot = &raw mut BOOT_PREPARED_GICV3;
-    // SAFETY: each final-map probe reaches this one-time single-core boot path
-    // at most once. The referenced table owner and this prepared owner remain
-    // installed forever, and no mutable reference to the slot is published.
+    // SAFETY: this one-time single-CPU boot path creates the only physical
+    // timer owner after EL1 counter/timer access was enabled by bootstrap or
+    // supplied by the direct-EL1 firmware contract.
+    let mut physical_timer = unsafe { PhysicalTimer::claim() };
+    physical_timer.disable();
+    let initial_counter = physical_timer.counter();
+    // SAFETY: the unique owner was just explicitly disabled and masked, and
+    // `initial_counter` was read from that owner's fixed physical domain.
+    let timer = unsafe { LockedTimerQueue::assume_disarmed(initial_counter, physical_timer) };
+    let runtime = InterruptRuntime::new(prepared, timer, configuration.timer());
+
+    let runtime_slot = &raw mut BOOT_INTERRUPT_RUNTIME;
+    // SAFETY: each final-map probe reaches this path at most once. The static
+    // slot never moves or deinitializes, so its non-Unpin runtime can be pinned
+    // at this address for the remainder of boot.
+    let pinned = unsafe {
+        (*runtime_slot).write(runtime);
+        Pin::new_unchecked(&*(*runtime_slot).as_ptr())
+    };
+    let local_irq = LocalIrq::new();
+    // SAFETY: VBAR_EL1 and the common Rust dispatcher were installed before
+    // final-map construction. The handler below uses the separate global
+    // handle slot, which is initialized before any activation; DAIF.I and both
+    // GIC delivery gates remain closed throughout this publication.
+    let handle = match unsafe { pinned.publish(&local_irq) } {
+        Ok(handle) => handle,
+        Err(phase) => panic!("could not publish boot interrupt runtime from phase {phase:?}"),
+    };
+    assert_eq!(
+        handle.phase(&local_irq),
+        InterruptRuntimePhase::Prepared,
+        "published boot interrupt runtime must keep delivery closed"
+    );
+
+    let handle_slot = &raw mut BOOT_INTERRUPT_HANDLE;
+    // SAFETY: the same one-time path initializes the lookup exactly once. The
+    // handle borrows the permanent runtime slot and is never moved afterward.
     unsafe {
-        (*slot).write(prepared);
-        &*(*slot).as_ptr()
+        (*handle_slot).write(handle);
     }
+    BOOT_INTERRUPT_PUBLISHED.store(true, Ordering::Release);
+    configuration
 }
 
 #[cfg(all(
@@ -1012,15 +1139,17 @@ fn run_loaded_init_probe(boot_argument: usize, console: &mut Console<EarlyPl011>
 
     // SAFETY: the installed runtime permanently owns the active final tables
     // and copied boot-CPU GIC evidence. IRQs remain masked, the boot CPU is the
-    // sole observer, and neither EL0 nor an interrupt handler is reachable yet.
-    let prepared_gic = unsafe { prepare_and_install_boot_gicv3(kernel_tables, gic) };
+    // sole observer, and no interrupt can enter before lookup publication.
+    let gic_configuration =
+        unsafe { prepare_and_publish_boot_interrupt_runtime(kernel_tables, gic) };
     let _ = writeln!(
         console,
         "gicv3: timer-intid={} poll-budget={} delivery=closed",
-        prepared_gic.configuration().timer().intid(),
-        prepared_gic.configuration().poll_budget(),
+        gic_configuration.timer().intid(),
+        gic_configuration.poll_budget(),
     );
     let _ = writeln!(console, "{GIC_PREPARED_SENTINEL}");
+    let _ = writeln!(console, "{IRQ_RUNTIME_PUBLISHED_SENTINEL}");
     let _ = writeln!(console, "{INIT_KERNEL_MAP_SENTINEL}");
     console.sink_mut().flush();
 
@@ -1159,6 +1288,39 @@ unsafe fn fault_active_init_process(
     }
 }
 
+#[cfg(any(
+    feature = "loaded-init-probe",
+    all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    )
+))]
+fn dispatch_boot_irq(slot: Option<VectorSlot>) -> Option<Result<(), BootIrqFailure>> {
+    let slot = slot?;
+    if slot.kind() != ExceptionKind::Irq {
+        return None;
+    }
+    if !BOOT_INTERRUPT_PUBLISHED.load(Ordering::Acquire) {
+        return Some(Err(BootIrqFailure::Unpublished));
+    }
+
+    let handle_slot = &raw const BOOT_INTERRUPT_HANDLE;
+    // SAFETY: the Acquire load observed the one-time Release publication after
+    // this static slot was fully initialized. The handle and the runtime it
+    // pins remain installed permanently, and vector entry has masked DAIF.
+    let handle = unsafe { &*(*handle_slot).as_ptr() };
+    let local_irq = LocalIrq::new();
+    Some(match handle.dispatch_one(&local_irq) {
+        Ok(InterruptDispatch::Spurious { .. }) => Ok(()),
+        Ok(InterruptDispatch::Timer(batch)) if batch.is_empty() => Ok(()),
+        Ok(InterruptDispatch::Timer(batch)) => {
+            Err(BootIrqFailure::UnhandledTimerEvents { count: batch.len() })
+        }
+        Ok(InterruptDispatch::Unexpected { intid }) => Err(BootIrqFailure::Unexpected { intid }),
+        Err(error) => Err(BootIrqFailure::Runtime(error)),
+    })
+}
+
 /// Common target of the assembly exception vectors.
 ///
 /// # Safety
@@ -1171,6 +1333,19 @@ pub unsafe extern "C" fn phoenix_exception_dispatch(frame: *mut ExceptionFrame, 
     // every field, and passes its unique mutable address for this call.
     let frame = unsafe { &mut *frame };
     let slot = VectorSlot::ALL.get(slot_index).copied();
+
+    #[cfg(any(
+        feature = "loaded-init-probe",
+        all(
+            feature = "kernel-map-probe",
+            not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+        )
+    ))]
+    let irq_failure = match dispatch_boot_irq(slot) {
+        Some(Ok(())) => return,
+        Some(Err(failure)) => Some(failure),
+        None => None,
+    };
 
     #[cfg(any(feature = "el0-probe", feature = "loaded-init-probe"))]
     if handle_probe_syscall(frame, slot) {
@@ -1193,6 +1368,29 @@ pub unsafe extern "C" fn phoenix_exception_dispatch(frame: *mut ExceptionFrame, 
     let _ = writeln!(console, "spsr: {:#018x}", frame.saved_program_status());
     let _ = writeln!(console, "esr: {:#018x}", frame.syndrome().raw());
     let _ = writeln!(console, "far: {:#018x}", frame.fault_address());
+    #[cfg(any(
+        feature = "loaded-init-probe",
+        all(
+            feature = "kernel-map-probe",
+            not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+        )
+    ))]
+    if let Some(failure) = irq_failure {
+        match failure {
+            BootIrqFailure::Unpublished => {
+                let _ = writeln!(console, "irq: runtime unpublished");
+            }
+            BootIrqFailure::Runtime(error) => {
+                let _ = writeln!(console, "irq: runtime error {error:?}");
+            }
+            BootIrqFailure::Unexpected { intid } => {
+                let _ = writeln!(console, "irq: unexpected intid={intid}");
+            }
+            BootIrqFailure::UnhandledTimerEvents { count } => {
+                let _ = writeln!(console, "irq: {count} timer event(s) have no boot consumer");
+            }
+        }
+    }
     console.sink_mut().flush();
     halt()
 }

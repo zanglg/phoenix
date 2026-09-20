@@ -3,8 +3,9 @@
 This document defines Phoenix's first synchronization primitive: an architecture-neutral
 IRQ-save spinlock with an AArch64 `DAIF.I` backend. The lock algorithm is Host Tested and the
 AArch64 masking path is Cross Compiled. An architecture-neutral timer controller and a Host Tested
-pinned AArch64 interrupt runtime now adopt it, but no boot owner uses those components, IRQ
-delivery remains closed, and target behavior is Runtime Pending.
+pinned AArch64 interrupt runtime now adopt it. Both final-map boot paths publish that owner and
+lookup while IRQ delivery remains closed; activation, target lock behavior, and delivery are
+Runtime Pending.
 
 ## Current implementation
 
@@ -85,8 +86,8 @@ cycle in a future dispatcher.
 
 ## TODO
 
-- Adopt the published runtime-before-timer order in the real boot dispatcher without adding a
-  console, allocator, or scheduler edge while either lock is held.
+- Preserve the published runtime-before-timer order when boot activation and the first event
+  consumer are added; keep console, allocator, and scheduler work outside both guards.
 - Decide the kernel-heap and runtime-stack policies for normal-context versus interrupt-context
   access before wrapping either owner.
 - Add preemption-count integration before a scheduler can migrate or switch a lock holder.
@@ -100,8 +101,9 @@ cycle in a future dispatcher.
 This checkpoint does not add a sleeping mutex, reader/writer lock, condition variable, seqlock,
 RCU, priority inheritance, fairness guarantee, lock dependency graph, timeout, NMI/FIQ-safe lock,
 per-CPU storage, scheduler preemption control, or SMP bring-up. It does not wrap the heap, frame
-allocator, runtime-stack pool, process table, file table, boot-owned interrupt runtime, or console.
-It does not publish a boot IRQ dispatcher, activate target Group-1 delivery, or unmask boot IRQs.
+allocator, runtime-stack pool, process table, file table, or console. Boot now uses it for pinned
+interrupt-runtime publication and lookup, but does not activate target Group-1 delivery, program a
+timer deadline, or unmask boot IRQs.
 
 ## Runtime Pending
 
