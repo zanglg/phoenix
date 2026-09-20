@@ -24,6 +24,7 @@ not create speculative implementations for them.
 
 - `Cargo.toml`: Phoenix version and kernel workspace policy.
 - `kernel/`: freestanding kernel library, AArch64 bootstrap, and image linker layout.
+- `kernel/src/timer_service.rs`: IRQ-locked transactional timer queue/programming core.
 - `userspace/init/`: first independently linked native AArch64 ELF conformance program.
 - `xtask/`: standalone host-side development tool.
 - `.cargo/lsp.toml`: rust-analyzer's default kernel target.

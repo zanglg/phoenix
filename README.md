@@ -16,10 +16,13 @@ narrow support claim:
 - host-side unit tests and validation are available through `cargo xtask`;
 - architecture-neutral monotonic raw ticks, a fixed-capacity deadline queue, checked AArch64
   frequency conversion, and masked physical-timer programming are Host Tested/Cross Compiled,
-  while boot activation, GIC delivery, subsystem IRQ synchronization, and sleep remain pending;
+  while boot activation, GIC delivery, target IRQ synchronization, and sleep remain pending;
 - an allocation-free IRQ-save spinlock is Host Tested with Acquire/Release contention and exact
   nested mask restoration; its AArch64 `DAIF.I` backend Cross Compiles, but no boot subsystem uses
   it and IRQ delivery remains masked;
+- a locked, fixed-capacity timer controller is Host Tested with earliest-only reprogramming,
+  deterministic due batches, callbacks-after-unlock, exact queue rollback, and explicit hardware
+  recovery failure; it has no concrete AArch64 adapter or boot owner yet;
 - strict QEMU `virt` DTB discovery validates GICv3 MMIO ranges, interrupt-parent ownership, and
   the architected-timer PPIs; the final-map paths select the current CPU redistributor by affinity
   and map only it plus GICD as exact device pages without enabling interrupts;

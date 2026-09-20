@@ -168,12 +168,15 @@ Host-verifiable foundation now available:
   retains the outstanding token on failure;
 - an allocation-free IRQ-save spinlock supplies Host Tested Acquire/Release exclusion and exact
   local-mask restoration, with a Cross Compiled AArch64 `DAIF.I` backend that no subsystem uses
-  yet;
+  at boot;
+- an architecture-neutral locked timer controller transactionally couples queue mutations to
+  earliest-deadline rearm/disarm, returns due batches only after unlock, restores exact queue state
+  on programming failure, and closes permanently if hardware recovery also fails;
 - host tests cover boundaries, selection failures, exact page mappings, register update isolation,
   finite polling, injected failure, gate ordering, special/unexpected acknowledgements, retryable
   EOI, shutdown ownership, and ordered output protocol; boot still retains prepared state, so real
-  dispatch, dispatcher/timer adoption of IRQ-safe synchronization, sleep integration, and all
-  current target execution remain pending.
+  dispatch, the two-stage AArch64 timer/GIC publication adapter, sleep integration, and all current
+  target execution remain pending.
 
 Observable result: timer interrupts advance a monotonic time source and scheduled callbacks fire
 under an automated QEMU test.
@@ -192,7 +195,9 @@ Host-verifiable foundation now available:
 - contended `try_lock` restores IRQ state without changing ownership, while nested different-lock
   guards preserve an outer mask in LIFO order;
 - the AArch64 backend changes only `DAIF.I` with compiler barriers and `ISB`, and is Cross Compiled
-  but not invoked by any boot path; and
+  but not invoked by any boot path;
+- an architecture-neutral timer controller is the first consumer and proves transactional
+  queue/programming plus callbacks-after-unlock in host tests; and
 - the primitive has no allocation, poisoning, fairness, scheduler/preemption integration, or
   published production lock order; subsystem adoption and all target evidence remain pending.
 

@@ -18,6 +18,7 @@ pub mod process;
 pub mod process_image;
 pub mod sync;
 pub mod time;
+pub mod timer_service;
 pub mod user;
 pub mod user_copy;
 pub mod user_stack;

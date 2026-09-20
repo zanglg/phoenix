@@ -44,6 +44,9 @@ numbers and remains explicitly unstable before 1.0.0. During construction, chang
 - An allocation-free IRQ-save spinlock with Acquire/Release ownership, exact nested IRQ-state
   restoration, contended try-lock rollback, non-transferable guards, host contention tests, and a
   Cross Compiled AArch64 `DAIF.I` masking backend.
+- A Host Tested locked timer controller with transactional earliest-deadline rearm/disarm,
+  deterministic fixed-capacity due batches returned after unlock, exact queue rollback, hardware
+  recovery evidence, and permanent closure after failed recovery.
 - Checked architecture-neutral physical/virtual addresses, pages, frames, and half-open ranges.
 - Strict allocation-free DTB parsing with boot CPU, bootargs, memory-region, and reservation extraction.
 - Fixed-capacity physical memory normalization, conservative reservation, and first-fit frame allocation.

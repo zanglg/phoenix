@@ -17,6 +17,18 @@ construct or program the timer owner, deliver timer interrupts, block a thread, 
 - generation-checked `TimerId` values for cancellation and `FiredTimer` values returned when a
   deadline is removed.
 
+`kernel/src/timer_service.rs` now composes that queue with the IRQ-save lock:
+
+- `TimerHardware` separates ordered counter reads from unsafe, IRQ-masked application of a complete
+  `Arm(deadline)` or `Disarm` state;
+- `LockedTimerQueue<CAPACITY, H>` owns one monotonic clock, queue, hardware backend, and operational
+  flag under `IrqSpinLock`;
+- schedule and cancel reprogram only when the earliest deadline changes;
+- interrupt handling removes every due record, re-arms the next deadline or disarms an empty queue,
+  and returns a fixed-capacity batch only after its lock guard drops; and
+- a programming failure restores the exact queue slot/generation checkpoint, attempts the prior
+  hardware command, and permanently closes the controller if that recovery also fails.
+
 `kernel/src/arch/aarch64/timer.rs` defines:
 
 - a checked nonzero 32-bit `CNTFRQ_EL0` value and nanosecond-to-tick conversion that rounds up;
@@ -37,8 +49,10 @@ does not currently construct this owner from a boot path or unmask it.
 
 The queue performs no allocation and invokes no callback. Scheduling scans for the lowest reusable
 slot. Removing a due timer chooses the earliest deadline and then the lowest slot, so equal-deadline
-behavior is deterministic. A caller is expected to remove due records while holding the queue's
-future synchronization and dispatch the returned event only after releasing that synchronization.
+behavior is deterministic. The locked controller enforces queue/hardware serialization and returns
+due records only after releasing synchronization. A future real IRQ dispatcher must complete the
+GIC acknowledgement after timer reprogramming and then dispatch the returned events, so callbacks
+run outside both the timer lock and GIC active state.
 
 ## Invariants and failure semantics
 
@@ -61,27 +75,45 @@ future synchronization and dispatch the returned event only after releasing that
   after its final event instead of wrapping and allowing an old identity to alias a new timer.
 - `pop_due` removes exactly one record before returning it. Event dispatch and any retry policy are
   owned by the caller; the queue cannot leave a callback half-executed.
+- locked scheduling and cancellation update the comparator only when the earliest deadline changes;
+  interrupt handling always reapplies the resulting command before return so a level-triggered
+  source is cleared or deliberately left armed;
+- a primary programming failure never publishes a tentative queue mutation. Successful recovery
+  restores service; failed recovery makes every later operation return `Unavailable` without
+  reading the counter or touching hardware;
+- counter failure and monotonic regression change neither queue nor comparator, while queue
+  capacity, stale-ID, and past-deadline errors occur before hardware programming; and
+- the controller constructor is unsafe because a concrete backend's vector, GIC, publication, and
+  initially-disarmed invariants must already hold for every later safe operation.
 
-No unsafe code or architecture-specific state is present in this module.
+The raw time and queue module contains no unsafe code or architecture-specific state. The service
+uses narrow unsafe calls only to apply a hardware command while its IRQ-save guard proves local
+masking and unique backend ownership.
 
 ## Synchronization boundary
 
-The current API requires one exclusive mutable owner. This is sufficient for host tests and the
-single-threaded pre-interrupt construction path, but it is not yet wrapped in an IRQ-safe
-synchronization policy. Phoenix now has a Host Tested IRQ-save spinlock; before an interrupt
-handler and normal kernel context share a queue, their owning wrapper must use it and:
+The raw queue still requires one exclusive mutable owner. `LockedTimerQueue` is the first owning
+wrapper to use the Host Tested IRQ-save spinlock and it:
 
-- prevents same-core interrupt re-entry while queue metadata is borrowed;
-- defines acquire/release ordering for producers, the interrupt handler, and future SMP users;
-- never invokes an event callback while holding the queue protection; and
-- coordinates timer reprogramming with changes to the earliest deadline.
+- prevents same-core interrupt re-entry while queue metadata and hardware are borrowed;
+- uses acquire/release ordering for producers, the interrupt handler, and future SMP users;
+- returns due data without invoking an event callback while protected; and
+- coordinates comparator programming transactionally with every earliest-deadline change.
+
+No AArch64 hardware adapter or static owner exists yet. The concrete adapter needs a two-stage
+publication transition: storage and vector lookup must exist before GIC activation, while timer
+signaling may become armable only after that activation succeeds. Encoding that cycle as type state
+is still required before boot integration.
 
 ## Validation
 
 Host tests cover equal/increasing/regressing observations, arithmetic overflow, deadline ordering,
 equal-deadline tie breaking, cancellation, stale-generation rejection, slot reuse and retirement,
-past deadlines, zero and full capacity, and failure atomicity. They also cover invalid frequency,
-round-up boundaries, conversion/deadline overflow, and control-bit decoding. Canonical CI
+past deadlines, zero and full capacity, and failure atomicity. Service tests cover earliest-only
+reprogramming, non-earliest cancellation, equal-deadline batch order, rearm/disarm, callbacks after
+IRQ-state restoration, exact queue rollback, successful programming recovery, permanent closure
+after failed recovery, and queue failures that never program hardware. They also cover invalid
+frequency, round-up boundaries, conversion/deadline overflow, and control-bit decoding. Canonical CI
 cross-compiles the register access as part of every AArch64 kernel variant; this only proves
 compilation and static artifact contracts, not target execution.
 
@@ -89,8 +121,10 @@ compilation and static artifact contracts, not target execution.
 
 - Publish the interrupt dispatcher and its synchronization state, then consume the existing GIC
   activation proof without weakening its masked-transition contract.
-- Connect the exclusive physical-timer owner to boot after GIC and IRQ state are ready.
-- Wrap shared timer state in the existing IRQ-save lock and publish its place in the lock order.
+- Add a two-stage AArch64 adapter that publishes the locked state before GIC activation but cannot
+  arm `CNTP_*` until activation succeeds.
+- Connect the exclusive physical-timer owner and locked controller to boot after GIC and IRQ state
+  are ready.
 - Connect due events to sleeping threads and tickless scheduler wakeups.
 - Decide whether a queue-instance namespace is worth the identifier and initialization cost.
 - Add a bounded target probe for counter monotonicity, compare programming, interrupt delivery,
@@ -99,15 +133,16 @@ compilation and static artifact contracts, not target execution.
 ## Deliberately skipped
 
 This checkpoint does not implement wall time, calendar time, periodic timers, callback storage,
-dynamic queue growth, kernel-thread sleep, scheduler preemption, idle `WFI`, SMP, boot-time GIC
-delivery activation, target IRQ acknowledgement, or boot-time timer activation. GIC discovery,
-closed-gate PPI preparation, and the unintegrated Host Tested delivery protocol belong to the
-separate interrupt module. This checkpoint does not
+dynamic queue growth, kernel-thread sleep, scheduler preemption, idle `WFI`, SMP, a concrete
+AArch64 service backend, boot-time GIC delivery activation, target IRQ acknowledgement, or
+boot-time timer activation. GIC discovery, closed-gate PPI preparation, and the unintegrated Host
+Tested delivery protocol belong to the separate interrupt module. This checkpoint does not
 claim a target frequency or precision because `CNTFRQ_EL0` has not been read during target
 execution.
 
 ## Runtime Pending
 
 `RUN-TIME-001` in `docs/RUNTIME_VALIDATION.md` remains Runtime Pending. Host tests and AArch64
-cross-compilation cannot establish that QEMU's counter advances monotonically, that the programmed
-timer PPI is delivered through the GIC, or that interrupt-context ordering is correct.
+cross-compilation cannot establish that QEMU's counter advances monotonically, that the abstract
+transaction matches real `CNTP_*` signaling, that the timer PPI is delivered through the GIC, or
+that interrupt-context ordering is correct.

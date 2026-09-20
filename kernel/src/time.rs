@@ -200,6 +200,13 @@ pub struct TimerQueue<const CAPACITY: usize> {
     scheduled: usize,
 }
 
+/// Exact internal queue state used to roll back a hardware transaction.
+#[derive(Clone, Copy)]
+pub(crate) struct TimerQueueCheckpoint<const CAPACITY: usize> {
+    slots: [TimerSlot; CAPACITY],
+    scheduled: usize,
+}
+
 impl<const CAPACITY: usize> TimerQueue<CAPACITY> {
     /// Create an empty queue without dynamic allocation.
     pub const fn new() -> Self {
@@ -299,6 +306,20 @@ impl<const CAPACITY: usize> TimerQueue<CAPACITY> {
             deadline,
             event,
         })
+    }
+
+    /// Capture every slot generation and the scheduled count.
+    pub(crate) const fn checkpoint(&self) -> TimerQueueCheckpoint<CAPACITY> {
+        TimerQueueCheckpoint {
+            slots: self.slots,
+            scheduled: self.scheduled,
+        }
+    }
+
+    /// Restore one exact internal checkpoint without advancing generations.
+    pub(crate) fn restore(&mut self, checkpoint: TimerQueueCheckpoint<CAPACITY>) {
+        self.slots = checkpoint.slots;
+        self.scheduled = checkpoint.scheduled;
     }
 
     fn recycle(&mut self, slot: usize, generation: u64) {

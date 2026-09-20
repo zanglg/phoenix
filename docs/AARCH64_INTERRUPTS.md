@@ -162,10 +162,10 @@ GICD, selected boot CPU GICR, current CPU interface, and active final tables. Pr
 with IRQs masked and before delivery is enabled. The owner is not exposed to general kernel code.
 The delivery API additionally makes the dispatcher publication proof and concrete mapped backend
 non-transferable across CPUs. This is type-state scaffolding, not a lock. Phoenix now has an
-IRQ-save spinlock, but no GIC or timer owner uses it; before boot may create the proof, the owning
-dispatcher must adopt that primitive or another documented single-owner protocol and publish its
-lock order. No callback, scheduler action, allocator use, or inverted lock acquisition may occur
-while an interrupt is outstanding.
+IRQ-save spinlock and a Host Tested locked timer controller, but no GIC or target-timer owner uses
+them; before boot may create the proof, the owning dispatcher must connect those pieces or another
+documented single-owner protocol and publish its lock order. No callback, scheduler action,
+allocator use, or inverted lock acquisition may occur while an interrupt is outstanding.
 
 The current boot path still retains `PreparedGicV3`, never creates `PublishedIrqDispatcher`, does
 not call `activate`, does not unmask `DAIF.I`, and does not acknowledge an INTID. IRQ/FIQ vector
@@ -201,9 +201,9 @@ Tested delivery transaction can handle a real target interrupt.
   integrate the existing activation/acknowledgement/shutdown type state into boot.
 - Define the fatal/recovery policy after an unexpected real INTID is completed and preserve full
   IRQ entry/exit register-state evidence.
-- Wrap shared dispatcher/timer state in the existing IRQ-save lock, connect the timer queue,
-  construct/program the physical-timer owner, and unmask `DAIF.I` only after every invariant is
-  live.
+- Add the two-stage AArch64 adapter that publishes the locked timer state before GIC activation,
+  makes physical-timer programming available only after activation, and unmasks `DAIF.I` only
+  after every invariant is live.
 - Add a bounded target probe that records the actual topology, one timer interrupt, ordered event
   dispatch, EOI, and continued execution.
 
