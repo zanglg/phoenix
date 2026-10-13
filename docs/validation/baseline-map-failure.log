@@ -1,0 +1,8 @@
+Baseline 413f8a348210 with stable-lint compatibility edits; initial final-map failure.
+command: qemu-system-aarch64 -machine virt-9.1,virtualization=on,gic-version=3,highmem=off -cpu cortex-a72 -accel tcg -m 512M -smp 1 -nodefaults -nographic -monitor none -serial stdio -no-reboot -kernel /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-kernel-map.bin
+timeout: 10 seconds
+Phoenix 0.0.0 (commit 413f8a348210, dirty, target aarch64-unknown-none-softfloat, profile debug)
+PHOENIX_BOOT_OK
+QEMU_TEST_LOG=/workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/qemu-kernel-map.log
+QEMU_TEST_RESULT=timeout
+error: did not observe a terminal sentinel before the timeout

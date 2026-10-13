@@ -1,0 +1,36 @@
+==> build AArch64 kernel ELF (kernel-map-probe)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.00s
+==> create raw AArch64 kernel image
+artifact: ELF: /workspace/phoenix/target/phoenix/build/kernel-map-probe/aarch64-unknown-none-softfloat/debug/phoenix-kernel
+artifact: raw image: /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-kernel-map.bin
+artifact: linker map: /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-kernel-map.map
+ok: expected terminal sentinel is embedded: PHOENIX_KERNEL_MAP_OK
+ok: kernel-map heap sentinel is embedded: PHOENIX_KERNEL_HEAP_OK
+ok: kernel-map stack sentinel is embedded: PHOENIX_KERNEL_STACK_OK
+ok: GIC preparation sentinel is embedded: PHOENIX_GIC_PREPARED
+ok: IRQ runtime publication sentinel is embedded: PHOENIX_IRQ_RUNTIME_PUBLISHED
+ok: AArch64 ELF machine, entry, load addresses, and symbols
+ok: bootstrap page table, exception vectors, BSS, stack, image, and map
+ok: QEMU emulator version 10.0.13 (Debian 1:10.0.13+ds-0+deb13u1)
+==> test AArch64 final-kernel-map probe on QEMU
+command: qemu-system-aarch64 -machine virt-9.1,virtualization=on,gic-version=3,highmem=off -cpu cortex-a72 -accel tcg -m 512M -smp 1 -nodefaults -nographic -monitor none -serial stdio -no-reboot -kernel /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-kernel-map.bin
+timeout: 10 seconds
+--- QEMU output ---
+Phoenix 0.1.0-pre.1 (commit 7abc06647037, clean, target aarch64-unknown-none-softfloat, profile debug)
+entry exception level: EL2
+boot argument: 0x0000000048000000
+PHOENIX_BOOT_OK
+kernel-map: root=0x0000000040000000 tables=8 leaves=815
+PHOENIX_KERNEL_MAP_ENTER
+gicv3: timer-intid=30 poll-budget=100000 delivery=closed
+PHOENIX_GIC_PREPARED
+PHOENIX_IRQ_RUNTIME_PUBLISHED
+kernel-heap: start=0x0000000040008000 frames=4 bytes=16384 records=4
+PHOENIX_KERNEL_HEAP_OK
+kernel-stack: start=0xffffff9000001000 pages=8 sp=0xffffff9000009000
+PHOENIX_KERNEL_STACK_OK
+PHOENIX_KERNEL_MAP_OK
+--- end QEMU output ---
+QEMU_TEST_LOG=/workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/qemu-kernel-map.log
+QEMU_TEST_RESULT=pass
+QEMU_TEST_SENTINEL=PHOENIX_KERNEL_MAP_OK

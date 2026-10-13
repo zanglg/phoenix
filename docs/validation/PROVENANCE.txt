@@ -1,0 +1,26 @@
+Phoenix 0.1.0-pre.1
+source=7abc066470377d66994855ff109c39c6369ace3a
+worktree=clean
+checkout=/workspace/phoenix
+target=aarch64-unknown-none-softfloat
+profile=debug
+CARGO_INCREMENTAL=0
+command=cargo xtask package
+board=virt-9.1,virtualization=on,gic-version=3,highmem=off
+cpu=cortex-a72
+accel=tcg
+ram=512M
+cpus=1
+
+rustc 1.99.0 (b940084d7 2026-09-28)
+binary: rustc
+commit-hash: b940084d7eb6a299eb4bfeb8e34901bc051e7ac4
+commit-date: 2026-09-28
+host: x86_64-unknown-linux-gnu
+release: 1.99.0
+LLVM version: 23.1.1
+
+cargo 1.99.0 (5f94df478 2026-08-27)
+
+QEMU: QEMU emulator version 10.0.13 (Debian 1:10.0.13+ds-0+deb13u1)
+Copyright (c) 2003-2025 Fabrice Bellard and the QEMU Project developers

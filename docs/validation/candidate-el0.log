@@ -1,0 +1,25 @@
+==> build AArch64 kernel ELF (el0-probe)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.00s
+==> create raw AArch64 kernel image
+artifact: ELF: /workspace/phoenix/target/phoenix/build/el0-probe/aarch64-unknown-none-softfloat/debug/phoenix-kernel
+artifact: raw image: /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-kernel-el0.bin
+artifact: linker map: /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-kernel-el0.map
+ok: expected terminal sentinel is embedded: PHOENIX_EL0_OK
+ok: AArch64 ELF machine, entry, load addresses, and symbols
+ok: bootstrap page table, exception vectors, BSS, stack, image, and map
+ok: EL0 probe text, entry, and stack static layout
+ok: QEMU emulator version 10.0.13 (Debian 1:10.0.13+ds-0+deb13u1)
+==> test AArch64 EL0 probe on QEMU
+command: qemu-system-aarch64 -machine virt-9.1,virtualization=on,gic-version=3,highmem=off -cpu cortex-a72 -accel tcg -m 512M -smp 1 -nodefaults -nographic -monitor none -serial stdio -no-reboot -kernel /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-kernel-el0.bin
+timeout: 10 seconds
+--- QEMU output ---
+Phoenix 0.1.0-pre.1 (commit 7abc06647037, clean, target aarch64-unknown-none-softfloat, profile debug)
+entry exception level: EL2
+boot argument: 0x0000000048000000
+PHOENIX_BOOT_OK
+PHOENIX_EL0_ENTER
+PHOENIX_EL0_OK
+--- end QEMU output ---
+QEMU_TEST_LOG=/workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/qemu-el0.log
+QEMU_TEST_RESULT=pass
+QEMU_TEST_SENTINEL=PHOENIX_EL0_OK

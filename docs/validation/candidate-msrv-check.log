@@ -1,0 +1,22 @@
+==> build standalone AArch64 init ELF
+   Compiling phoenix-init v0.1.0-pre.1 (/workspace/phoenix/userspace/init)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.12s
+==> create embeddable init ELF
+artifact: init ELF: /workspace/phoenix/target/phoenix/build/init/aarch64-unknown-none-softfloat/debug/phoenix-init
+artifact: embeddable init ELF: /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-init.elf
+artifact: initramfs: /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-initramfs.cpio
+artifact: init linker map: /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-init.map
+ok: deterministic initramfs contains exact init and motd files
+ok: init ELF is accepted by the Phoenix loader
+ok: init entry, RX page, message/path, symbols, size bound, and map
+==> check kernel and init for configured LSP target
+   Compiling phoenix-init v0.1.0-pre.1 (/workspace/phoenix/userspace/init)
+   Compiling phoenix-kernel v0.1.0-pre.1 (/workspace/phoenix/kernel)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.52s
+==> check kernel library for host tests
+   Compiling phoenix-kernel v0.1.0-pre.1 (/workspace/phoenix/kernel)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.19s
+==> check xtask for host
+    Checking phoenix-kernel v0.1.0-pre.1 (/workspace/phoenix/kernel)
+    Checking xtask v0.0.0 (/workspace/phoenix/xtask)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.18s

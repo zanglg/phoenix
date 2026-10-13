@@ -1,0 +1,91 @@
+==> build phoenix-system
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.00s
+==> strip user debug data
+==> build phoenix-child
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.00s
+==> strip user debug data
+==> build phoenix-fault
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.00s
+==> strip user debug data
+ok: independently linked init/child/fault ELF images and system archive inspected
+==> build AArch64 kernel ELF (system)
+   Compiling phoenix-kernel v0.1.0-pre.1 (/workspace/phoenix/kernel)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.75s
+==> create raw AArch64 kernel image
+artifact: ELF: /workspace/phoenix/target/phoenix/build/system/aarch64-unknown-none-softfloat/debug/phoenix-kernel
+artifact: raw image: /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-system.bin
+artifact: linker map: /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-system.map
+ok: expected terminal sentinel is embedded: PHOENIX_SYSTEM_OK
+ok: AArch64 ELF machine, entry, load addresses, and symbols
+ok: bootstrap page table, exception vectors, BSS, stack, image, and map
+ok: QEMU emulator version 10.0.13 (Debian 1:10.0.13+ds-0+deb13u1)
+==> runtime probe system
+command: qemu-system-aarch64 -machine virt-9.1,virtualization=on,gic-version=3,highmem=off -cpu cortex-a72 -accel tcg -m 512M -smp 1 -nodefaults -nographic -monitor none -serial stdio -no-reboot -kernel /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-system.bin -semihosting-config enable=on,target=native -append phoenix.system-test
+Phoenix 0.1.0-pre.1 (commit 7abc06647037, clean, target aarch64-unknown-none-softfloat, profile debug)
+entry exception level: EL2
+boot argument: 0x0000000048000000
+PHOENIX_BOOT_OK
+PHOENIX_SYSTEM_ENTER pid=0.1 asid=1
+Phoenix system: init (type ok then Enter)
+Phoenix initramfs: file I/O works
+Phoenix initramfs: file I/O works
+Phoenix child: running
+child: reaped=1.1 fault=false frames=restored
+Phoenix child: running
+child: reaped=1.2 fault=false frames=restored
+PHOENIX_USER_FAULT pid=1.3 kind=Permission pc=0x40004c address=Some(18446743525028003840) esr=0x9200000f
+child: reaped=1.3 fault=true frames=restored
+PHOENIX_USER_FAULT pid=1.4 kind=Translation pc=0x400058 address=Some(0) esr=0x92000006
+child: reaped=1.4 fault=true frames=restored
+PHOENIX_USER_FAULT pid=1.5 kind=Permission pc=0x7fffffef90 address=Some(549755809680) esr=0x8200000f
+child: reaped=1.5 fault=true frames=restored
+PHOENIX_USER_FAULT pid=1.6 kind=IllegalInstruction pc=0x400068 address=None esr=0x2000000
+child: reaped=1.6 fault=true frames=restored
+PHOENIX_USER_FAULT pid=1.7 kind=BadSystemCall pc=0x400074 address=None esr=0x56000001
+child: reaped=1.7 fault=true frames=restored
+PHOENIX_USER_FAULT pid=1.8 kind=Permission pc=0x40007c address=Some(4194304) esr=0x9200004f
+child: reaped=1.8 fault=true frames=restored
+PHOENIX_USER_FAULT pid=1.9 kind=Translation pc=0x400088 address=Some(150994944) esr=0x92000006
+child: reaped=1.9 fault=true frames=restored
+PHOENIX_USER_FAULT pid=1.10 kind=Translation pc=0x400094 address=Some(1073741824) esr=0x92000005
+child: reaped=1.10 fault=true frames=restored
+PHOENIX_USER_FAULT pid=1.11 kind=Translation pc=0x4000a0 address=Some(549755789312) esr=0x92000007
+child: reaped=1.11 fault=true frames=restored
+Phoenix system: file, console, child and fault checks passed
+event: seq=1 ticks=22708579 kind=2 a=0x0 b=0x1
+event: seq=2 ticks=23948301 kind=2 a=0x1 b=0x1
+event: seq=3 ticks=24089689 kind=3 a=0x1 b=0x2
+event: seq=4 ticks=24158442 kind=2 a=0x1 b=0x2
+event: seq=5 ticks=24186287 kind=3 a=0x2 b=0x2
+event: seq=6 ticks=24244375 kind=2 a=0x1 b=0x3
+event: seq=7 ticks=24285170 kind=4 a=0x3 b=0x9200000f
+event: seq=8 ticks=24379266 kind=3 a=0x3 b=0x2
+event: seq=9 ticks=24462123 kind=2 a=0x1 b=0x4
+event: seq=10 ticks=24467312 kind=4 a=0x4 b=0x92000006
+event: seq=11 ticks=24522428 kind=3 a=0x4 b=0x2
+event: seq=12 ticks=24591337 kind=2 a=0x1 b=0x5
+event: seq=13 ticks=24599261 kind=4 a=0x5 b=0x8200000f
+event: seq=14 ticks=24661944 kind=3 a=0x5 b=0x2
+event: seq=15 ticks=24708268 kind=2 a=0x1 b=0x6
+event: seq=16 ticks=24713782 kind=4 a=0x6 b=0x2000000
+event: seq=17 ticks=24730497 kind=3 a=0x6 b=0x2
+event: seq=18 ticks=24776010 kind=2 a=0x1 b=0x7
+event: seq=19 ticks=24780918 kind=4 a=0x7 b=0x56000001
+event: seq=20 ticks=24796125 kind=3 a=0x7 b=0x2
+event: seq=21 ticks=24844293 kind=2 a=0x1 b=0x8
+event: seq=22 ticks=24849064 kind=4 a=0x8 b=0x9200004f
+event: seq=23 ticks=24865341 kind=3 a=0x8 b=0x2
+event: seq=24 ticks=24917739 kind=2 a=0x1 b=0x9
+event: seq=25 ticks=24922678 kind=4 a=0x9 b=0x92000006
+event: seq=26 ticks=24939674 kind=3 a=0x9 b=0x2
+event: seq=27 ticks=24993330 kind=2 a=0x1 b=0xa
+event: seq=28 ticks=24998511 kind=4 a=0xa b=0x92000005
+event: seq=29 ticks=25015750 kind=3 a=0xa b=0x2
+event: seq=30 ticks=25070347 kind=2 a=0x1 b=0xb
+event: seq=31 ticks=25076275 kind=4 a=0xb b=0x92000007
+event: seq=32 ticks=25093097 kind=3 a=0xb b=0x2
+events: lost=1
+system: children=11 faults=9 console-read=3 frame-accounting=ok
+PHOENIX_SYSTEM_OK
+QEMU_TEST_LOG=/workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/qemu-system.log
+QEMU_TEST_RESULT=pass

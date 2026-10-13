@@ -1,0 +1,21 @@
+==> build phoenix-system
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.00s
+==> strip user debug data
+==> build phoenix-child
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.00s
+==> strip user debug data
+==> build phoenix-fault
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.00s
+==> strip user debug data
+ok: independently linked init/child/fault ELF images and system archive inspected
+==> build AArch64 kernel ELF (system)
+   Compiling phoenix-kernel v0.1.0-pre.1 (/workspace/phoenix/kernel)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1.70s
+==> create raw AArch64 kernel image
+artifact: ELF: /workspace/phoenix/target/phoenix/build/system/aarch64-unknown-none-softfloat/debug/phoenix-kernel
+artifact: raw image: /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-system.bin
+artifact: linker map: /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-system.map
+ok: expected terminal sentinel is embedded: PHOENIX_SYSTEM_OK
+ok: AArch64 ELF machine, entry, load addresses, and symbols
+ok: bootstrap page table, exception vectors, BSS, stack, image, and map
+package: /workspace/phoenix/target/phoenix/packages/0.1.0-pre.1
