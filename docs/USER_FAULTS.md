@@ -1,5 +1,12 @@
 # Terminal User Faults
 
+> Construction-stage mechanism record: runtime-status and remaining-work lists below
+> describe the earlier integration boundary. Current support, limits and evidence are
+> maintained in [0.1-CONTRACT.md](0.1-CONTRACT.md) and
+> [RUNTIME_VALIDATION.md](RUNTIME_VALIDATION.md); those records supersede historical
+> pending statements here. The ownership design remains applicable unless the
+> current contract explicitly refines it.
+
 This document defines Phoenix's first boundary between an EL0 process fault and an EL1 kernel
 fault. Classification and lifecycle behavior are Host Tested and Cross Compiled. No deliberate
 fault has yet executed under QEMU.

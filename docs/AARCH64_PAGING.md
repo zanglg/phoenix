@@ -1,5 +1,12 @@
 # AArch64 Paging
 
+> Construction-stage mechanism record: runtime-status and remaining-work lists below
+> describe the earlier integration boundary. Current support, limits and evidence are
+> maintained in [0.1-CONTRACT.md](0.1-CONTRACT.md) and
+> [RUNTIME_VALIDATION.md](RUNTIME_VALIDATION.md); those records supersede historical
+> pending statements here. The ownership design remains applicable unless the
+> current contract explicitly refines it.
+
 This document describes both the temporary boot translation regime and the Host Tested stage-1
 mapping mechanisms. A focused image now constructs and publishes final `TTBR1_EL1` tables, but it
 has been Runtime Verified on the recorded QEMU 9.1.3 environment. The platform layout and

@@ -1,5 +1,12 @@
 # Final Direct-Map Capability
 
+> Construction-stage mechanism record: runtime-status and remaining-work lists below
+> describe the earlier integration boundary. Current support, limits and evidence are
+> maintained in [0.1-CONTRACT.md](0.1-CONTRACT.md) and
+> [RUNTIME_VALIDATION.md](RUNTIME_VALIDATION.md); those records supersede historical
+> pending statements here. The ownership design remains applicable unless the
+> current contract explicitly refines it.
+
 This document defines the checked bridge from allocator-managed physical frames to the active
 AArch64 QEMU `virt` final TTBR1 direct map. Its planning and ownership checks are Host Tested and
 Cross Compiled. The refactored target access path has not been rerun and is Runtime Pending.

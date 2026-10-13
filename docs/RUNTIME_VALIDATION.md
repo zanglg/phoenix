@@ -1,81 +1,86 @@
-# Runtime Validation Ledger
+# Runtime validation ledger
 
-This ledger prevents compiled or statically inspected code from being mistaken for code that has
-executed on the target platform.
+The 0.1 support boundary is defined in [0.1-CONTRACT.md](0.1-CONTRACT.md).
+Host Tested, Cross Compiled and ELF Inspected evidence is kept distinct from
+Runtime Verified behavior. Current evidence uses QEMU 10.0.13 on x86_64 Linux,
+`virt-9.1,virtualization=on,gic-version=3,highmem=off`, Cortex-A72, TCG, 512 MiB
+and one CPU. The direct-EL1 case changes only virtualization to off.
 
-## States
+The current stable compiler is Rust 1.99.0. Rust 1.95.0 independently passes target
+checking and all host tests. The supported artifact profile is debug with forced
+frame pointers and incremental compilation disabled. The environment installs
+Rust and QEMU locally under `/workspace/toolchains`; the user explicitly approved
+installing and executing QEMU as an exception to the absent-emulator agent rule.
 
-- **Runtime Pending**: implementation exists, but no target execution evidence exists.
-- **Runtime Verified**: the documented command, environment, expected output, and failure path
-  were all exercised successfully.
+[validation/REPORT.md](validation/REPORT.md) records exact source identity, tool
+versions, commands, outcomes and reproduction hashes. Retained raw logs live beside
+that report. Each new harness requires ordered proof and a clean guest exit within
+ten seconds. Legacy focused smoke tests stop QEMU after their terminal marker.
 
-An entry can become Runtime Verified only by recording the environment, exact command, relevant
-output, and source commit. Host tests, cross-compilation, disassembly, and ELF inspection are
-valuable evidence but cannot close an entry in this ledger.
+## Current evidence
 
-## Recorded environment
+Every Runtime Verified row below applies only to the stated bounded test and board.
+Malformed inputs and injected hardware/backend failures also have host coverage;
+that coverage does not imply those failures were reproduced in actual hardware.
 
-The first target-validation run used QEMU emulator version 9.1.3 (`v9.1.3`) from
-`/Volumes/workspace/qemu/monterey-aarch64/build/qemu-system-aarch64`, on an Apple Silicon host.
-The exact board was `virt-9.1,virtualization=on,gic-version=3,highmem=off`, CPU `cortex-a72`,
-TCG, 512 MiB RAM, and one CPU. Source identified itself as commit `8792647e370e`, dirty, debug,
-with the validation fixes uncommitted. Each bounded command used that directory at the front of
-`PATH`, completed inside the documented ten-second timeout, and wrote its transcript to the
-generated `qemu-*.log` path documented in `docs/QEMU.md`.
+| ID | State | Observed evidence |
+| --- | --- | --- |
+| RUN-BOOT-001 | Runtime Verified | `test-boot` reaches the build identity and PHOENIX_BOOT_OK |
+| RUN-BOOT-002 | Runtime Verified | `test-runtime` state/EL1 cases observe EL2 and EL1 entry, then EL1 Rust |
+| RUN-BOOT-003 | Runtime Verified | Higher-half Rust and stack continue across bootstrap and final TTBR1 |
+| RUN-BOOT-004 | Runtime Verified | Full BSS checked before singleton writes; bounded/aligned SP and exact VBAR asserted |
+| RUN-CONSOLE-001 | Runtime Verified | PL011 output/flush, stdin input and exact system completion |
+| RUN-PANIC-001 | Runtime Verified | Intentional panic, bounded nonempty trace, exact-ELF symbolization and guest exit |
+| RUN-SMOKE-001 | Runtime Verified | All bounded harnesses complete; new protocols require exit status 0 |
+| RUN-DTB-001 | Runtime Verified | Real boot DTB accepted with CPU, RAM and reservation ownership |
+| RUN-MM-001 | Runtime Verified | DTB allocator owns and tests all three free-range endpoints, exhausts and restores them |
+| RUN-MM-002 | Runtime Verified | First/last private pages clear/write/read; outside bootstrap window rejected before access |
+| RUN-MM-003 | Runtime Verified | `test-memory` reports boundary/exhaustion restoration and PHOENIX_MEMORY_OK |
+| RUN-KHEAP-001 | Runtime Verified | Guarded alias read/write, aligned allocation, byte/metadata failure and reuse; both guards fault |
+| RUN-MMU-001 | Runtime Verified | Current eight-table final map; text write and data execution cause permission faults |
+| RUN-MMU-002 | Runtime Verified | System EL0 low RAM and PL011 aliases cause translation faults after TTBR0 replacement |
+| RUN-MMU-003 | Runtime Verified | Retained direct-map clear/read/write; unmanaged and cross-page requests rejected |
+| RUN-ASID-001 | Runtime Verified | System reads back every TTBR0 root/ASID; ASID 2 reused across normal/faulting children after TLBI |
+| RUN-KSTACK-001 | Runtime Verified | Controlled boot-guard access reports expected translation fault and recovers |
+| RUN-KSTACK-002 | Runtime Verified | Both runtime guards fault while usable leaves remain mapped; two workers enter, preempt, sleep, exit and return 16 frames |
+| RUN-EXC-001 | Runtime Verified | Fatal BRK reaches vector 4 with exact syndrome/PC and complete register report |
+| RUN-EXC-002 | Runtime Verified | x0–x30, SP_EL0, status, PC, syndrome and ERET round trip; fault FAR checked separately |
+| RUN-SYNC-001 | Runtime Verified | Timer IRQ stays pending while lock held; enters and acquires it after mask restoration |
+| RUN-IRQ-001 | Runtime Verified | GIC publication/activation, exact PPI 30, dispatch, EOI, return and delivery shutdown |
+| RUN-TIME-001 | Runtime Verified | Monotonic observations, bound one-shot delivery, 2 ms preemption and absolute thread sleep |
+| RUN-UFAULT-001 | Runtime Verified | Nine faults terminate only the child, retain PC/address/syndrome and resume parent after reclaim |
+| RUN-ELF-001 | Runtime Verified | Strict independently linked init/child/fault ELF images are populated, mapped and entered |
+| RUN-STACK-001 | Runtime Verified | Focused init verifies native SP, argc/argv/envp, auxv and terminators |
+| RUN-UCOPY-001 | Runtime Verified | Valid/invalid cross-page source/destination copies; failed destination leaves first page and offset unchanged |
+| RUN-FS-001 | Runtime Verified | Archive and tmp read/write/EOF/close; descriptor, file-count and byte-capacity exhaustion/recovery |
+| RUN-INIT-001 | Runtime Verified | Current loaded-init GIC/publication protocol and minimal system both pass |
+| RUN-EL0-001 | Runtime Verified | Static first-EL0 fixture handles unknown syscall and exit; dynamic programs enter/return separately |
+| RUN-ABI-001 | Runtime Verified | Calls 0–5, argument/result preservation, EFAULT/ENOSYS/EAGAIN/EMFILE/ENOSPC and parent restoration |
 
-The initial `test-kernel-map` attempt failed before its enter marker. QEMU exception tracing and
-disassembly identified a construction-stack overflow: an approximately 305 KiB outer frame plus
-an approximately 530 KiB nested planner frame exceeded the former 512 KiB reservation. The
-correcting source uses a 1 MiB construction stack and in-place transactional plan updates. The
-repeated probe and every other positive probe below passed. This changes neither the 4 KiB page
-size nor the 512 MiB QEMU memory model.
+## Retained failure history
 
-## Validation ledger
+The earlier QEMU 9.1.3 environment and its pending checklist are preserved in
+[INITIAL_RUNTIME_LEDGER.md](validation/INITIAL_RUNTIME_LEDGER.md). Those historical
+statuses do not override current observations.
 
-| ID | Capability | State | Evidence required |
-| --- | --- | --- | --- |
-| RUN-BOOT-001 | Enter `_start` through QEMU direct kernel boot | Runtime Verified | `cargo xtask test-boot` on the recorded board reached early output and `PHOENIX_BOOT_OK` |
-| RUN-BOOT-002 | Normalize EL2 or EL1 state and enter Rust at EL1 | Runtime Pending | Observed EL path and `kernel_main` entry |
-| RUN-BOOT-003 | Temporary identity and higher-half mappings | Runtime Verified | The QEMU boot probe continued in higher-half Rust code through `PHOENIX_BOOT_OK` |
-| RUN-BOOT-004 | BSS initialization and 1 MiB boot-construction stack | Runtime Pending | Runtime probes confirm zeroed BSS and stack bounds/alignment without crossing the linker-owned range |
-| RUN-CONSOLE-001 | QEMU `virt` PL011 output and flush | Runtime Verified | Complete build identity and `PHOENIX_BOOT_OK` were observed |
-| RUN-PANIC-001 | Early panic reporting | Runtime Pending | Deliberate panic emits `PHOENIX_PANIC` before timeout |
-| RUN-SMOKE-001 | Bounded automated boot smoke test | Runtime Verified | `cargo xtask test-boot` observed `PHOENIX_BOOT_OK` and terminated predictably |
-| RUN-DTB-001 | Parse the QEMU-provided DTB in early boot | Runtime Verified | `test-memory` accepted the real DTB and reported size 1,048,576 and boot CPU 0 |
-| RUN-MM-001 | Initialize the frame allocator from discovered memory | Runtime Verified | `test-memory` reported 130,530 free frames and allocated, scrubbed, and restored one private frame |
-| RUN-MM-002 | Mutate private frames through the bootstrap high RAM alias | Runtime Pending | First/last valid pages clear and copy correctly; out-of-window frames are rejected without a target fault |
-| RUN-MM-003 | End-to-end boot memory integration probe | Runtime Verified | `cargo xtask test-memory` reached `PHOENIX_MEMORY_OK` after the documented DTB, reservation, round-trip, and ownership-restoration path |
-| RUN-KHEAP-001 | Initialize and exercise the fallible heap through the final direct map | Runtime Pending | The Cross Compiled/ELF Inspected final-map path requires ordered `PHOENIX_KERNEL_MAP_ENTER`, closed-gate `PHOENIX_GIC_PREPARED`, `PHOENIX_IRQ_RUNTIME_PUBLISHED`, post-TTBR1 four-frame heap initialization, aligned allocation, recoverable byte/metadata exhaustion, release/reuse, `PHOENIX_KERNEL_HEAP_OK`, subsequent `PHOENIX_KERNEL_STACK_OK`, and continued progress to `PHOENIX_KERNEL_MAP_OK`; the earlier final-map run predates this protocol |
-| RUN-MMU-001 | Install final permission-separated kernel tables | Runtime Verified | `cargo xtask test-kernel-map` reached ordered `PHOENIX_KERNEL_MAP_ENTER`/`PHOENIX_KERNEL_MAP_OK` through the historical text/rodata/data/stack/PL011 mappings. That evidence predates the current eight-table GIC extension; its target execution is tracked by `RUN-IRQ-001`, and negative permission probes remain separately Pending |
-| RUN-MMU-002 | Retire temporary TTBR0 aliases | Runtime Pending | No bootstrap handle or low pointer remains, TTBR0 is replaced, low RAM/MMIO addresses fault, and higher-half execution survives the maintenance sequence |
-| RUN-MMU-003 | Access allocator-managed RAM through the retained final-map capability | Runtime Pending | After final TTBR1 publication, the exact table owner and offline proof permit valid owned-frame read/write/clear operations and reject unmanaged or cross-page requests without a target fault |
-| RUN-ASID-001 | Publish a nonzero process ASID | Runtime Pending | GDB observes ASID 1 in TTBR0 for both EL0 variants, address translation survives the switch, and ASID zero is not used for process mappings |
-| RUN-KSTACK-001 | Final boot-stack guard translation fault | Runtime Pending | After final TTBR1 publication, GDB confirms the guard has no valid descriptor and a controlled access reports the expected EL1 data abort without corrupting the live stack |
-| RUN-KSTACK-002 | Publish, enter, and retire an owned guarded runtime stack | Runtime Pending | Final-map paths Cross Compile a retained arena owner plus prelinked empty L2/L3 topology. The restricted AArch64 mapper is Host Tested with read/mismatch injection, exact RW/NX leaves, preserved guards, ownership tokens, and ordered maintenance before release. The focused image Cross Compiles/ELF Inspects an ordered `PHOENIX_KERNEL_STACK_OK` path that allocates, publishes, round-trips via the virtual alias, retires, verifies/scrubs physical backing, and restores ownership without switching SP. The current eight-table image has not run on target. Closure requires observing that path, aligned stack entry, and target proof that guard leaves stay invalid and TLB invalidation completes before frame return |
-| RUN-EXC-001 | Install and enter the EL1 exception vector table | Runtime Pending | Installed `VBAR_EL1` points at the linked 2 KiB table and a deliberate fault emits `PHOENIX_EXCEPTION` from the correct slot |
-| RUN-EXC-002 | Preserve and restore the exception frame | Runtime Pending | All `x0..x30`, SP, PC, status, syndrome, and fault-address values match controlled probes |
-| RUN-SYNC-001 | Exclude local IRQ entry across one locked critical section | Runtime Pending | Both final-map paths Cross Compile the AArch64 IRQ-save backend for pinned runtime publication, common IRQ lookup, and an installed one-shot consumer. Host tests cover runtime-before-timer/consumer ordering, continuous masking across schedule/bind and rollback, and delivery-time consumer acquisition only after device locks release and EOI completes. Neither current path activates or unmasks IRQs. A controlled target IRQ must be deferred while normal context holds the lock, enter after Release and exact `DAIF.I` restoration, acquire the published runtime and timer state without deadlock, and allow continued progress |
-| RUN-IRQ-001 | Discover and initialize the pinned GICv3 interrupt path | Runtime Pending | The Cross Compiled final-map paths configure EL2 SRE permission when applicable, require the real DTB to yield the expected non-overlapping GICD/GICR ranges and timer parent/PPI, select current `MPIDR_EL1` affinity through PIDR/TYPER scanning, map the 64 KiB GICD plus only that 128 KiB RD/SGI pair as 48 exact L3 device leaves, bind them to the retained active owner, check `DAIF.I`, run 100,000-read-bounded closed-gate preparation, pin the combined GIC/timer runtime, Release-publish its handle, install the unbound post-EOI consumer, and require ordered `PHOENIX_GIC_PREPARED`/`PHOENIX_IRQ_RUNTIME_PUBLISHED`. Every IRQ slot Cross Compiles an Acquire-checked lookup and Host tests cover matching-PPI activation, atomic schedule/bind cancellation rollback, special/timer/unexpected dispatch, exact one-shot consumption, remembered completion obligations, EOI, and shutdown. Target execution must first observe both current publication markers, then activate and invoke schedule/bind for a controlled PPI, acknowledge, dispatch, consume, EOI/deactivate, return, and preserve the documented lock order. None of these current target steps has been observed |
-| RUN-TIME-001 | Advance monotonic time and deliver a scheduled timer event | Runtime Pending | Both final-map paths Cross Compile a one-time physical-timer claim, explicit disable/mask, initial counter read, locked one-event service, pinned lookup publication, and installed but unbound one-shot consumer. Host tests cover queue/programming transaction, rollback, recovery, callbacks-after-unlock, private permit semantics, continuous-mask schedule/bind, cancellation after binding rejection, terminal rollback failure, exact ID/event validation, and no false completion on invalid batches. No target run has observed initialization, and boot never invokes schedule/bind, issues `Arm`, activates GIC delivery, or unmasks IRQs. On the pinned board, repeated counter reads must never regress, checked frequency conversion must be correct, the programmed timer PPI must be acknowledged through the GIC, the exact due event must be retained after EOI and outside queue protection, and execution must continue after interrupt return |
-| RUN-UFAULT-001 | Classify and terminate a faulting EL0 process | Runtime Pending | Deliberate translation, permission, execute-never, illegal-instruction, and bad-SVC cases retain exact PC/address/syndrome data, move loaded init from Running to Faulted exactly once, emit `PHOENIX_USER_FAULT` before the matching probe failure sentinel, and never masquerade as `PHOENIX_EXCEPTION` or success |
-| RUN-ELF-001 | Populate and map a validated AArch64 ELF image | Runtime Verified | `test-init` selected the inspected ELF and reached the loader's terminal success path |
-| RUN-STACK-001 | Consume the native initial user stack | Runtime Verified | `test-init` reached success only after init's aligned-SP, argc/argv/envp, auxv, and terminator self-validation |
-| RUN-UCOPY-001 | Copy an active user range through retained frame ownership | Runtime Pending | After final TTBR1 publication, valid and invalid same-page/cross-page reads and writes use only owned direct-mapped frames and return exact bytes or `BadAddress` without a kernel fault |
-| RUN-FS-001 | Read a process-local initramfs descriptor into user memory | Runtime Verified | `test-init` emitted exact `etc/motd` bytes after bounded `open`, `read`, EOF, and `close` |
-| RUN-INIT-001 | Execute the separately linked native init ELF | Runtime Verified | The historical `cargo xtask test-init` run observed its then-required ordered map/EL0 markers, exact output, and `PHOENIX_INIT_OK`; the current protocol adds ordered `PHOENIX_GIC_PREPARED`/`PHOENIX_IRQ_RUNTIME_PUBLISHED` after GIC/timer-runtime publication, whose target execution is tracked by `RUN-IRQ-001` and `RUN-TIME-001`, while deliberate fault behavior remains `RUN-UFAULT-001` Pending |
-| RUN-EL0-001 | Enter and return from the first EL0 program | Runtime Verified | `cargo xtask test-el0` observed `PHOENIX_EL0_ENTER`/`PHOENIX_EL0_OK` after the ASID-1 TTBR0 path, `eret`, unknown syscall, and `exit(42)` |
-| RUN-ABI-001 | Dispatch native `SVC #0` calls | Runtime Pending | Register arguments, return values, unknown calls, `write`, and `exit` match ABI revision 0 |
+The current dev baseline (413f8a348210) initially timed out after PHOENIX_BOOT_OK
+in the final-map probe. Exception tracing showed code corruption after debug
+planner stack use exceeded the existing 1 MiB stack (outer approximately 307 kB
+plus nested approximately 796 kB). Replacing private by-value plan updates with
+in-place updates fixed the runtime failure without enlarging the stack. The larger
+system image separately required distinguishing the permission window from its
+RW/NX stack tail; both bounds remain enforced. A concise failed transcript is
+retained in `validation/baseline-map-failure.log`.
 
-## Validation procedure template
+The first artifact reproduction check found differing incremental object names
+in the linker map while the ELF/raw image matched. Artifact builds now disable
+incremental compilation. The repeated seven-file comparison includes the full map
+and passes without filtering its contents.
 
-When an emulator becomes available, update each entry with:
+## Remaining boundary
 
-1. QEMU version, host architecture, machine version, CPU model, and memory size;
-2. exact Phoenix commit and build profile;
-3. exact build and launch commands;
-4. complete serial output relevant to the check;
-5. timeout and process-exit result;
-6. pass/fail result and any discovered contract correction.
-
-Do not delete failed evidence. Fix the implementation or contract, retain a concise failure note,
-and repeat the validation on the correcting commit.
+No active 0.1 runtime gate remains pending at the documented scope. SMP, nested
+interrupts, concurrent userspace, optimized builds, demand paging, signal recovery,
+new devices and real hardware remain unimplemented/deferred rather than verified.
+Future changes to capacities, stack workloads or these execution modes must add
+new ledger entries and fresh target evidence.

@@ -578,7 +578,12 @@ fn parse_timer_interrupts(
         });
     }
     let mut ppis: [Option<GicPpi>; ARCH_TIMER_INTERRUPT_COUNT] = [None; ARCH_TIMER_INTERRUPT_COUNT];
-    for (index, entry) in value.chunks_exact(INTERRUPT_SPECIFIER_BYTES).enumerate() {
+    for (index, entry) in value
+        .as_chunks::<INTERRUPT_SPECIFIER_BYTES>()
+        .0
+        .iter()
+        .enumerate()
+    {
         let ppi = parse_ppi(index, entry)?;
         if ppis[..index]
             .iter()

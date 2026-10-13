@@ -145,6 +145,24 @@ impl ExceptionFrame {
         }
     }
 
+    /// Initial native EL0 frame, with IRQs masked for serialized syscalls.
+    pub const fn user_process(entry: u64, stack: u64) -> Self {
+        let mut frame = Self::zeroed();
+        frame.elr_el1 = entry;
+        frame.sp_el0 = stack;
+        frame.spsr_el1 = 0x3c0;
+        frame
+    }
+
+    /// Initial EL1h thread state: IRQ enabled, D/A/F masked, integer state zero.
+    pub const fn kernel_thread(entry: u64, argument: u64) -> Self {
+        let mut frame = Self::zeroed();
+        frame.general[0] = argument;
+        frame.elr_el1 = entry;
+        frame.spsr_el1 = 0x345;
+        frame
+    }
+
     /// Read a general-purpose register by architectural number.
     pub const fn general(&self, register: usize) -> Option<u64> {
         if register < Self::GENERAL_REGISTER_COUNT {

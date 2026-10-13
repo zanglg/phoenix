@@ -17,7 +17,7 @@ The test baseline is pinned to:
 | --- | --- | --- |
 | Machine | `virt-9.1` | Versioned machine behavior rather than the moving `virt` alias |
 | Virtualization | enabled | Exercise Phoenix's supported EL2-to-EL1 path |
-| GIC | version 3 | Initial interrupt-controller target, though interrupts are not enabled yet |
+| GIC | version 3 | GICv3 physical timer delivery is exercised by test-runtime |
 | CPU | `cortex-a72` | Explicit 64-bit CPU model supported by the pinned board |
 | Accelerator | TCG | Works independently of the host CPU architecture |
 | RAM | 512 MiB | Fits the temporary RAM block and keeps tests modest |
@@ -202,3 +202,30 @@ KVM/HVF acceleration, multiple CPUs, real boards, UEFI, networking, storage, gra
 secure-world firmware, migration, and performance benchmarking are deliberately excluded from the
 current runner. QEMU execution is also deliberately excluded from emulator-free CI rather than
 represented as a passing test.
+
+## Current 0.1 extensions
+
+The original smoke protocols above are retained. Current results use QEMU 10.0.13
+on x86_64 Linux with the same pinned `virt-9.1` board; see the runtime ledger for
+source identity and retained logs. The earlier construction-state remarks about
+unobserved IRQs or pending negative tests are superseded by that ledger.
+
+`cargo xtask test-runtime` builds the final-map image and executes thirteen isolated
+cases: state (EL2), state (direct EL1), panic, registers, boot guard, readonly, NX,
+timer/IRQ lock, threads, heap lower guard, heap upper guard mapped stack guards and a fatal exception report.
+Each command line includes `-semihosting-config enable=on,target=native` and one
+explicit `phoenix.probe=` boot argument. Success requires the ordered case-specific
+proof, exactly one `PHOENIX_TEST_OK` line and QEMU exit status 0, inside ten seconds.
+The panic case accepts only the deliberate panic with a real trace. Other cases
+reject panic/fatal-exception output. QEMU is killed and reaped on timeout/error.
+
+`cargo xtask test-system` builds three independent user ELFs and a deterministic
+archive, supplies `ok\n` through stdin, and selects `phoenix.system-test`.
+It requires two ordinary child reaps, nine fault reaps with restored frame counts,
+file/console completion, the exact system summary, `PHOENIX_SYSTEM_OK` and exit 0.
+Its input, output capture and timeout are bounded. `run-system` supplies no test
+argument or semihosting switch; the interactive conformance system halts normally.
+
+These new transcripts are `qemu-<case>.log` and `qemu-system.log` beside the other
+artifacts. The harness prints each complete command line, log path and pass/fail
+result. The tested debug kernel uses forced frame pointers for offline diagnostics.

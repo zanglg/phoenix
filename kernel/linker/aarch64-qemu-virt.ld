@@ -123,5 +123,8 @@ ASSERT(__rodata_start < __rodata_end && __rodata_end <= __data_start,
        "final rodata range must precede writable data")
 ASSERT(__data_start < __data_end,
        "final writable range must be non-empty")
-ASSERT(__kernel_end <= KERNEL_VIRT_OFFSET + 0x40200000,
-       "kernel must fit in the first 2 MiB RAM window for final permission splitting")
+ASSERT(__rodata_end <= KERNEL_VIRT_OFFSET + 0x40200000 &&
+       __boot_stack_guard_end <= KERNEL_VIRT_OFFSET + 0x40200000,
+       "permission overrides and guard must fit in the first 2 MiB RAM window")
+ASSERT(__kernel_end <= KERNEL_VIRT_OFFSET + 0x40400000,
+       "kernel image including RW/NX stack tail must fit in the first 4 MiB RAM window")

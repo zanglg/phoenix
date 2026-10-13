@@ -7,7 +7,27 @@ numbers and remains explicitly unstable before 1.0.0. During construction, chang
 
 ## [Unreleased]
 
+## [0.1.0-pre.1] - 2026-10-13
+
 ### Added
+
+- Real EL1/EL2 state, panic, full-register, permission and guarded-memory probes with
+  guest-driven exits and bounded QEMU evidence.
+- Active GICv3 timer/IRQ-lock verification, round-robin kernel threads, preemption,
+  sleep, idle, complete context restoration and guarded-stack reclamation.
+- A four-page heap alias with two unmapped guards and transactional descriptor preflight.
+- Native minimal system with independent init/child ELF programs, synchronous parent wait,
+  fault containment, checked cross-page copies, frame reclamation and safe ASID retirement/reuse.
+- Read-only initramfs plus bounded writable tmp files, process-owned descriptors, console
+  input, atomic capacity failures and resource-exhaustion recovery tests.
+- Bounded frame-pointer traces, exact-ELF offline symbolization, structured diagnostic ring,
+  versioned artifact packaging, SHA-256 checksums and compiler/source provenance.
+- Current 0.1 contract, unsafe invariant review, complete runtime report and MSRV checks.
+- A runtime regression fix replacing large by-value final-map planning copies with in-place
+  private plan updates; the 1 MiB construction stack remains unchanged.
+- Separate first-2-MiB permission/guard and first-4-MiB image bounds, enforced by linker
+  and artifact inspection, for the larger debug system image's RW/NX stack tail.
+
 
 - Initial Rust 2024 workspace with a single Phoenix version source.
 - Stable Rust toolchain policy, Rust 1.95 MSRV, and AArch64 bare-metal target.

@@ -4,6 +4,20 @@
 #[cfg(not(target_arch = "aarch64"))]
 compile_error!("the Phoenix kernel binary currently supports only AArch64");
 
+#[cfg(all(
+    feature = "kernel-map-probe",
+    not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+))]
+mod kernel_threads;
+#[cfg(all(
+    feature = "kernel-map-probe",
+    not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+))]
+mod runtime_probe;
+
+#[cfg(feature = "loaded-init-probe")]
+mod system;
+
 use core::fmt::Write;
 use core::panic::PanicInfo;
 #[cfg(any(
@@ -162,6 +176,7 @@ core::arch::global_asm!(include_str!("arch/aarch64/user_probe.S"));
 const BOOT_SUCCESS_SENTINEL: &str = "PHOENIX_BOOT_OK";
 const PANIC_SENTINEL: &str = "PHOENIX_PANIC";
 const EXCEPTION_SENTINEL: &str = "PHOENIX_EXCEPTION";
+mod events;
 #[cfg(any(feature = "el0-probe", feature = "loaded-init-probe"))]
 const USER_FAULT_SENTINEL: &str = "PHOENIX_USER_FAULT";
 #[cfg(feature = "boot-memory-probe")]
@@ -483,17 +498,32 @@ static mut KERNEL_MAP_RUNTIME: MaybeUninit<KernelMapRuntime> = MaybeUninit::unin
 
 /// Rust entry point reached by the AArch64 bootstrap.
 #[unsafe(no_mangle)]
-pub extern "C" fn kernel_main(boot_argument: usize) -> ! {
+pub extern "C" fn kernel_main(boot_argument: usize, entry_exception_level: usize) -> ! {
+    // SAFETY: This is the first Rust operation after assembly zeroed BSS; the
+    // sole CPU has IRQs masked and no BSS singleton has been accessed yet.
+    unsafe { phoenix_kernel::arch::aarch64::diagnostics::validate_boot_bss() };
     // SAFETY: bootstrap maps the complete linked image as executable normal
     // memory, provides an aligned EL1 stack, and keeps exceptions masked.
     unsafe {
         install_exception_vectors();
     }
+    events::record(1, entry_exception_level as u64 >> 2, boot_argument as u64);
     let mut console = Console::new(EarlyPl011::new());
     let _ = writeln!(console, "{}", BuildInfo::CURRENT);
+    let _ = writeln!(
+        console,
+        "entry exception level: EL{}",
+        entry_exception_level >> 2
+    );
     let _ = writeln!(console, "boot argument: {boot_argument:#018x}");
     let _ = writeln!(console, "{BOOT_SUCCESS_SENTINEL}");
     console.sink_mut().flush();
+
+    #[cfg(all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    ))]
+    runtime_probe::select(boot_argument);
 
     #[cfg(feature = "boot-memory-probe")]
     run_boot_memory_probe(boot_argument, &mut console);
@@ -585,6 +615,55 @@ fn run_boot_memory_probe(boot_argument: usize, console: &mut Console<EarlyPl011>
         allocator.total_free_frames(),
         expected_free_frames,
         "memory-probe frame was not restored"
+    );
+
+    // Own every reservation-filtered range without touching reserved pages.
+    // Probe both endpoints, observe explicit exhaustion, then restore all ranges.
+    let mut held = [None; MEMORY_MAP_CAPACITY];
+    let mut ranges = 0;
+    while let Some(range) = allocator.free_ranges().first().copied() {
+        let owned = allocator
+            .allocate_contiguous(range.len(), 1)
+            .unwrap()
+            .unwrap();
+        for number in [owned.start_frame_number(), owned.end_frame_number() - 1] {
+            let endpoint =
+                phoenix_kernel::memory::PageFrame::from_start(PhysAddr::new(number * 4096))
+                    .unwrap();
+            ProcessImageMemory::clear_frame(&mut physical_memory, endpoint).unwrap();
+            ProcessImageMemory::write_frame(
+                &mut physical_memory,
+                endpoint,
+                4096 - PROBE_BYTES.len(),
+                PROBE_BYTES,
+            )
+            .unwrap();
+            physical_memory
+                .read_frame(endpoint, 4096 - PROBE_BYTES.len(), &mut observed)
+                .unwrap();
+            assert_eq!(observed, PROBE_BYTES);
+            ProcessImageMemory::clear_frame(&mut physical_memory, endpoint).unwrap();
+        }
+        held[ranges] = Some(owned);
+        ranges += 1;
+    }
+    assert!(allocator.allocate().unwrap().is_none());
+    for owned in held.into_iter().flatten() {
+        allocator.deallocate_contiguous(owned).unwrap();
+    }
+    assert_eq!(allocator.total_free_frames(), expected_free_frames);
+    for address in [0x3fff_f000, 0x8000_0000] {
+        let outside =
+            phoenix_kernel::memory::PageFrame::from_start(PhysAddr::new(address)).unwrap();
+        assert!(
+            physical_memory
+                .read_frame(outside, 0, &mut observed)
+                .is_err()
+        );
+    }
+    let _ = writeln!(
+        console,
+        "memory-boundaries: ranges={ranges} endpoints=ok exhaustion=ok restored=ok outside=rejected"
     );
 
     let _ = writeln!(
@@ -711,6 +790,17 @@ fn run_kernel_map_probe(boot_argument: usize, console: &mut Console<EarlyPl011>)
         console,
     );
 
+    if runtime_probe::threads_selected() {
+        kernel_threads::run(
+            runtime.tables,
+            runtime.direct_map_layout,
+            runtime.allocator,
+            runtime.kernel_stack_pool,
+            console,
+        );
+    }
+    runtime_probe::after_map(console);
+
     let _ = writeln!(console, "{KERNEL_MAP_SUCCESS_SENTINEL}");
     console.sink_mut().flush();
     halt()
@@ -828,6 +918,35 @@ unsafe fn prepare_and_publish_boot_interrupt_runtime(
     feature = "kernel-map-probe",
     not(any(feature = "el0-probe", feature = "loaded-init-probe"))
 ))]
+struct GuardedHeapMemory<'a>(
+    &'a mut FinalDirectMapMemory<'static, FINAL_KERNEL_TABLE_CAPACITY, KERNEL_MAP_MEMORY_RANGES>,
+);
+#[cfg(all(
+    feature = "kernel-map-probe",
+    not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+))]
+impl phoenix_kernel::memory::HeapBackingMemory for GuardedHeapMemory<'_> {
+    type Error = phoenix_kernel::platform::aarch64::qemu_virt::FinalDirectMapAccessError;
+    fn virtual_start(
+        &mut self,
+        frames: phoenix_kernel::memory::FrameRange,
+    ) -> Result<phoenix_kernel::memory::VirtAddr, Self::Error> {
+        // Validate complete managed backing without publishing a hardware alias.
+        phoenix_kernel::memory::HeapBackingMemory::virtual_start(self.0, frames)?;
+        assert_eq!(frames.len(), KERNEL_HEAP_BACKING_FRAMES);
+        Ok(phoenix_kernel::memory::VirtAddr::new(
+            phoenix_kernel::platform::aarch64::qemu_virt::KERNEL_HEAP_START,
+        ))
+    }
+    fn clear_frame(&mut self, frame: phoenix_kernel::memory::PageFrame) -> Result<(), Self::Error> {
+        phoenix_kernel::memory::HeapBackingMemory::clear_frame(self.0, frame)
+    }
+}
+
+#[cfg(all(
+    feature = "kernel-map-probe",
+    not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+))]
 fn initialize_and_exercise_kernel_heap(
     tables: &'static FinalKernelTables,
     direct_map_layout: FinalDirectMapLayout<KERNEL_MAP_MEMORY_RANGES>,
@@ -841,7 +960,8 @@ fn initialize_and_exercise_kernel_heap(
     // this call. The boot CPU is single-threaded with exceptions masked; the
     // allocator grants the heap unique ownership of every mutated frame.
     let mut direct_map = unsafe { FinalDirectMapMemory::assume_active(tables, direct_map_layout) };
-    heap.initialize(allocator, &mut direct_map, KERNEL_HEAP_BACKING_FRAMES, 1)
+    let mut guarded = GuardedHeapMemory(&mut direct_map);
+    heap.initialize(allocator, &mut guarded, KERNEL_HEAP_BACKING_FRAMES, 1)
         .unwrap_or_else(|error| panic!("could not initialize kernel heap: {error:?}"));
     assert_eq!(
         allocator.total_free_frames(),
@@ -849,10 +969,31 @@ fn initialize_and_exercise_kernel_heap(
         "kernel heap did not retain its exact backing frames"
     );
 
+    // SAFETY: The permanent KernelMapRuntime owns this initialized heap and
+    // retains every backing frame for boot lifetime. No allocation escaped yet.
+    unsafe {
+        phoenix_kernel::arch::aarch64::kernel_page_table::publish_permanent_heap(
+            tables,
+            &mut direct_map,
+            &mut Aarch64KernelLeafTlb,
+            heap.backing_frames().unwrap(),
+            phoenix_kernel::memory::VirtAddr::new(
+                phoenix_kernel::platform::aarch64::qemu_virt::KERNEL_HEAP_START,
+            ),
+        )
+    }
+    .expect("guarded heap publication");
     let first = heap
         .allocate(64, 64)
         .unwrap_or_else(|error| panic!("could not allocate aligned heap probe: {error:?}"));
     assert_eq!(first.address().as_usize() % 64, 0);
+    // SAFETY: The heap token uniquely owns 64 mapped bytes; guards are outside
+    // this allocation, and no other CPU or IRQ accesses the heap.
+    unsafe {
+        let pointer = first.address().as_usize() as *mut u64;
+        pointer.write_volatile(0x50484f454e4958);
+        assert_eq!(pointer.read_volatile(), 0x50484f454e4958);
+    }
     heap.deallocate(first)
         .unwrap_or_else(|error| panic!("could not release aligned heap probe: {error:?}"));
     let reused = heap
@@ -945,6 +1086,10 @@ fn exercise_runtime_kernel_stack(
             .publish(&mut mapper)
             .unwrap_or_else(|(_stack, error)| panic!("could not publish kernel stack: {error:?}"));
         assert_eq!(mapped.initial_stack_pointer(), layout.usable().end());
+        runtime_probe::stack_guards(
+            layout.lower_guard().start().as_usize(),
+            layout.upper_guard().start().as_usize(),
+        );
 
         let virtual_page = first_mapping.0.as_usize() as *mut u8;
         // SAFETY: `mapped` owns the exact newly published RW/NX L3 leaves;
@@ -966,6 +1111,20 @@ fn exercise_runtime_kernel_stack(
     };
 
     let mut observed = [0_u8; PROBE.len()];
+    assert!(
+        direct_map
+            .read_frame(first_mapping.1, 4095, &mut observed)
+            .is_err()
+    );
+    assert!(
+        direct_map
+            .read_frame(
+                phoenix_kernel::memory::PageFrame::from_start(PhysAddr::new(0)).unwrap(),
+                0,
+                &mut observed
+            )
+            .is_err()
+    );
     direct_map
         .read_frame(first_mapping.1, 0, &mut observed)
         .unwrap_or_else(|error| panic!("could not verify kernel-stack frame: {error:?}"));
@@ -997,6 +1156,9 @@ fn exercise_runtime_kernel_stack(
 
 #[cfg(feature = "loaded-init-probe")]
 fn run_loaded_init_probe(boot_argument: usize, console: &mut Console<EarlyPl011>) -> ! {
+    if cfg!(feature = "system") {
+        system::boot(boot_argument, console);
+    }
     let initramfs = Initramfs::from_bytes(INITRAMFS)
         .unwrap_or_else(|error| panic!("embedded initramfs is invalid: {error:?}"));
     let init_elf = initramfs
@@ -1305,27 +1467,52 @@ unsafe fn fault_active_init_process(
         not(any(feature = "el0-probe", feature = "loaded-init-probe"))
     )
 ))]
+fn boot_interrupt_handle() -> Option<&'static BootInterruptHandle> {
+    if !BOOT_INTERRUPT_PUBLISHED.load(Ordering::Acquire) {
+        return None;
+    }
+    let slot = &raw const BOOT_INTERRUPT_HANDLE;
+    // SAFETY: Acquire pairs with one-time initialization; both permanently
+    // pinned owners remain valid, accessed only by the boot CPU and its IRQs.
+    Some(unsafe { &*(*slot).as_ptr() })
+}
+
+#[cfg(any(
+    feature = "loaded-init-probe",
+    all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    )
+))]
 fn dispatch_boot_irq(slot: Option<VectorSlot>) -> Option<Result<(), BootIrqFailure>> {
     let slot = slot?;
     if slot.kind() != ExceptionKind::Irq {
         return None;
     }
-    if !BOOT_INTERRUPT_PUBLISHED.load(Ordering::Acquire) {
+    let Some(handle) = boot_interrupt_handle() else {
         return Some(Err(BootIrqFailure::Unpublished));
-    }
-
-    let handle_slot = &raw const BOOT_INTERRUPT_HANDLE;
-    // SAFETY: the Acquire load observed the one-time Release publication after
-    // this static slot was fully initialized. The handle and the runtime it
-    // pins remain installed permanently, and vector entry has masked DAIF.
-    let handle = unsafe { &*(*handle_slot).as_ptr() };
+    };
     let local_irq = LocalIrq::new();
     Some(match handle.dispatch_one(&local_irq) {
         Ok(InterruptDispatch::Spurious { .. }) => Ok(()),
         Ok(InterruptDispatch::Timer(batch)) if batch.is_empty() => Ok(()),
+        #[cfg(all(
+            feature = "kernel-map-probe",
+            not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+        ))]
+        Ok(InterruptDispatch::Timer(batch)) if kernel_threads::active() => {
+            kernel_threads::timer_batch(&batch);
+            Ok(())
+        }
         Ok(InterruptDispatch::Timer(batch)) => BOOT_TIMER_CONSUMER
             .consume(&local_irq, &batch)
-            .map(|_| ())
+            .map(|_| {
+                #[cfg(all(
+                    feature = "kernel-map-probe",
+                    not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+                ))]
+                runtime_probe::irq_completed();
+            })
             .map_err(BootIrqFailure::TimerConsumer),
         Ok(InterruptDispatch::Unexpected { intid }) => Err(BootIrqFailure::Unexpected { intid }),
         Err(error) => Err(BootIrqFailure::Runtime(error)),
@@ -1339,11 +1526,34 @@ fn dispatch_boot_irq(slot: Option<VectorSlot>) -> Option<Result<(), BootIrqFailu
 /// `frame` must point to the uniquely borrowed, fully initialized frame at the
 /// current exception stack pointer, and `slot_index` must identify its vector.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn phoenix_exception_dispatch(frame: *mut ExceptionFrame, slot_index: usize) {
+pub unsafe extern "C" fn phoenix_exception_dispatch(
+    frame: *mut ExceptionFrame,
+    slot_index: usize,
+) -> *mut ExceptionFrame {
     // SAFETY: `vectors.S` allocates one aligned `ExceptionFrame`, initializes
     // every field, and passes its unique mutable address for this call.
     let frame = unsafe { &mut *frame };
     let slot = VectorSlot::ALL.get(slot_index).copied();
+    #[cfg(feature = "loaded-init-probe")]
+    if system::active() {
+        system::dispatch(frame, slot);
+        return frame;
+    }
+    #[cfg(all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    ))]
+    if let Some(next) = kernel_threads::dispatch(frame, slot_index, false) {
+        return next;
+    }
+
+    #[cfg(all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    ))]
+    if runtime_probe::exception(frame, slot_index) {
+        return frame;
+    }
 
     #[cfg(any(
         feature = "loaded-init-probe",
@@ -1353,23 +1563,32 @@ pub unsafe extern "C" fn phoenix_exception_dispatch(frame: *mut ExceptionFrame, 
         )
     ))]
     let irq_failure = match dispatch_boot_irq(slot) {
-        Some(Ok(())) => return,
+        Some(Ok(())) => {
+            #[cfg(all(
+                feature = "kernel-map-probe",
+                not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+            ))]
+            if let Some(next) = kernel_threads::dispatch(frame, slot_index, true) {
+                return next;
+            }
+            return frame;
+        }
         Some(Err(failure)) => Some(failure),
         None => None,
     };
 
     #[cfg(any(feature = "el0-probe", feature = "loaded-init-probe"))]
     if handle_probe_syscall(frame, slot) {
-        return;
+        return frame;
     }
 
     #[cfg(feature = "loaded-init-probe")]
     if handle_loaded_init_fault(frame, slot) {
-        return;
+        return frame;
     }
     #[cfg(all(feature = "el0-probe", not(feature = "loaded-init-probe")))]
     if handle_static_el0_fault(frame, slot) {
-        return;
+        return frame;
     }
 
     let mut console = Console::new(EarlyPl011::new());
@@ -1379,6 +1598,11 @@ pub unsafe extern "C" fn phoenix_exception_dispatch(frame: *mut ExceptionFrame, 
     let _ = writeln!(console, "spsr: {:#018x}", frame.saved_program_status());
     let _ = writeln!(console, "esr: {:#018x}", frame.syndrome().raw());
     let _ = writeln!(console, "far: {:#018x}", frame.fault_address());
+    for index in 0..31 {
+        let _ = writeln!(console, "x{index}: {:#018x}", frame.general(index).unwrap());
+    }
+    print_stack_trace(&mut console);
+    events::dump(&mut console);
     #[cfg(any(
         feature = "loaded-init-probe",
         all(
@@ -1403,6 +1627,11 @@ pub unsafe extern "C" fn phoenix_exception_dispatch(frame: *mut ExceptionFrame, 
         }
     }
     console.sink_mut().flush();
+    #[cfg(all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    ))]
+    runtime_probe::fatal_exit(frame, slot_index);
     halt()
 }
 
@@ -1529,7 +1758,7 @@ fn handle_probe_syscall(frame: &mut ExceptionFrame, slot: Option<VectorSlot>) ->
             syscall::set_return(frame, SyscallReturn::error(Errno::NotImplemented));
             true
         }
-        NativeSyscall::Unknown(_) => {
+        NativeSyscall::Run | NativeSyscall::Unknown(_) => {
             syscall::set_return(frame, SyscallReturn::error(Errno::NotImplemented));
             true
         }
@@ -1696,9 +1925,68 @@ const fn file_errno(error: FileError) -> Errno {
 
 #[panic_handler]
 fn panic(info: &PanicInfo<'_>) -> ! {
+    phoenix_kernel::arch::aarch64::diagnostics::disable_irqs();
     let mut console = Console::new(EarlyPl011::new());
     let _ = writeln!(console, "{PANIC_SENTINEL}");
     let _ = writeln!(console, "{info}");
+    print_stack_trace(&mut console);
+    events::dump(&mut console);
     console.sink_mut().flush();
+    #[cfg(all(
+        feature = "kernel-map-probe",
+        not(any(feature = "el0-probe", feature = "loaded-init-probe"))
+    ))]
+    runtime_probe::panic_exit();
     halt()
+}
+
+fn print_stack_trace(console: &mut Console<EarlyPl011>) {
+    use phoenix_kernel::arch::aarch64::diagnostics as cpu;
+    use phoenix_kernel::platform::aarch64::qemu_virt::{
+        KERNEL_STACK_ARENA_SLOTS, KERNEL_STACK_ARENA_START, KERNEL_STACK_USABLE_PAGES,
+    };
+    unsafe extern "C" {
+        static __boot_stack_bottom: u8;
+        static __boot_stack_top: u8;
+        static __text_start: u8;
+        static __text_end: u8;
+    }
+    let (_, sp, _) = cpu::boot_state();
+    let mut bounds =
+        (&raw const __boot_stack_bottom) as usize..(&raw const __boot_stack_top) as usize;
+    if !bounds.contains(&sp) {
+        let stride = (KERNEL_STACK_USABLE_PAGES + 2) * 4096;
+        let arena =
+            KERNEL_STACK_ARENA_START..KERNEL_STACK_ARENA_START + KERNEL_STACK_ARENA_SLOTS * stride;
+        if !arena.contains(&sp) {
+            return;
+        }
+        let bottom =
+            KERNEL_STACK_ARENA_START + ((sp - KERNEL_STACK_ARENA_START) / stride) * stride + 4096;
+        bounds = bottom..bottom + KERNEL_STACK_USABLE_PAGES * 4096;
+        if !bounds.contains(&sp) {
+            return;
+        }
+    }
+    let text = (&raw const __text_start) as usize..(&raw const __text_end) as usize;
+    let count = phoenix_kernel::stack_trace::walk::<16>(
+        cpu::frame_pointer(),
+        bounds,
+        text,
+        |address| {
+            // SAFETY: The walker checks alignment and the complete 16-byte record
+            // inside this CPU's active owned stack. IRQs are masked; the stack's
+            // mapping/owner cannot be retired until this context is switched out.
+            unsafe {
+                (
+                    (address as *const usize).read_volatile(),
+                    ((address + 8) as *const usize).read_volatile(),
+                )
+            }
+        },
+        |address| {
+            let _ = writeln!(console, "trace: return={address:#018x}");
+        },
+    );
+    let _ = writeln!(console, "trace: frames={count} limit=16");
 }

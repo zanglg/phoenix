@@ -1,5 +1,12 @@
 # Monotonic Time and Timer Queue
 
+> Construction-stage mechanism record: runtime-status and remaining-work lists below
+> describe the earlier integration boundary. Current support, limits and evidence are
+> maintained in [0.1-CONTRACT.md](0.1-CONTRACT.md) and
+> [RUNTIME_VALIDATION.md](RUNTIME_VALIDATION.md); those records supersede historical
+> pending statements here. The ownership design remains applicable unless the
+> current contract explicitly refines it.
+
 Phoenix currently provides an architecture-neutral, allocation-free foundation for monotonic
 time and deadline ordering plus an AArch64 physical generic-timer adapter and a Host Tested pinned
 GIC/timer publication runtime. The final-map boot paths now claim, disable, observe, and publish

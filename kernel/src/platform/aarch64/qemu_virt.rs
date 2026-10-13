@@ -48,6 +48,12 @@ pub const BOOTSTRAP_DEVICE_PHYSICAL_END: usize = 0x4000_0000;
 pub const KERNEL_VIRTUAL_OFFSET: usize = 0xffff_ff80_0000_0000;
 /// First byte of the platform-owned runtime kernel-stack virtual arena.
 pub const KERNEL_STACK_ARENA_START: usize = 0xffff_ff90_0000_0000;
+/// Lower guard of the four-page kernel heap, beyond all runtime stack slots.
+pub const KERNEL_HEAP_GUARD: usize = KERNEL_STACK_ARENA_START + 0x10_0000;
+/// First writable heap byte; one invalid page lies on each side.
+pub const KERNEL_HEAP_START: usize = KERNEL_HEAP_GUARD + PAGE_SIZE;
+/// Number of permanently owned heap backing frames.
+pub const KERNEL_HEAP_FRAMES: usize = 4;
 /// Number of guarded runtime-stack slots reserved by the initial platform policy.
 pub const KERNEL_STACK_ARENA_SLOTS: usize = 16;
 /// Number of usable 4 KiB pages in each initial runtime-stack slot.
@@ -151,6 +157,16 @@ pub struct EarlyPl011 {
 }
 
 impl EarlyPl011 {
+    /// Return one available receive byte without blocking or consuming on empty.
+    pub fn read_byte(&mut self) -> Option<u8> {
+        if self.flags() & (1 << 4) != 0 {
+            return None;
+        }
+        // SAFETY: The retained PL011 device mapping is active and this method
+        // is called by the sole masked CPU's serialized console-input owner.
+        Some(unsafe { read_volatile((self.base + UART_DR) as *const u32) } as u8)
+    }
+
     /// Construct the early console for QEMU `virt`.
     pub const fn new() -> Self {
         Self {
@@ -680,38 +696,45 @@ where
         return Err(FinalKernelMapError::MissingRam);
     }
 
-    plan = map_final_device_range(plan, gic.distributor_physical, gic.registers.distributor())?;
-    plan = map_final_device_range(
-        plan,
+    map_final_device_range(
+        &mut plan,
+        gic.distributor_physical,
+        gic.registers.distributor(),
+    )?;
+    map_final_device_range(
+        &mut plan,
         gic.redistributor_physical,
         gic.registers.redistributor(),
     )?;
-    plan = plan
-        .with_mapping(
-            VirtAddr::new(PL011_VIRTUAL_BASE),
-            PhysAddr::new(PL011_PHYSICAL_BASE),
-            TranslationLevel::L3,
-            MappingAttributes::kernel_device(),
-        )
-        .map_err(FinalKernelMapError::PageTable)?;
+    plan.map(
+        VirtAddr::new(PL011_VIRTUAL_BASE),
+        PhysAddr::new(PL011_PHYSICAL_BASE),
+        TranslationLevel::L3,
+        MappingAttributes::kernel_device(),
+    )
+    .map_err(FinalKernelMapError::PageTable)?;
     validate_critical_mappings(&plan, layout, gic)?;
     validate_runtime_stack_arena(&plan)?;
     let stack_pool =
         runtime_kernel_stack_pool().map_err(FinalKernelMapError::InvalidRuntimeStackArena)?;
     let stack_arena = stack_pool.arena();
-    plan = plan
-        .with_l3_range_reservation(stack_arena.start(), stack_arena.len())
+    plan.reserve_l3_range(stack_arena.start(), stack_arena.len())
         .map_err(FinalKernelMapError::PageTable)?;
     validate_runtime_stack_arena(&plan)?;
+    plan.reserve_l3_range(
+        VirtAddr::new(KERNEL_HEAP_GUARD),
+        (KERNEL_HEAP_FRAMES + 2) * PAGE_SIZE,
+    )
+    .map_err(FinalKernelMapError::PageTable)?;
     Ok(plan)
 }
 
 #[cfg(any(target_arch = "aarch64", test))]
 fn map_final_device_range(
-    mut plan: QemuVirtKernelPageTablePlan,
+    plan: &mut QemuVirtKernelPageTablePlan,
     physical: AddressRange<PhysAddr>,
     virtual_range: AddressRange<VirtAddr>,
-) -> Result<QemuVirtKernelPageTablePlan, FinalKernelMapError> {
+) -> Result<(), FinalKernelMapError> {
     debug_assert_eq!(physical.len(), virtual_range.len());
     let mut offset = 0_usize;
     while offset < physical.len() {
@@ -725,14 +748,13 @@ fn map_final_device_range(
                 crate::arch::aarch64::paging::PagingError::AddressOverflow,
             )),
         )?;
-        plan = plan
-            .with_mapping(
-                VirtAddr::new(virtual_address),
-                PhysAddr::new(physical_address),
-                TranslationLevel::L3,
-                MappingAttributes::kernel_device(),
-            )
-            .map_err(FinalKernelMapError::PageTable)?;
+        plan.map(
+            VirtAddr::new(virtual_address),
+            PhysAddr::new(physical_address),
+            TranslationLevel::L3,
+            MappingAttributes::kernel_device(),
+        )
+        .map_err(FinalKernelMapError::PageTable)?;
         offset = offset
             .checked_add(PAGE_SIZE)
             .ok_or(FinalKernelMapError::PageTable(
@@ -741,7 +763,7 @@ fn map_final_device_range(
                 ),
             ))?;
     }
-    Ok(plan)
+    Ok(())
 }
 
 #[cfg(any(target_arch = "aarch64", test))]

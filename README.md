@@ -1,230 +1,107 @@
 # Phoenix
 
-Phoenix is an experimental Unix-like kernel written in Rust. Development starts with AArch64
-on QEMU `virt`; RISC-V 64 and x86_64 are future ports, not current claims of support.
+Phoenix is an experimental Unix-like Rust kernel for AArch64 QEMU `virt`.
+The 0.1 technical path now includes protected memory, exceptions, timer-driven
+kernel threads, independent user processes, console I/O and an in-memory filesystem.
+The current review candidate is **0.1.0-pre.1**. Development lives on `dev`;
+`main` is the owner review boundary.
 
-## Current status
+## Build and run
 
-The project version is **0.0.0**. The first AArch64 bootstrap is integrated, with a deliberately
-narrow support claim:
-
-- the Rust workspace follows stable Rust and declares Rust 1.95 as its minimum version;
-- the `no_std` kernel links as an AArch64 ELF and can be converted to a raw image;
-- static inspection verifies its machine type, entry, load addresses, page-table alignment,
-  BSS bounds, one-page boot-stack guard, and 1 MiB boot-construction stack;
-- rust-analyzer can use the configured kernel target from an x86_64 development host;
-- host-side unit tests and validation are available through `cargo xtask`;
-- architecture-neutral monotonic raw ticks, a fixed-capacity deadline queue, checked AArch64
-  frequency conversion, and a permit-gated physical-timer adapter are Host Tested/Cross Compiled,
-  while boot scheduling/activation, target GIC delivery, IRQ synchronization, and sleep remain
-  pending;
-- an allocation-free IRQ-save spinlock is Host Tested with Acquire/Release contention and exact
-  nested mask restoration; its AArch64 `DAIF.I` backend and runtime-before-timer lock order Cross
-  Compile in the final-map publication/lookup path, but IRQ delivery remains masked;
-- a locked, fixed-capacity timer controller is Host Tested with earliest-only reprogramming,
-  deterministic due batches, callbacks-after-unlock, exact queue rollback, and explicit hardware
-  recovery failure; an IRQ-safe one-shot sink validates the exact ID/event after EOI without false
-  completion, while an active-runtime transaction keeps scheduling/binding under one IRQ mask and
-  rolls back binding failure; the published boot owner and installed sink remain inactive/unbound;
-- strict QEMU `virt` DTB discovery validates GICv3 MMIO ranges, interrupt-parent ownership, and
-  the architected-timer PPIs; the final-map paths select the current CPU redistributor by affinity
-  and map only it plus GICD as exact device pages without enabling interrupts;
-- a Host Tested/Cross Compiled GICv3 preparation state machine validates PIDR/SRE, wakes the
-  selected redistributor, configures one timer PPI with bounded waits, and preserves recovery
-  evidence while distributor and CPU Group-1 delivery remain disabled; both final-map paths now
-  construct that concrete volatile MMIO/`ICC_*_EL1` owner after TTBR1 publication, execute the
-  preparation transaction with a fixed poll budget, and retain its closed-gate type state; a
-  separate Host Tested pinned runtime publishes dispatcher state before ordered activation, binds
-  the matching timer PPI, reprograms before mandatory combined EOI/deactivation, and disarms before
-  shutdown; both final-map paths now claim/disable the timer and publish an Acquire-checked IRQ
-  lookup plus post-EOI one-shot consumer; the schedule/bind transaction Cross Compiles, but neither
-  boot path invokes it, activates delivery, or unmasks IRQs;
-- a bounded QEMU runner and boot-test harness are implemented and host tested;
-- bounded QEMU probes have verified direct boot, DTB/allocator access, final TTBR1 publication,
-  the first EL0 transition, and the loaded-init/file-I/O path on the pinned board;
-- validated ELF segments and a guarded stack can be planned and assigned frames transactionally;
-- native argc/argv/envp and minimal auxiliary-vector stack bytes are host tested;
-- a separately linked one-page AArch64 `init` ELF is accepted by the Phoenix loader and inspected;
-- a deterministic, strictly parsed `newc` initramfs carries that exact executable at `init`;
-- an opt-in loaded-init image finds `init` in the archive and connects the real DTB allocator, ELF
-  population, native stack, final TTBR1, dynamic user tables, ownership-gated `eret`, and terminal
-  `exit(42)`;
-- checked cross-page user copies and bounded `open`/`read`/`write`/`close` probes let init read
-  `etc/motd` from initramfs into its stack and emit verified output without raw pointer dereferences;
-- an architecture-neutral process state machine and generation-checked fixed-capacity registry are
-  host tested; loaded init uses the state machine for ready, running, exited, and faulted
-  transitions;
-- lower-AArch64 synchronous user faults are normalized into retained terminal process diagnostics;
-  current-EL and inconsistent exceptions remain on the kernel fatal path;
-- lower-half AArch64 user-table topology and descriptor materialization are host tested;
-- nonzero 8-bit AArch64 ASIDs, monotonic no-reuse allocation, and checked TTBR0 composition are
-  host tested; both EL0 paths use ASID 1;
-- the checked QEMU `virt` bootstrap physical-memory backend has performed one DTB-derived
-  allocation/readback/scrub/release cycle on the pinned board;
-- DTB memory plus firmware/kernel/DTB reservations form a transactional boot allocator map;
-- a fixed-metadata fallible kernel heap core transactionally acquires and clears unique physical
-  backing, distinguishes OOM and metadata exhaustion, and detects invalid or duplicate releases;
-  the focused final-map image Cross Compiles a four-frame/four-record post-TTBR1 conformance path,
-  whose target run remains pending;
-- guarded runtime kernel-stack slots transactionally own and clear private frames, retain both
-  guard holes, and feed EL1 RW/NX mappings to the Host Tested AArch64 offline planner; final-map
-  owners retain a provisional 16-slot/eight-page platform arena with prelinked L2/L3 tables and
-  invalid leaves, while mapped ownership type state prevents frame release before transactional
-  mapping retirement; a Host Tested/Cross Compiled AArch64 mapper performs exact L3 leaf batches
-  and TLB maintenance; the final-map image Cross Compiles a bounded publish/alias/retire/release
-  probe without switching SP, but the current eight-table image is not target rerun;
-- an opt-in boot-memory probe cross-links the real DTB-to-allocation-to-readback path;
-- an opt-in final-kernel-map image builds allocator-owned TTBR1 tables with RX text, RO/NX
-  rodata, RW/NX RAM, an unmapped boot-stack guard, and page-granular PL011/GIC mappings, then
-  publishes them with barriers and TLB invalidation before bounded GIC preparation; that base path
-  passed previously, while the current heap, stack, and GIC-prepared image requires a target rerun;
-- final-map builders retain a Host Tested managed-RAM proof beside their table owner, and the
-  loaded-init user-copy adapter is Cross Compiled against that bounded capability;
-- early PL011 output and the bounded boot smoke test have been verified on QEMU 9.1.3; deliberate
-  panic, fault, guard, and permission-negative probes remain Runtime Pending.
-
-[`boot.S`](kernel/src/arch/aarch64/boot.S) is Phoenix's first AArch64 bootstrap implementation.
-The boot contract and current validation boundary are recorded in [`docs/BOOT.md`](docs/BOOT.md).
-
-## Development targets
-
-| Architecture | Rust target | Initial platform | Status |
-| --- | --- | --- | --- |
-| AArch64 | `aarch64-unknown-none-softfloat` | QEMU `virt` | Primary development target |
-| RISC-V 64 | `riscv64gc-unknown-none-elf` | QEMU `virt` | Deferred |
-| x86_64 | `x86_64-unknown-none` | QEMU `q35` | Deferred |
-
-Only the first row is configured and checked in version 0.0.0.
-
-## Quick start
-
-Install [rustup](https://rustup.rs/), enter the repository, and run:
+Install rustup and QEMU with the AArch64 system emulator, then run:
 
 ```bash
 cargo xtask doctor
 cargo xtask ci
+cargo xtask test-runtime
+cargo xtask test-system
+cargo xtask run-system
 ```
 
-The project toolchain follows the current stable Rust release and installs the AArch64 target,
-rustfmt, Clippy, rust-analyzer, `rust-src`, and LLVM tools. QEMU is reported by `doctor` and
-remains optional for emulator-free validation. Runtime commands fail clearly when it is absent
-rather than treating the test as skipped.
+At the interactive console, type `ok` followed by Enter. The conformance init
+checks files and child processes, reports `PHOENIX_SYSTEM_OK`, then halts.
+It is a minimal native system, not an interactive shell. The automatic system
+test supplies input and requires both ordered evidence and a clean guest exit.
 
-Canonical commands are:
+The supported configuration is `virt-9.1`, Cortex-A72, GICv3, TCG, 512 MiB RAM,
+one CPU and 4 KiB pages. The target is `aarch64-unknown-none-softfloat`.
+The toolchain follows stable Rust; the declared MSRV is Rust 1.95. Exact tested
+compiler and QEMU versions are recorded in the [runtime ledger](docs/RUNTIME_VALIDATION.md).
+
+## Current capabilities
+
+- EL2/EL1 boot, complete BSS validation, aligned stack and installed vectors;
+- complete integer exception-frame preservation, bounded panic traces and offline symbols;
+- DTB reservations, fallible frame allocation, permission-separated final TTBR1,
+  guarded heap and stacks with transactional mapping/TLB maintenance;
+- real GICv3 timer delivery, IRQ-safe locking, round-robin kernel threads,
+  preemption, sleep, idle and stack reclamation in the focused runtime image;
+- strict ELF loading, isolated user roots, checked cross-page copies,
+  synchronous child execution, fault containment, frame reclamation and ASID reuse;
+- read-only initramfs, bounded writable `tmp/`, process-local file descriptors,
+  nonblocking console input and polled output;
+- structured diagnostic ring, resource-exhaustion tests and deterministic packaging.
+
+The kernel-thread/heap image and user-system image are separate integration targets.
+The system uses a serialized two-process model; it does not preempt concurrent user
+processes. Limits, error behavior, syscall numbers and ownership rules are defined
+in the [0.1 contract](docs/0.1-CONTRACT.md). Tests cover the stated bounded workloads.
+SMP, FP/SIMD, networking, persistent storage, POSIX/Linux compatibility, real hardware,
+RISC-V and x86_64 are deferred.
+
+## Validation and artifacts
+
+`cargo xtask ci` runs formatting, target checks, Clippy, host tests, and ELF/image
+inspection for every configured variant. It does not require or invoke QEMU.
+The complete target suite is:
 
 ```bash
-cargo xtask doctor
-cargo xtask fmt
-cargo xtask check
-cargo xtask lint
-cargo xtask test
-cargo xtask build
-cargo xtask inspect
-cargo xtask build-init
-cargo xtask inspect-init
-cargo xtask qemu-command
-cargo xtask run
 cargo xtask test-boot
 cargo xtask test-memory
 cargo xtask test-kernel-map
 cargo xtask test-el0
 cargo xtask test-init
-cargo xtask ci
+cargo xtask test-runtime
+cargo xtask test-system
 ```
 
-`build` produces a kernel ELF, raw image, and linker map under `target/`; `inspect` validates those
-artifacts without executing them. `build-init` and `inspect-init` do the same for the first
-standalone native user ELF and deterministic initramfs. `qemu-command` prints the pinned command
-without starting an emulator. `run` is interactive and `test-boot` is bounded; neither is part of
-emulator-free `ci`.
-`test-memory` builds the opt-in boot-memory integration image; `test-kernel-map` replaces TTBR1
-with the final permission-separated layout and requires ordered closed-gate GIC preparation plus
-the bounded heap and stack probes before terminal success; `test-el0` builds the opt-in statically linked
-user-mode conformance image; `test-init` builds the full dynamically loaded standalone-init path.
-Each requires its own final marker. See [`docs/QEMU.md`](docs/QEMU.md),
-[`docs/BOOT_MEMORY_PROBE.md`](docs/BOOT_MEMORY_PROBE.md),
-[`docs/FINAL_KERNEL_ADDRESS_SPACE.md`](docs/FINAL_KERNEL_ADDRESS_SPACE.md), and
-[`docs/EL0_PROBE.md`](docs/EL0_PROBE.md) for their exact validation boundaries. The separately
-linked program is documented in [`docs/FIRST_USER_PROGRAM.md`](docs/FIRST_USER_PROGRAM.md), and
-the archive and end-to-end integration in [`docs/INITRAMFS.md`](docs/INITRAMFS.md) and
-[`docs/LOADED_INIT_PROBE.md`](docs/LOADED_INIT_PROBE.md). The user-memory boundary is documented in
-[`docs/USER_COPY.md`](docs/USER_COPY.md), and the direct initramfs descriptor layer in
-[`docs/FILE_DESCRIPTORS.md`](docs/FILE_DESCRIPTORS.md). The currently implemented stack protection
-and its explicit limits are recorded in [`docs/KERNEL_STACKS.md`](docs/KERNEL_STACKS.md).
-Process identity, lifecycle, ownership, and teardown deferrals are documented in
-[`docs/PROCESS_LIFECYCLE.md`](docs/PROCESS_LIFECYCLE.md); the current nonzero/no-reuse ASID policy
-is in [`docs/AARCH64_ASIDS.md`](docs/AARCH64_ASIDS.md), and the current terminal EL0 fault boundary
-is in [`docs/USER_FAULTS.md`](docs/USER_FAULTS.md). The heap's ownership, failure,
-synchronization, bounded boot integration, and Runtime Pending target boundary are defined in
-[`docs/KERNEL_HEAP.md`](docs/KERNEL_HEAP.md).
-The reservation-filtered final RAM proof and retained-table access boundary are documented in
-[`docs/FINAL_DIRECT_MAP.md`](docs/FINAL_DIRECT_MAP.md).
-The raw-tick model, fixed-capacity timer queue, synchronization boundary, and hardware deferrals
-are documented in [`docs/TIME.md`](docs/TIME.md).
-The IRQ-save spinlock, memory-ordering contract, lock-context restrictions, and target deferrals
-are documented in [`docs/SYNCHRONIZATION.md`](docs/SYNCHRONIZATION.md).
-The GICv3/timer topology contract, ownership boundary, rejected forms, and target deferrals are in
-[`docs/AARCH64_INTERRUPTS.md`](docs/AARCH64_INTERRUPTS.md).
-The pinned GIC/timer publication cycle, lock order, failure closure, and boot boundary are in
-[`docs/AARCH64_INTERRUPT_RUNTIME.md`](docs/AARCH64_INTERRUPT_RUNTIME.md).
+The first five commands retain focused boot protocols. `test-runtime` runs thirteen
+isolated cases, including negative protection tests, and uses guest-driven exits.
+All emulator tests are bounded and retain logs under
+`target/phoenix/aarch64-unknown-none-softfloat/debug/`.
+See [QEMU.md](docs/QEMU.md) and the [validation ledger](docs/RUNTIME_VALIDATION.md).
 
-## LSP target
-
-The default rust-analyzer architecture is controlled by one file:
-
-```toml
-# .cargo/lsp.toml
-[build]
-target = "aarch64-unknown-none-softfloat"
+```bash
+cargo xtask package
+cargo xtask symbolize <exact-kernel-ELF> <0xADDRESS>...
 ```
 
-VS Code is configured to pass that file to rust-analyzer. Other editors should set the
-rust-analyzer `cargo.configPath` option to `.cargo/lsp.toml`.
+Packaging collects the system kernel ELF, raw image, linker map, userspace ELFs,
+initramfs, provenance and SHA-256 checksums under `target/phoenix/packages/<version>/`.
+The supported package is the inspected debug profile; release optimization is not
+part of the target-validation claim. Reproduction requirements are documented in
+[RELEASE.md](docs/RELEASE.md).
 
-When a future port exists, install its Rust target and change this one `target` value. For
-example:
+`build`/`run` retain the small boot smoke image; use `build-system`/`run-system`
+for the full minimal system. `build-init`/`inspect-init` inspect the standalone
+first-user-program fixture. `cargo xtask help` lists all commands.
 
-```toml
-target = "riscv64gc-unknown-none-elf"
-```
+## Development records
 
-This LSP setting does not change the host architecture used to run xtask. Rust-analyzer covers
-Rust source; assembly such as `boot.S` requires separate editor support.
+- [ROADMAP.md](ROADMAP.md): ordered technical path and release acceptance gate.
+- [FEATURES.md](FEATURES.md): implemented scope and unscheduled capabilities.
+- [CHANGELOG.md](CHANGELOG.md): completed changes.
+- [AGENTS.md](AGENTS.md): repository engineering contract.
+- [CONTRIBUTING.md](CONTRIBUTING.md): `dev` to `main` review flow.
+- [0.1-CONTRACT.md](docs/0.1-CONTRACT.md): current supported interfaces and limits.
+- [UNSAFE_REVIEW.md](docs/UNSAFE_REVIEW.md): ownership and ordering review.
 
-## Project records
+The rust-analyzer target lives in `.cargo/lsp.toml`. It changes editor checking,
+not the architecture of the host running xtask.
 
-- [`FEATURES.md`](FEATURES.md) is the long-lived kernel capability catalog. Entries may remain
-  deferred and unscheduled.
-- [`ROADMAP.md`](ROADMAP.md) contains the single ordered path to the first release.
-- [`CHANGELOG.md`](CHANGELOG.md) records completed, visible changes.
-- [`AGENTS.md`](AGENTS.md) defines the repository rules for coding agents.
-- [`CONTRIBUTING.md`](CONTRIBUTING.md) defines the `dev` to `main` contribution flow.
-- [`docs/RUNTIME_VALIDATION.md`](docs/RUNTIME_VALIDATION.md) holds checks that require QEMU or
-  later target hardware.
+The version has one source of truth in `workspace.package.version`. Construction
+uses `0.0.0`; technically complete candidates use `0.1.0-pre.N`. A candidate is
+promoted to `0.1.0` only after explicit owner acceptance of the reviewed result.
+No formal 0.1.0 acceptance is inferred from passing automated tests.
 
-Recording a feature does not authorize its implementation. It must first be promoted into the
-ordered Roadmap, and only the first incomplete section is active.
-
-## Versioning
-
-Phoenix reserves SemVer-compatible version numbers for releases. The project version has one
-source of truth: `workspace.package.version` in [`Cargo.toml`](Cargo.toml).
-
-During construction, the Cargo version remains `0.0.0`, the ordered Roadmap describes progress,
-and Git commit hashes identify exact states. Development steps do not create releases or tags.
-`CHANGELOG.md` remains under `Unreleased` during this period.
-
-After the technical release boundary in `ROADMAP.md` is satisfied, Phoenix first becomes
-`0.1.0-pre.1`. Owner review and requested corrections may produce additional `0.1.0-pre.N`
-candidates. The first formal release is `0.1.0`, created only after explicit owner acceptance of a
-reviewed candidate. Candidates and releases receive matching annotated tags; strict SemVer
-compatibility meaning begins when the corresponding public contract is documented. ABI-specific
-versions will be introduced only when those ABIs actually exist.
-
-The workspace declares Rust 1.95 as its minimum supported Rust version (MSRV). Development follows
-`stable`; the exact compiler identity will be embedded in release provenance. If a stable update
-causes a kernel regression, the toolchain may be temporarily pinned with the reason documented.
-
-## License
-
-Phoenix is licensed under either Apache License 2.0 or the MIT license, at your option.
+Phoenix is licensed under MIT OR Apache-2.0.

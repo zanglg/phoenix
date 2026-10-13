@@ -1,5 +1,12 @@
 # AArch64 Interrupt Runtime Publication
 
+> Construction-stage mechanism record: runtime-status and remaining-work lists below
+> describe the earlier integration boundary. Current support, limits and evidence are
+> maintained in [0.1-CONTRACT.md](0.1-CONTRACT.md) and
+> [RUNTIME_VALIDATION.md](RUNTIME_VALIDATION.md); those records supersede historical
+> pending statements here. The ownership design remains applicable unless the
+> current contract explicitly refines it.
+
 Phoenix has a Host Tested, allocation-free type state that jointly owns one prepared GICv3
 controller and one locked physical-timer service at a pinned address. It resolves the publication
 cycle between the two devices: vector lookup is established while GIC delivery is closed, and

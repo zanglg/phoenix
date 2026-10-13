@@ -25,6 +25,8 @@ pub enum AsidError {
     },
     /// Every nonzero identifier has already been issued.
     Exhausted,
+    /// Retirement was attempted for an identifier that is not owned.
+    NotAllocated,
 }
 
 /// Failure while composing an AArch64 translation-table base value.
@@ -62,36 +64,54 @@ impl AddressSpaceId {
     }
 }
 
-/// Monotonic allocator that never unsafely reuses an ASID.
+/// Lowest-free allocator; reuse requires an explicit unsafe retirement proof.
 #[derive(Debug, Eq, PartialEq)]
 pub struct AsidAllocator {
-    next: u16,
+    used: [u64; 4],
 }
 
 impl AsidAllocator {
     /// Create an allocator whose first result is ASID one.
     pub const fn new() -> Self {
-        Self {
-            next: MIN_PROCESS_ASID as u16,
-        }
+        Self { used: [1, 0, 0, 0] }
     }
 
-    /// Assign the lowest never-before-issued nonzero ASID.
+    /// Assign the lowest currently unowned nonzero ASID.
     ///
-    /// Exhaustion leaves the allocator unchanged. IDs are deliberately not
-    /// released until an epoch and TLB-invalidation protocol exists.
+    /// Exhaustion leaves the allocator unchanged.
     pub fn allocate(&mut self) -> Result<AddressSpaceId, AsidError> {
-        if self.next > MAX_PROCESS_ASID as u16 {
-            return Err(AsidError::Exhausted);
+        for index in 1..=255usize {
+            let mask = 1u64 << (index % 64);
+            if self.used[index / 64] & mask == 0 {
+                self.used[index / 64] |= mask;
+                return AddressSpaceId::new(index as u16);
+            }
         }
-        let asid = AddressSpaceId::new(self.next)?;
-        self.next += 1;
-        Ok(asid)
+        Err(AsidError::Exhausted)
     }
 
-    /// Return the number of ASIDs that can still be issued without reuse.
+    /// Retire an identifier after its old translations can no longer be used.
+    ///
+    /// # Safety
+    /// Caller uniquely owns this allocation. Its root is no longer current on
+    /// any CPU, all translations have been invalidated with completion barriers
+    /// (or the root was never installed), and no stale owner may activate it again.
+    pub unsafe fn release_retired(&mut self, asid: AddressSpaceId) -> Result<(), AsidError> {
+        let index = usize::from(asid.raw());
+        let mask = 1u64 << (index % 64);
+        if self.used[index / 64] & mask == 0 {
+            return Err(AsidError::NotAllocated);
+        }
+        self.used[index / 64] &= !mask;
+        Ok(())
+    }
+
+    /// Return the number of unowned nonzero ASIDs.
     pub const fn remaining(&self) -> u16 {
-        (MAX_PROCESS_ASID as u16 + 1).saturating_sub(self.next)
+        256 - (self.used[0].count_ones()
+            + self.used[1].count_ones()
+            + self.used[2].count_ones()
+            + self.used[3].count_ones()) as u16
     }
 }
 
@@ -152,5 +172,24 @@ mod tests {
                 address: 0x0001_0000_0000_0000,
             })
         );
+    }
+
+    #[test]
+    fn retired_id_is_reusable_and_double_retirement_is_rejected() {
+        let mut ids = AsidAllocator::new();
+        let parent = ids.allocate().unwrap();
+        for _ in 0..512 {
+            let child = ids.allocate().unwrap();
+            assert_eq!(child.raw(), 2);
+            // SAFETY: Host-only identities were never installed in hardware.
+            unsafe { ids.release_retired(child) }.unwrap();
+            // SAFETY: No hardware root or new owner exists; exercise rejection.
+            assert_eq!(
+                unsafe { ids.release_retired(child) },
+                Err(AsidError::NotAllocated)
+            );
+        }
+        assert_eq!(parent.raw(), 1);
+        assert_eq!(ids.remaining(), 254);
     }
 }

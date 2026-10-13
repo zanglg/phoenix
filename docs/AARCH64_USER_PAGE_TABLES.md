@@ -1,5 +1,12 @@
 # AArch64 User Translation Tables
 
+> Construction-stage mechanism record: runtime-status and remaining-work lists below
+> describe the earlier integration boundary. Current support, limits and evidence are
+> maintained in [0.1-CONTRACT.md](0.1-CONTRACT.md) and
+> [RUNTIME_VALIDATION.md](RUNTIME_VALIDATION.md); those records supersede historical
+> pending statements here. The ownership design remains applicable unless the
+> current contract explicitly refines it.
+
 This document describes the ownership, materialization, and activation layer for lower-half
 AArch64 user page tables. It builds the same 39-bit, 4 KiB, three-level format configured by the
 bootstrap. Planning and ownership are Host Tested; the positive loaded-init materialization and

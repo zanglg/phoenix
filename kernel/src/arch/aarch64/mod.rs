@@ -9,12 +9,16 @@ use core::marker::PhantomData;
 use crate::sync::LocalIrqControl;
 
 pub mod asid;
+#[cfg(target_arch = "aarch64")]
+pub mod diagnostics;
 pub mod exception;
 pub mod gicv3;
 pub mod interrupt_runtime;
 pub mod kernel_page_table;
 pub mod paging;
 pub mod syscall;
+#[cfg(target_arch = "aarch64")]
+pub mod thread;
 pub mod timer;
 pub mod user_page_table;
 

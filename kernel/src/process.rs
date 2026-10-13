@@ -160,6 +160,8 @@ pub enum ProcessPhase {
     Ready,
     /// The process currently owns an execution context.
     Running,
+    /// A synchronous child owns execution until completion.
+    Waiting,
     /// Execution ended and resources await an explicit reap.
     Exited,
     /// A terminal user fault ended execution and awaits an explicit reap.
@@ -175,6 +177,8 @@ pub enum ProcessState {
     Ready,
     /// The process currently owns an execution context.
     Running,
+    /// A synchronous child owns execution until completion.
+    Waiting,
     /// Execution ended with the retained native status.
     Exited(ExitStatus),
     /// Execution ended with a classified user fault.
@@ -188,6 +192,7 @@ impl ProcessState {
             Self::Created => ProcessPhase::Created,
             Self::Ready => ProcessPhase::Ready,
             Self::Running => ProcessPhase::Running,
+            Self::Waiting => ProcessPhase::Waiting,
             Self::Exited(_) => ProcessPhase::Exited,
             Self::Faulted(_) => ProcessPhase::Faulted,
         }
@@ -197,7 +202,7 @@ impl ProcessState {
     pub const fn exit_status(self) -> Option<ExitStatus> {
         match self {
             Self::Exited(status) => Some(status),
-            Self::Created | Self::Ready | Self::Running | Self::Faulted(_) => None,
+            Self::Created | Self::Ready | Self::Running | Self::Waiting | Self::Faulted(_) => None,
         }
     }
 
@@ -206,7 +211,7 @@ impl ProcessState {
         match self {
             Self::Exited(status) => Some(ProcessTermination::Exited(status)),
             Self::Faulted(fault) => Some(ProcessTermination::Faulted(fault)),
-            Self::Created | Self::Ready | Self::Running => None,
+            Self::Created | Self::Ready | Self::Running | Self::Waiting => None,
         }
     }
 }
@@ -270,6 +275,15 @@ impl ProcessControl {
     /// Select one ready process as the active execution context.
     pub fn start(&mut self) -> Result<(), ProcessTransitionError> {
         self.transition(ProcessPhase::Ready, ProcessState::Running)
+    }
+
+    /// Block the running parent while its synchronous child executes.
+    pub fn wait_for_child(&mut self) -> Result<(), ProcessTransitionError> {
+        self.transition(ProcessPhase::Running, ProcessState::Waiting)
+    }
+    /// Resume a parent after its child resources have been retired.
+    pub fn resume(&mut self) -> Result<(), ProcessTransitionError> {
+        self.transition(ProcessPhase::Waiting, ProcessState::Running)
     }
 
     /// Record terminal status for the active process.
@@ -473,6 +487,23 @@ impl<T, const CAPACITY: usize> ProcessTable<T, CAPACITY> {
             .map_err(ProcessTableStateError::Lookup)?
             .control
             .start()
+            .map_err(ProcessTableStateError::Transition)
+    }
+
+    /// Suspend the parent for synchronous child execution.
+    pub fn wait_for_child(&mut self, id: ProcessId) -> Result<(), ProcessTableStateError> {
+        self.get_mut(id)
+            .map_err(ProcessTableStateError::Lookup)?
+            .control
+            .wait_for_child()
+            .map_err(ProcessTableStateError::Transition)
+    }
+    /// Resume a waiting parent after child completion.
+    pub fn resume(&mut self, id: ProcessId) -> Result<(), ProcessTableStateError> {
+        self.get_mut(id)
+            .map_err(ProcessTableStateError::Lookup)?
+            .control
+            .resume()
             .map_err(ProcessTableStateError::Transition)
     }
 
@@ -695,5 +726,29 @@ mod tests {
         let reaped = table.reap(id).unwrap();
         assert_eq!(reaped.termination(), ProcessTermination::Faulted(fault));
         assert_eq!(reaped.into_resources(), 9);
+    }
+
+    #[test]
+    fn waiting_parent_retains_resources_and_only_resume_can_run_it() {
+        let mut table = ProcessTable::<u8, 2>::new();
+        let parent = table.insert(17).unwrap();
+        assert!(table.wait_for_child(parent).is_err());
+        assert!(table.resume(parent).is_err());
+        table.make_ready(parent).unwrap();
+        table.start(parent).unwrap();
+        table.wait_for_child(parent).unwrap();
+        assert_eq!(table.get(parent).unwrap().state(), ProcessState::Waiting);
+        assert_eq!(*table.get(parent).unwrap().resources(), 17);
+        assert!(table.start(parent).is_err());
+        assert!(table.exit(parent, ExitStatus::new(0)).is_err());
+        assert!(table.reap(parent).is_err());
+        let child = table.insert(21).unwrap();
+        table.make_ready(child).unwrap();
+        table.start(child).unwrap();
+        table.exit(child, ExitStatus::new(7)).unwrap();
+        table.reap(child).unwrap();
+        table.resume(parent).unwrap();
+        assert_eq!(table.get(parent).unwrap().state(), ProcessState::Running);
+        assert!(table.resume(parent).is_err());
     }
 }

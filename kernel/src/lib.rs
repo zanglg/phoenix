@@ -29,3 +29,9 @@ pub mod platform;
 
 /// The Phoenix project version inherited from the workspace manifest.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+pub mod scheduler;
+
+pub mod event_log;
+pub mod stack_trace;
+pub mod vfs;

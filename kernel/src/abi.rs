@@ -28,6 +28,8 @@ pub enum NativeSyscall {
     Open,
     /// Close a file descriptor (`number=4`).
     Close,
+    /// Run one child synchronously (`number=5`), returning its terminal status.
+    Run,
     /// Unassigned number retained for forward-compatible rejection.
     Unknown(u64),
 }
@@ -41,6 +43,7 @@ impl NativeSyscall {
             2 => Self::Read,
             3 => Self::Open,
             4 => Self::Close,
+            5 => Self::Run,
             number => Self::Unknown(number),
         }
     }
@@ -53,6 +56,7 @@ impl NativeSyscall {
             Self::Read => 2,
             Self::Open => 3,
             Self::Close => 4,
+            Self::Run => 5,
             Self::Unknown(number) => number,
         }
     }
@@ -271,6 +275,10 @@ pub enum Errno {
     InvalidArgument = 22,
     /// The process has exhausted its open-file capacity.
     TooManyOpenFiles = 24,
+    /// Writable filesystem capacity is exhausted.
+    NoSpace = 28,
+    /// No console input is currently available.
+    TryAgain = 11,
     /// The system call is unknown or not implemented.
     NotImplemented = 38,
 }

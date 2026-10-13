@@ -1,3 +1,6 @@
 [alias]
 xtask = "run --quiet --manifest-path xtask/Cargo.toml --"
 
+[target.aarch64-unknown-none-softfloat]
+rustflags = ["-Cforce-frame-pointers=yes"]
+

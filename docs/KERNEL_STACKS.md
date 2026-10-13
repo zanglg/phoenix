@@ -1,5 +1,12 @@
 # Kernel Stacks
 
+> Construction-stage mechanism record: runtime-status and remaining-work lists below
+> describe the earlier integration boundary. Current support, limits and evidence are
+> maintained in [0.1-CONTRACT.md](0.1-CONTRACT.md) and
+> [RUNTIME_VALIDATION.md](RUNTIME_VALIDATION.md); those records supersede historical
+> pending statements here. The ownership design remains applicable unless the
+> current contract explicitly refines it.
+
 This document describes the stack protection that Phoenix currently implements and the larger
 kernel-stack policy that remains to be built. The linker-owned boot guard becomes effective only
 after the final AArch64 `TTBR1_EL1` hierarchy is installed; the owned runtime-stack mechanism is

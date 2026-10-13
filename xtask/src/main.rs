@@ -4,7 +4,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
+mod package;
 mod qemu;
+mod symbolize;
+mod system;
 
 const AARCH64_TARGET: &str = "aarch64-unknown-none-softfloat";
 const KERNEL_PHYS_BASE: u64 = 0x0000_0000_4008_0000;
@@ -25,6 +28,13 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     };
 
+    if command == "symbolize" {
+        return if symbolize::run(args.collect()) {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        };
+    }
     if args.next().is_some() {
         eprintln!("error: command '{command}' does not accept arguments");
         return ExitCode::FAILURE;
@@ -47,6 +57,14 @@ fn main() -> ExitCode {
         "test-kernel-map" => test_kernel_map(),
         "test-el0" => test_el0(),
         "test-init" => test_init(),
+        "test-runtime" => test_runtime(),
+        "test-system" => test_system(),
+        "build-system" => {
+            build_kernel_variant(KernelVariant::System)
+                && inspect_kernel_variant(KernelVariant::System)
+        }
+        "run-system" => run_system(),
+        "package" => package::run(),
         "ci" => ci(),
         "help" | "--help" | "-h" => {
             print_help();
@@ -88,7 +106,11 @@ fn print_help() {
     println!("  test-kernel-map  Run the bounded QEMU final-kernel-map probe");
     println!("  test-el0  Run the bounded QEMU EL0 conformance probe");
     println!("  test-init  Run the bounded dynamically loaded init probe");
+    println!("  test-runtime  Run guest-exit boot, exception, permission and IRQ probes");
+    println!("  build-system / run-system / test-system  Build or exercise the native system");
+    println!("  package  Collect system artifacts, provenance and SHA-256 checksums");
     println!("  ci       Run every validation available without an emulator");
+    println!("  symbolize <ELF> <0xADDRESS>...  Resolve addresses using the exact kernel ELF");
 }
 
 fn workspace_root() -> PathBuf {
@@ -336,14 +358,31 @@ fn lint() -> bool {
     kernel_lint.env("PHOENIX_INITRAMFS", initramfs);
     run_command("lint kernel for configured LSP target", &mut kernel_lint)
         && run(
+            "lint kernel-map runtime probes",
+            "cargo",
+            &[
+                "clippy",
+                "--package",
+                "phoenix-kernel",
+                "--bin",
+                "phoenix-kernel",
+                "--features",
+                "kernel-map-probe",
+                "--target",
+                &target,
+                "--",
+                "-D",
+                "warnings",
+            ],
+        )
+        && run(
             "lint init for configured LSP target",
             "cargo",
             &[
                 "clippy",
                 "--package",
                 "phoenix-init",
-                "--bin",
-                "phoenix-init",
+                "--bins",
                 "--target",
                 &target,
                 "--",
@@ -418,6 +457,7 @@ enum KernelVariant {
     KernelMapProbe,
     El0Probe,
     LoadedInitProbe,
+    System,
 }
 
 impl KernelVariant {
@@ -428,6 +468,7 @@ impl KernelVariant {
             Self::KernelMapProbe => "kernel-map-probe",
             Self::El0Probe => "el0-probe",
             Self::LoadedInitProbe => "loaded-init-probe",
+            Self::System => "system",
         }
     }
 
@@ -438,6 +479,7 @@ impl KernelVariant {
             Self::KernelMapProbe => &["kernel-map-probe"],
             Self::El0Probe => &["el0-probe"],
             Self::LoadedInitProbe => &["loaded-init-probe"],
+            Self::System => &["system"],
         }
     }
 
@@ -461,6 +503,7 @@ impl KernelVariant {
         match self {
             Self::El0Probe => Some((qemu::USER_FAULT_SENTINEL, qemu::EL0_FAILURE_SENTINEL)),
             Self::LoadedInitProbe => Some((qemu::USER_FAULT_SENTINEL, qemu::INIT_FAILURE_SENTINEL)),
+            Self::System => Some((qemu::USER_FAULT_SENTINEL, "PHOENIX_SYSTEM_FAIL")),
             Self::Default | Self::BootMemoryProbe | Self::KernelMapProbe => None,
         }
     }
@@ -472,6 +515,7 @@ impl KernelVariant {
             Self::KernelMapProbe => qemu::KERNEL_MAP_SUCCESS_SENTINEL,
             Self::El0Probe => qemu::EL0_SUCCESS_SENTINEL,
             Self::LoadedInitProbe => qemu::INIT_SUCCESS_SENTINEL,
+            Self::System => "PHOENIX_SYSTEM_OK",
         }
     }
 }
@@ -486,6 +530,7 @@ fn kernel_artifacts(target: &str, variant: KernelVariant) -> Artifacts {
         KernelVariant::KernelMapProbe => "phoenix-kernel-map",
         KernelVariant::El0Probe => "phoenix-kernel-el0",
         KernelVariant::LoadedInitProbe => "phoenix-kernel-init",
+        KernelVariant::System => "phoenix-system",
     };
     Artifacts {
         elf: cargo_target_dir.join(target).join("debug/phoenix-kernel"),
@@ -594,6 +639,7 @@ fn build_init() -> bool {
 
     let link_arg = format!("-Clink-arg=-Map={}", artifacts.map.display());
     let mut cargo = Command::new("cargo");
+    cargo.env("CARGO_INCREMENTAL", "0");
     cargo.args([
         "rustc",
         "--package",
@@ -886,7 +932,13 @@ fn build_kernel_variant(variant: KernelVariant) -> bool {
         return false;
     };
     let artifacts = kernel_artifacts(&target, variant);
-    let initramfs = if matches!(variant, KernelVariant::LoadedInitProbe) {
+    let initramfs = if matches!(variant, KernelVariant::System) {
+        let Some(path) = system::archive(&target) else {
+            eprintln!("error: system archive failed");
+            return false;
+        };
+        Some(path)
+    } else if matches!(variant, KernelVariant::LoadedInitProbe) {
         let Some(path) = prepare_initramfs(&target) else {
             return false;
         };
@@ -905,6 +957,7 @@ fn build_kernel_variant(variant: KernelVariant) -> bool {
 
     let link_arg = format!("-Clink-arg=-Map={}", artifacts.map.display());
     let mut cargo = Command::new("cargo");
+    cargo.env("CARGO_INCREMENTAL", "0");
     cargo.args([
         "--config",
         ".cargo/lsp.toml",
@@ -1024,8 +1077,13 @@ fn validate_symbol_layout(symbols: &BTreeMap<String, u64>, expect_el0_probe: boo
     if kernel_start != start {
         errors.push("__kernel_start and _start differ".to_owned());
     }
-    if kernel_end <= kernel_start || kernel_end > FINAL_KERNEL_PERMISSION_WINDOW_END {
-        errors.push("kernel does not fit the final first-2-MiB permission window".to_owned());
+    if kernel_end <= kernel_start || kernel_end > 0xffff_ff80_4040_0000 {
+        errors.push("kernel does not fit the reserved first-4-MiB image window".to_owned());
+    }
+    if rodata_end > FINAL_KERNEL_PERMISSION_WINDOW_END
+        || stack_guard_end > FINAL_KERNEL_PERMISSION_WINDOW_END
+    {
+        errors.push("permission overrides and guard exceed the first-2-MiB window".to_owned());
     }
     if text_start != kernel_start
         || text_start >= text_end
@@ -1417,6 +1475,44 @@ fn test_init() -> bool {
         )
 }
 
+fn test_runtime() -> bool {
+    let Some(target) = require_aarch64_target() else {
+        return false;
+    };
+    let artifacts = kernel_artifacts(&target, KernelVariant::KernelMapProbe);
+    build_kernel_variant(KernelVariant::KernelMapProbe)
+        && inspect_kernel_variant(KernelVariant::KernelMapProbe)
+        && qemu::test_runtime(
+            &artifacts.image,
+            artifacts.image.parent().unwrap(),
+            &workspace_root(),
+        )
+}
+
+fn run_system() -> bool {
+    let Some(target) = require_aarch64_target() else {
+        return false;
+    };
+    let artifacts = kernel_artifacts(&target, KernelVariant::System);
+    build_kernel_variant(KernelVariant::System)
+        && inspect_kernel_variant(KernelVariant::System)
+        && qemu::run_interactive(&artifacts.image, &workspace_root())
+}
+
+fn test_system() -> bool {
+    let Some(target) = require_aarch64_target() else {
+        return false;
+    };
+    let artifacts = kernel_artifacts(&target, KernelVariant::System);
+    build_kernel_variant(KernelVariant::System)
+        && inspect_kernel_variant(KernelVariant::System)
+        && qemu::test_system(
+            &artifacts.image,
+            artifacts.image.parent().unwrap(),
+            &workspace_root(),
+        )
+}
+
 fn ci() -> bool {
     doctor()
         && format()
@@ -1433,6 +1529,8 @@ fn ci() -> bool {
         && inspect_kernel_variant(KernelVariant::El0Probe)
         && build_kernel_variant(KernelVariant::LoadedInitProbe)
         && inspect_kernel_variant(KernelVariant::LoadedInitProbe)
+        && build_kernel_variant(KernelVariant::System)
+        && inspect_kernel_variant(KernelVariant::System)
         && build_kernel()
         && inspect_kernel()
 }
@@ -1522,6 +1620,32 @@ mod tests {
 
         assert_eq!(symbols["_start"], KERNEL_VIRT_BASE);
         assert!(validate_symbol_layout(&symbols, false).is_empty());
+        let mut tail = symbols.clone();
+        for name in ["__bss_end", "__boot_stack_guard_start"] {
+            tail.insert(name.into(), 0xffff_ff80_401f_f000);
+        }
+        for name in ["__boot_stack_guard_end", "__boot_stack_bottom"] {
+            tail.insert(name.into(), 0xffff_ff80_4020_0000);
+        }
+        for name in ["__boot_stack_top", "__kernel_end", "__data_end"] {
+            tail.insert(name.into(), 0xffff_ff80_4030_0000);
+        }
+        assert!(
+            validate_symbol_layout(&tail, false).is_empty(),
+            "RW/NX tail may extend beyond 2 MiB"
+        );
+        tail.insert("__boot_stack_guard_end".into(), 0xffff_ff80_4020_1000);
+        assert!(
+            validate_symbol_layout(&tail, false)
+                .iter()
+                .any(|error| error.contains("first-2-MiB"))
+        );
+        tail.insert("__kernel_end".into(), 0xffff_ff80_4040_1000);
+        assert!(
+            validate_symbol_layout(&tail, false)
+                .iter()
+                .any(|error| error.contains("first-4-MiB"))
+        );
         symbols.insert("__boot_stack_guard_end".to_owned(), 0xffff_ff80_4008_7000);
         assert!(
             validate_symbol_layout(&symbols, false)

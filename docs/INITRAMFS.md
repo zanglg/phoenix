@@ -1,5 +1,12 @@
 # Initial Initramfs Contract
 
+> Construction-stage mechanism record: runtime-status and remaining-work lists below
+> describe the earlier integration boundary. Current support, limits and evidence are
+> maintained in [0.1-CONTRACT.md](0.1-CONTRACT.md) and
+> [RUNTIME_VALIDATION.md](RUNTIME_VALIDATION.md); those records supersede historical
+> pending statements here. The ownership design remains applicable unless the
+> current contract explicitly refines it.
+
 This document describes Phoenix's first initramfs parser, deterministic package builder, and
 loaded-init lookup boundary. Parsing, packaging, and exact-content checks are Host Tested and Cross
 Compiled. The recorded QEMU 9.1.3 loaded-init probe consumed the exact inspected archive and is

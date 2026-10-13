@@ -1,106 +1,27 @@
-# Native Phoenix ABI Revision 0
+# Native Phoenix ABI revision 0
 
-This document records the first unstable userspace call convention. Revision 0 is a development
-contract tied to the 0.0.0 source tree; it is not a compatibility promise.
+The authoritative current syscall table, limits and error behavior are in
+[0.1-CONTRACT.md](0.1-CONTRACT.md#processes-and-native-abi). Revision 0 is native
+and unstable; it implies no Linux or POSIX compatibility.
 
-## AArch64 system-call convention
+AArch64 uses `SVC #0`, number in x8, six arguments in x0–x5, return in x0.
+Returning calls preserve other integer registers and the architectural next PC.
+Numbers 0–5 are exit, write, read, open, close and synchronous child run. Unknown
+numbers return ENOSYS. A nonzero SVC immediate is a terminal BadSystemCall fault,
+which kills the child and returns EFAULT to its waiting parent.
 
-EL0 issues `SVC #0`. On entry to EL1:
+The system dispatcher supports console descriptors 0/1/2, eight regular descriptors,
+256-byte transfers and 128-byte canonical relative paths. Read/write tmp mode is 1;
+read-only archive/tmp mode is 0. Stdin returns EAGAIN when empty. File reads commit
+offsets only after complete validated user copying; writes have no partial-capacity
+success. Parent and child register/address-space ownership is described in the
+current contract and [UNSAFE_REVIEW.md](UNSAFE_REVIEW.md).
 
-| Purpose | Register |
-| --- | --- |
-| System-call number | `x8` |
-| Arguments 0 through 5 | `x0` through `x5` |
-| Return value | `x0` |
+The focused `test-init` fixture deliberately retains its earlier read-only bridge
+and does not implement `run`; `test-system` exercises the complete revision-0 system
+boundary. Both are explicitly separate image variants.
 
-The exception frame preserves all registers. The AArch64 adapter extracts the request without
-changing `ELR_EL1`; for an AArch64 `SVC`, the architectural return address already identifies the
-following instruction. The dispatcher accepts only the lower-AArch64 synchronous vector with
-exception class `SupervisorCallAArch64` and immediate zero. The current EL0 variants treat a
-rejected SVC trap convention, such as a nonzero immediate, as a terminal `BadSystemCall` user
-fault rather than an unknown syscall number. Unknown numbers supplied correctly in `x8` still
-return `NotImplemented`.
-
-## Initial number assignments
-
-| Number | Name | Intended arguments | Status |
-| ---: | --- | --- | --- |
-| 0 | `exit` | `x0=status` | Implemented by the probes; loaded init records a terminal process state before reporting success |
-| 1 | `write` | `x0=fd`, `x1=user buffer`, `x2=length` | Implemented only by the loaded-init stdout probe |
-| 2 | `read` | `x0=fd`, `x1=user buffer`, `x2=length` | Implemented only by the loaded-init file probe |
-| 3 | `open` | `x0=path bytes`, `x1=path length`, `x2=mode` | Implemented only by the loaded-init file probe |
-| 4 | `close` | `x0=fd` | Implemented only by the loaded-init file probe |
-
-Unknown numbers are preserved and the opt-in probe returns `NotImplemented`; they are not parser errors. These
-assignments may change while the revision and project version remain zero.
-
-The probe `write` accepts only descriptor 1 and at most 256 bytes. It validates the complete range
-against retained resident-page ownership, reads through the checked physical-memory backend, emits
-bytes exactly to PL011, and returns the full length. It returns `BadFileDescriptor`,
-`InvalidArgument`, or `BadAddress` before emitting output when validation fails. It does not yet
-support short writes or a general file table. See `docs/USER_COPY.md`.
-
-The probe `open` accepts a nonempty canonical UTF-8 path of at most 128 bytes and mode zero
-(`OPEN_READ_ONLY`). It returns the lowest free regular-file descriptor starting at 3. The probe
-`read` accepts at most 256 bytes, copies available data into a fully prevalidated writable user
-range, returns zero at EOF, and advances the open-file offset only after the copy succeeds. `close`
-releases that descriptor. The loaded-init table has four regular-file slots. These direct
-initramfs semantics are detailed in `docs/FILE_DESCRIPTORS.md`.
-
-## Process entry stack
-
-The first native process receives a 16-byte-aligned `SP_EL0` pointing to `argc`, followed by
-`argv`, `envp`, and a terminated auxiliary vector. Revision 0 currently supplies page size, ELF
-entry, and Phoenix ABI revision entries. Exact word and string layout, limits, and validation are
-defined in `docs/INITIAL_USER_STACK.md`.
-
-## Return convention
-
-Success is a non-negative value from zero through `i64::MAX`. Errors are encoded in `x0` as the
-two's-complement negative of a positive error number from 1 through 4095. The initially named
-errors are `NoSuchFile` (2), `InputOutput` (5), `BadFileDescriptor` (9), `NoMemory` (12),
-`PermissionDenied` (13), `BadAddress` (14), `IsDirectory` (21), `InvalidArgument` (22),
-`TooManyOpenFiles` (24), and `NotImplemented` (38). Decoding retains unnamed error numbers.
-
-Values above `i64::MAX` cannot be encoded as success because they collide with the signed error
-space. This rule is checked when constructing a return value.
-
-The current `exit` argument is retained as a full opaque 64-bit `ExitStatus`; it is not truncated
-to Unix's conventional low eight bits. Loaded init accepts its terminal success sentinel only when
-the active process control can move from `Running` to `Exited`. Resource reclamation remains a
-kernel lifecycle concern and does not occur on the exiting EL0 exception stack.
-
-Architecture exceptions are not encoded as syscall return values. The current terminal fault
-boundary records the process outcome and is documented in `docs/USER_FAULTS.md`.
-
-## Invariants
-
-- the generic ABI preserves all six arguments and unknown call numbers;
-- architecture register extraction exists only in the AArch64 layer;
-- a syscall does not advance the saved PC a second time;
-- pointer-shaped arguments remain untrusted integers until user-copy validation;
-- a handler writes only the documented return register unless the syscall contract says otherwise;
-- ABI revision zero never implies Linux syscall-number or semantic compatibility.
-
-## Validation
-
-Host tests cover known and unknown numbers, all argument positions, register adaptation, PC
-preservation, maximum success values, named negative errors, the boundary outside the error
-window, and bounded stdout/open/read/close request validation. File-table behavior and both user
-copy directions have separate host tests. The types and adapter are Cross Compiled for AArch64.
-
-## TODO
-
-- generalize the probe-only SVC recognition into a production dispatcher;
-- move terminal `exit` from the retained probe owner into scheduler-context teardown and reap;
-- define partial I/O, interruption, and production transfer limits;
-- move the probe file table into table-owned process resources and define stdin/stderr initialization;
-- separate ABI revisioning from the project version when revision 1 is proposed;
-- execute both EL0 conformance programs and retain their QEMU transcripts.
-- define native wait/signal status for retained terminal user-fault outcomes.
-
-## Skipped work
-
-Linux ABI compatibility, POSIX completeness, ioctl, signals, restartable calls, futexes, polling,
-sockets, general VFS semantics, capabilities, tracing, seccomp, 32-bit compatibility, and vDSO
-calls are not part of revision 0. No syscall behavior is currently claimed as Runtime Verified.
+Native initial stack words, alignment, argc/argv/envp and auxiliary-vector layout
+remain defined in [INITIAL_USER_STACK.md](INITIAL_USER_STACK.md). ELF images are
+static AArch64 executables with no dynamic linker or TLS contract. The runtime
+ledger records actual positive, negative and resource-exhaustion execution evidence.

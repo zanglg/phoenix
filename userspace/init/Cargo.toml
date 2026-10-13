@@ -15,3 +15,21 @@ bench = false
 
 [lints]
 workspace = true
+
+[[bin]]
+name = "phoenix-system"
+path = "src/system.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "phoenix-child"
+path = "src/child.rs"
+test = false
+bench = false
+
+[[bin]]
+name = "phoenix-fault"
+path = "src/fault.rs"
+test = false
+bench = false

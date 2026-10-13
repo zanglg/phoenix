@@ -1,3 +1,5 @@
+mod runtime;
+
 use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::{self, Read};
@@ -255,16 +257,7 @@ fn test_kernel(image: &Path, log: &Path, workspace_root: &Path, expected: Expect
     let stderr_reader = spawn_reader(stderr, sender, "stderr");
 
     let (outcome, mut output) = observe(&mut child, &receiver, expected);
-    if matches!(
-        outcome,
-        TestOutcome::Success
-            | TestOutcome::Failure
-            | TestOutcome::ProtocolFailure
-            | TestOutcome::Panic
-            | TestOutcome::Exception
-            | TestOutcome::Timeout
-            | TestOutcome::OutputLimit
-    ) {
+    if !matches!(outcome, TestOutcome::Exited(_)) {
         let _ = child.kill();
     }
     let _ = child.wait();
@@ -535,6 +528,16 @@ fn shell_quote(argument: &OsStr) -> String {
     } else {
         format!("'{}'", argument.replace('\'', "'\\''"))
     }
+}
+
+/// Run the native system with supplied console input and guest-driven exit.
+pub fn test_system(image: &Path, directory: &Path, root: &Path) -> bool {
+    runtime::system(image, directory, root)
+}
+
+/// Run opt-in destructive probes, requiring a clean guest-driven exit.
+pub fn test_runtime(image: &Path, log_directory: &Path, root: &Path) -> bool {
+    runtime::suite(image, log_directory, root)
 }
 
 #[cfg(test)]

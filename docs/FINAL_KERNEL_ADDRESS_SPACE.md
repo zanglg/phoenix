@@ -1,5 +1,12 @@
 # Final AArch64 Kernel Address Space
 
+> Construction-stage mechanism record: runtime-status and remaining-work lists below
+> describe the earlier integration boundary. Current support, limits and evidence are
+> maintained in [0.1-CONTRACT.md](0.1-CONTRACT.md) and
+> [RUNTIME_VALIDATION.md](RUNTIME_VALIDATION.md); those records supersede historical
+> pending statements here. The ownership design remains applicable unless the
+> current contract explicitly refines it.
+
 This document describes Phoenix's implemented final `TTBR1_EL1` hierarchy for the pinned
 AArch64 QEMU `virt` platform. Planning, allocation, materialization, cross-compilation, and ELF
 inspection are complete. Publication on the recorded QEMU 9.1.3 AArch64 CPU path is Runtime

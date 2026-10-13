@@ -1,5 +1,12 @@
 # IRQ-Safe Synchronization
 
+> Construction-stage mechanism record: runtime-status and remaining-work lists below
+> describe the earlier integration boundary. Current support, limits and evidence are
+> maintained in [0.1-CONTRACT.md](0.1-CONTRACT.md) and
+> [RUNTIME_VALIDATION.md](RUNTIME_VALIDATION.md); those records supersede historical
+> pending statements here. The ownership design remains applicable unless the
+> current contract explicitly refines it.
+
 This document defines Phoenix's first synchronization primitive: an architecture-neutral
 IRQ-save spinlock with an AArch64 `DAIF.I` backend. The lock algorithm is Host Tested and the
 AArch64 masking path is Cross Compiled. An architecture-neutral timer controller and a Host Tested

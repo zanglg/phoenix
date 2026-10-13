@@ -91,8 +91,14 @@ __exception_vectors_end:
 
 .type __exception_dispatch, %function
 __exception_dispatch:
+    /* The interrupted x29 is in the saved frame; never chase an EL0 chain. */
+    mov     x29, xzr
     bl      phoenix_exception_dispatch
+    /* The dispatcher returns a retained frame, possibly on another thread stack. */
+    mov     sp, x0
 
+    .global phoenix_restore_frame
+phoenix_restore_frame:
     /* A returning dispatcher may update SP_EL0, ELR_EL1, or SPSR_EL1. */
     ldr     x9, [sp, #FRAME_SP_EL0]
     msr     SP_EL0, x9

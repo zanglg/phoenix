@@ -31,7 +31,7 @@ _No unclassified entries._
 | BUILD-002 | Target-aware rust-analyzer configuration | Implemented | 0.1.0 | Default target lives in `.cargo/lsp.toml` |
 | BUILD-003 | Host-side canonical validation | Implemented | 0.1.0 | Provided by xtask |
 | BUILD-004 | Kernel artifact and image packaging | Implemented | 0.1.0 | ELF, raw image, linker map, and static inspection |
-| BUILD-005 | Reproducible release artifacts and provenance | Deferred | Unscheduled | Revisit before public releases |
+| BUILD-005 | Reproducible release artifacts and provenance | Implemented | 0.1.0 | System artifact directory, exact tool/source provenance and SHA-256 checksums; reproduction uses the recorded checkout path and tools |
 | BUILD-006 | Explicit host/static/runtime validation states | Implemented | 0.1.0 | Runtime debt is recorded separately, never implied by compilation |
 | BUILD-007 | Early-stack footprint regression check | Captured | Unscheduled | A first final-map QEMU run exceeded the former 512 KiB stack; automate a build-time bound before shrinking the current 1 MiB temporary stack |
 
@@ -39,9 +39,9 @@ _No unclassified entries._
 
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
-| BOOT-001 | AArch64 QEMU `virt` direct boot | Implemented | 0.1.0 | QEMU 9.1.3 `virt-9.1` boot probe reached `PHOENIX_BOOT_OK` |
-| BOOT-002 | Early stack, BSS initialization, panic, and halt | In Progress | 0.1.0 | Positive boot and 1 MiB construction-stack use are runtime exercised; BSS-boundary and panic probes remain |
-| BOOT-003 | Device Tree discovery and ownership | In Progress | 0.1.0 | QEMU boot-memory probe validated target DTB borrowing; broader ownership and negative cases remain |
+| BOOT-001 | AArch64 QEMU `virt` direct boot | Implemented | 0.1.0 | Pinned virt-9.1 board; current transcripts in docs/RUNTIME_VALIDATION.md |
+| BOOT-002 | Early stack, BSS initialization, panic, and halt | Implemented | 0.1.0 | Full BSS, stack bounds/alignment, intentional panic and guest test exit are Runtime Verified |
+| BOOT-003 | Device Tree discovery and ownership | Implemented | 0.1.0 | Strict DTB parsing and reserved lifetime; real boot DTB feeds the reservation-filtered allocator |
 | BOOT-004 | UEFI boot | Deferred | Unscheduled | Future firmware path |
 | BOOT-005 | Multiboot-compatible x86_64 boot path | Deferred | Unscheduled | Decide with x86_64 port |
 | BOOT-006 | Shutdown and reboot | Deferred | Unscheduled | Platform-specific mechanisms |
@@ -50,11 +50,11 @@ _No unclassified entries._
 
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
-| ARCH-001 | AArch64 execution and exception-level normalization | Planned | 0.1.0 | Primary architecture |
-| ARCH-002 | Exception vectors and register context | In Progress | 0.1.0 | EL0 SVC entry/return passed on QEMU; deliberate faults and full register preservation remain |
+| ARCH-001 | AArch64 execution and exception-level normalization | Implemented | 0.1.0 | EL2 and direct EL1 boot both verified; EL1 kernel, soft-float and one CPU |
+| ARCH-002 | Exception vectors and register context | Implemented | 0.1.0 | All GPRs, SP_EL0, status and ERET round-trip; controlled faults and epilogue context switching verified |
 | ARCH-003 | CPU feature discovery | Deferred | Unscheduled | Avoid assuming emulator-only features |
 | ARCH-004 | FP/SIMD ownership and context policy | Deferred | Unscheduled | Kernel starts without FP/SIMD use |
-| ARCH-005 | AArch64 ASID allocation and TTBR0 encoding | In Progress | 0.1.0 | Nonzero 8-bit values, monotonic no-reuse allocation, and exact encoding are Host Tested; both EL0 paths use ASID 1, while retirement and reuse remain |
+| ARCH-005 | AArch64 ASID allocation and TTBR0 encoding | Implemented | 0.1.0 | Root/ASID readback; retired child IDs reused only after global TLB completion; host exhaustion and reuse tested |
 | PORT-001 | RISC-V 64 port | Deferred | Unscheduled | Initial platform: QEMU `virt` |
 | PORT-002 | x86_64 port | Deferred | Unscheduled | Initial platform: QEMU `q35` |
 
@@ -62,27 +62,27 @@ _No unclassified entries._
 
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
-| MM-001 | Physical page allocator | In Progress | 0.1.0 | QEMU boot-memory probe validated DTB derivation and one allocate/readback/scrub/release cycle; boundary-negative probes remain |
-| MM-002 | Virtual memory and kernel address space | In Progress | 0.1.0 | Final TTBR1 publication passed on QEMU; managed-RAM access, exact GIC device leaves, empty stack topology, restricted live L3 leaf/TLBI transactions, and a bounded final-map integration are Host Tested/Cross Compiled, while the current eight-table rerun, guard/permission negatives, low-alias retirement, and general dynamic mappings remain |
-| MM-003 | Kernel heap and fallible allocation policy | In Progress | 0.1.0 | Core ownership/failure behavior is Host Tested; a bounded four-frame/four-record post-TTBR1 probe is Cross Compiled and ELF Inspected, while target evidence, consumer sizing, and synchronized use remain |
-| MM-004 | Kernel stacks and guard pages | In Progress | 0.1.0 | Owned slot/frame plans, mapped ownership, a prelinked arena, and an exact AArch64 leaf mapper with injected failure/TLB-order tests are Host Tested; a bounded publish/alias/retire/release probe is Cross Compiled/ELF Inspected, while stack entry, target evidence, sizing, and exception-stack policy remain |
-| MM-005 | User address spaces and safe user copies | In Progress | 0.1.0 | Plans/materialization/ownership and bidirectional copies are Host Tested; loaded init uses an ownership-checked final-direct-map adapter; general fault recovery, lifecycle, and runtime evidence remain |
+| MM-001 | Physical page allocator | Implemented | 0.1.0 | DTB reservations, range endpoint accesses, exhaustion/recovery and child frame accounting |
+| MM-002 | Virtual memory and kernel address space | Implemented | 0.1.0 | Eight-table final TTBR1, exact device pages, protected text/rodata, owned RAM capability and transactional L3 updates; RO/NX/low-alias faults verified |
+| MM-003 | Kernel heap and fallible allocation policy | Implemented | 0.1.0 | Focused four-page/four-record heap with two guards; fallible allocation and target byte/metadata exhaustion; no global allocator or concurrent consumer |
+| MM-004 | Kernel stacks and guard pages | Implemented | 0.1.0 | Owned 32 KiB worker stacks, mapped guard faults, actual entry/preemption and retirement before reclamation; no emergency exception stack |
+| MM-005 | User address spaces and safe user copies | Implemented | 0.1.0 | Isolated ELF/stack/table ownership and complete checked cross-page copies; terminal user faults return to parent |
 | MM-006 | Shared memory and copy-on-write | Deferred | Unscheduled | Requires process VM |
 | MM-007 | Huge pages and block mappings | Captured | Unscheduled | Revisit after basic paging |
 | MM-008 | DMA, cache coherence, and IOMMU policy | Deferred | Unscheduled | Required for robust device support |
-| MM-009 | OOM and resource exhaustion behavior | In Progress | Unscheduled | Heap byte, metadata, physical-frame, and initialization failures are explicit and injected in host tests; the Cross Compiled heap probe checks recoverable byte/metadata exhaustion, while broader subsystem policy and target evidence remain |
+| MM-009 | OOM and resource exhaustion behavior | Implemented | 0.1.0 | Explicit bounded allocator/heap/process/ASID/file limits; host rollback and target exhaustion/recovery tests |
 | MM-010 | Checked physical/virtual addresses, pages, frames, and ranges | Implemented | 0.1.0 | Host Tested and Cross Compiled |
 
 ## Concurrency, time, and SMP
 
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
-| CONC-001 | Atomics and memory-ordering policy | In Progress | 0.1.0 | IRQ-save spinlock ownership uses documented Acquire/Release ordering; publication, device, page-table, and future scheduler primitives retain their own contracts |
-| CONC-002 | Spinlocks and IRQ-safe synchronization | In Progress | 0.1.0 | IRQ-save lock, timer service, atomic one-shot schedule/bind, post-EOI consumption, and runtime-before-inner-lock ordering are Host Tested; closed-gate boot publication/lookup Cross Compiles, while active boot delivery, preemption/migration rules, broader lock graph, and target evidence remain |
-| SCHED-001 | Kernel threads and context switching | Planned | 0.1.0 | Architecture boundary required |
-| SCHED-002 | Scheduler, preemption, and idle | Planned | 0.1.0 | Policy remains open |
-| TIME-001 | Monotonic clock and generic timer | In Progress | 0.1.0 | Checked ticks/frequency plus the non-transferable CNTP adapter/runtime are Host Tested/Cross Compiled; boot claims, disables, observes, and publishes it, while boot scheduling/activation, observed target frequency, and runtime evidence remain |
-| TIME-002 | Timer queue and sleep | In Progress | 0.1.0 | Fixed deadlines, transactional reprogramming/recovery, atomic one-shot schedule/bind with cancellation rollback, exact post-EOI consumption, and pending-event shutdown rejection are Host Tested; boot still leaves the consumer unbound, while active scheduling, sleep, and runtime evidence remain |
+| CONC-001 | Atomics and memory-ordering policy | Implemented | 0.1.0 | Acquire/Release publication and IRQ-save exclusion; context switch/TLB ownership contracts in 0.1-CONTRACT.md |
+| CONC-002 | Spinlocks and IRQ-safe synchronization | Implemented | 0.1.0 | Target IRQ deferred across lock, then exact restoration and post-EOI callback; no migration or nested IRQs |
+| SCHED-001 | Kernel threads and context switching | Implemented | 0.1.0 | Focused two-worker integration with retained stack owners and complete exception-frame switching |
+| SCHED-002 | Scheduler, preemption, and idle | Implemented | 0.1.0 | Bounded round robin, 2 ms timer preemption, idle, sleep, exit and stack reap; user-system execution remains synchronous |
+| TIME-001 | Monotonic clock and generic timer | Implemented | 0.1.0 | Read-only physical counter, checked frequency conversion and real GIC timer delivery |
+| TIME-002 | Timer queue and sleep | Implemented | 0.1.0 | Transactional deadline queue and one-shot identity checks; post-EOI callbacks and thread sleep verified |
 | SMP-001 | Secondary CPU bring-up and per-CPU data | Deferred | Unscheduled | Preserve interfaces before enabling SMP |
 | SMP-002 | IPI and TLB shootdown | Deferred | Unscheduled | Coordinate with virtual memory design |
 
@@ -90,11 +90,12 @@ _No unclassified entries._
 
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
-| PROC-001 | Process and thread lifecycle | In Progress | 0.1.0 | Generation-checked IDs, strict process phases, retained exit/fault outcomes, and bounded ownership table are Host Tested; loaded init uses lifecycle transitions, while threads and teardown remain |
-| ABI-001 | Native Phoenix syscall ABI | In Progress | 0.1.0 | Positive EL0 unknown-call/exit and init open/read/write/close paths passed on QEMU; production dispatch and negative cases remain |
-| ABI-002 | ELF loader, user stack, TLS, and auxiliary vector | In Progress | 0.1.0 | ELF planning/population and native argc/argv/envp/minimal-auxv stack construction are Host Tested and connected in a Cross Compiled loaded-init path; target execution and TLS remain |
-| ABI-003 | Separately linked first native user program | In Progress | 0.1.0 | QEMU loaded-init probe validated the one-page RX init, stack checks, file I/O, and exit path; fault cases remain |
-| PROC-002 | Signals and exception delivery | In Progress | Unscheduled | Terminal lower-AArch64 user faults are classified, retained, and reported; recovery, signals, parent notification, and scheduler handoff remain |
+| PROC-001 | Process and thread lifecycle | Implemented | 0.1.0 | Generation IDs, Waiting parent, terminal child outcomes, root switch, exact frame reclamation and ASID retirement |
+| ABI-001 | Native Phoenix syscall ABI | Implemented | 0.1.0 | Revision 0 SVC calls 0–5; bounded serialized system dispatcher with explicit errors; native unstable ABI |
+| ABI-002 | ELF loader, user stack and auxiliary vector | Implemented | 0.1.0 | Strict static ELF subset, guarded four-page stack and native argc/argv/envp/minimal auxv; TLS tracked separately |
+| ABI-003 | Separately linked first native user program | Implemented | 0.1.0 | Independent init/child/fault ELF programs; normal execution and nine isolated user-fault cases verified |
+| ABI-004 | Userspace TLS | Deferred | Unscheduled | Requires a defined thread-pointer ABI and per-thread ownership; not needed by the initial static ELF programs |
+| PROC-002 | Signals and exception delivery | In Progress | Unscheduled | Terminal child fault classification and parent notification implemented; signals and faulting-instruction resumption deferred |
 | IPC-001 | Pipes, message passing, and shared memory IPC | Deferred | Unscheduled | Split when designs become concrete |
 | IPC-002 | Wait, poll, and event readiness | Captured | Unscheduled | Coordinate with file descriptors |
 | SYNC-001 | Futex-like userspace synchronization | Captured | Unscheduled | Requires stable user-memory semantics |
@@ -104,8 +105,8 @@ _No unclassified entries._
 
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
-| VFS-001 | VFS, path lookup, and file descriptor model | In Progress | 0.1.0 | Direct read-only initramfs table has bounded descriptors and transactional offsets; general nodes, mounts, process ownership, and credentials remain |
-| FS-001 | Initramfs and in-memory filesystem | In Progress | 0.1.0 | Strict newc parsing, deterministic three-entry packaging, executable lookup, and direct read-only file access are Host Tested; writable root/VFS ownership and runtime evidence remain |
+| VFS-001 | VFS, path lookup, and file descriptor model | Implemented | 0.1.0 | Fixed root with archive/tmp lookup, process-local descriptors and transactional offsets; no general mount mutation or credentials |
+| FS-001 | Initramfs and in-memory filesystem | Implemented | 0.1.0 | Strict deterministic newc plus eight writable 1024-byte tmp files; capacity failure and recovery verified |
 | BLOCK-001 | Block layer, buffering, and cache | Deferred | Unscheduled | Define flush and error semantics |
 | FS-002 | Persistent filesystem | Captured | Unscheduled | Format not selected |
 | STORAGE-001 | Partition discovery | Captured | Unscheduled | GPT is a likely first format |
@@ -115,8 +116,8 @@ _No unclassified entries._
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
 | DEV-001 | Minimal device and driver lifecycle | Deferred | Unscheduled | Do not build a framework before two users exist |
-| DEV-002 | Early and runtime console | In Progress | 0.1.0 | Polled PL011 positive output/flush passed on QEMU; panic and interrupt-era behavior remain |
-| IRQ-001 | Interrupt controller abstraction and GIC | In Progress | 0.1.0 | DTB/mapping/preparation, pinned runtime, atomic schedule/bind rollback, and post-EOI one-shot consumption are Host Tested/Cross Compiled; final-map boot publishes the IRQ lookup and installs the unbound consumer but retains closed delivery, so invoking schedule/bind, activation, `DAIF.I` unmask/removal, target delivery, and runtime evidence remain |
+| DEV-002 | Early and runtime console | Implemented | 0.1.0 | Polled PL011 output/flush and nonblocking input; panic and system console verified |
+| IRQ-001 | Interrupt controller abstraction and GIC | Implemented | 0.1.0 | Pinned GICv3/timer publication, activation, PPI delivery, EOI, handler return and shutdown verified |
 | FW-001 | PSCI integration | Deferred | Unscheduled | Power and SMP services |
 | VIRTIO-001 | VirtIO transport and device discovery | Deferred | Unscheduled | MMIO first; PCI may follow |
 | PCI-001 | PCI discovery and configuration | Deferred | Unscheduled | Important for x86_64 and future platforms |
@@ -138,14 +139,14 @@ _No unclassified entries._
 
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
-| OBS-001 | Structured logging and runtime ring buffer | Planned | 0.1.0 | Builds on early console |
-| OBS-002 | Panic register dump, symbols, and stack traces | In Progress | 0.1.0 | Fatal exception path reports vector, PC, status, ESR, and FAR; symbolization and stack traces remain |
+| OBS-001 | Structured logging and runtime ring buffer | Implemented | 0.1.0 | 32-record IRQ-locked structured ring, monotonic sequence and loss count; nonblocking panic snapshot |
+| OBS-002 | Panic register dump, symbols, and stack traces | Implemented | 0.1.0 | Fatal control-register report, sixteen-frame validated trace and exact-ELF offline symbol resolution |
 | OBS-003 | Tracing and profiling | Captured | Unscheduled | Avoid committing to a format early |
-| TEST-001 | QEMU boot smoke and focused probes with timeout and sentinels | Implemented | 0.1.0 | QEMU 9.1.3 passed boot, memory, final TTBR1, EL0, and loaded-init/file-I/O positive probes; deliberate fault coverage remains separately tracked |
+| TEST-001 | QEMU boot smoke and focused probes with timeout and sentinels | Implemented | 0.1.0 | Five legacy focused runs, thirteen runtime cases and minimal-system test; guest exits required by new suites |
 | TEST-002 | Host-side unit and property tests | Implemented | 0.1.0 | Console, build identity, config, and ELF-layout logic |
 | TEST-003 | Fuzzing and fault injection | Deferred | Unscheduled | Add with parsers and failure paths |
-| HARD-001 | Unsafe-code review and invariant audit | Deferred | Continuous | Applies as unsafe code appears |
-| HARD-002 | Resource limits and fault isolation | In Progress | Unscheduled | Terminal EL0 faults are separated from kernel exceptions; scheduler isolation, recovery, accounting, and limits remain |
+| HARD-001 | Unsafe-code review and invariant audit | Implemented | Continuous | Current unsafe ownership/order self-review in docs/UNSAFE_REVIEW.md; no independent security audit implied |
+| HARD-002 | Resource limits and fault isolation | In Progress | Unscheduled | Bounded native-system limits, cross-page validation and fault containment verified; broader security model deferred |
 | HARD-003 | Secure boot and image verification | Captured | Unscheduled | Firmware-policy dependency |
 | POWER-001 | Idle states and power management | Captured | Unscheduled | Beyond the initial halt path |
 

@@ -1167,6 +1167,96 @@ unsafe impl<
     }
 }
 
+/// Publish a permanently owned contiguous RW/NX heap between two invalid pages.
+///
+/// # Safety
+/// The hierarchy must be active on the sole CPU, local IRQs masked, and the
+/// caller must permanently retain the backing frames in a unique heap owner.
+/// No safe allocation may escape before this function succeeds. No competing
+/// mapper may access these leaves, and the backing may never be released while
+/// this alias exists. All fallible reads finish before any descriptor changes.
+pub unsafe fn publish_permanent_heap<
+    M: ActiveKernelTableMemory,
+    T: KernelLeafTlbMaintenance<4>,
+    const TABLES: usize,
+>(
+    tables: &MaterializedKernelPageTables<TABLES>,
+    memory: &mut M,
+    tlb: &mut T,
+    backing: crate::memory::FrameRange,
+    start: VirtAddr,
+) -> Result<(), Aarch64KernelStackMapError<M::Error>> {
+    use crate::arch::aarch64::paging::AddressSpaceHalf;
+    assert_eq!(backing.len(), 4);
+    assert!(start.as_usize().is_multiple_of(PAGE_SIZE));
+    let mut updates = [None; 4];
+    for index in 0..6 {
+        let address = VirtAddr::new(
+            start
+                .as_usize()
+                .checked_sub(PAGE_SIZE)
+                .and_then(|base| base.checked_add(index * PAGE_SIZE))
+                .ok_or(Aarch64KernelStackMapError::Paging(
+                    PagingError::AddressOverflow,
+                ))?,
+        );
+        let indices =
+            TranslationIndices::new(address).map_err(Aarch64KernelStackMapError::Paging)?;
+        if indices.half() != AddressSpaceHalf::Upper {
+            return Err(Aarch64KernelStackMapError::LowerHalf {
+                address: address.as_usize(),
+            });
+        }
+        let role = KernelTranslationTableRole::Level3 {
+            l1: indices.l1(),
+            l2: indices.l2(),
+        };
+        let table =
+            tables
+                .frame_for_role(role)
+                .ok_or(Aarch64KernelStackMapError::MissingLevel3Table {
+                    address: address.as_usize(),
+                })?;
+        let raw = memory
+            .read_descriptor(table, indices.l3())
+            .map_err(|error| Aarch64KernelStackMapError::Memory {
+                address: address.as_usize(),
+                error,
+            })?;
+        if raw != 0 {
+            return Err(Aarch64KernelStackMapError::DescriptorOccupied {
+                address: address.as_usize(),
+                descriptor: raw,
+            });
+        }
+        if (1..=4).contains(&index) {
+            let physical = PhysAddr::new((backing.start_frame_number() + index - 1) * PAGE_SIZE);
+            let descriptor = Descriptor::leaf(
+                TranslationLevel::L3,
+                physical,
+                MappingAttributes::kernel_data(),
+            )
+            .map_err(Aarch64KernelStackMapError::InvalidFrame)?;
+            updates[index - 1] = Some(StackLeafUpdate {
+                address,
+                table,
+                index: indices.l3(),
+                descriptor,
+            });
+        }
+    }
+    let updates = updates.map(|entry| entry.expect("four preflighted heap leaves"));
+    for update in updates {
+        // SAFETY: Every exact descriptor slot was preflighted above; exclusive
+        // access remains held and the commit operation is infallible.
+        unsafe {
+            memory.write_descriptor(update.table, update.index, update.descriptor);
+        }
+    }
+    tlb.synchronize(&updates.map(|update| update.address));
+    Ok(())
+}
+
 /// Single-CPU AArch64 maintenance for global TTBR1 L3 leaf changes.
 #[cfg(target_arch = "aarch64")]
 pub struct Aarch64KernelLeafTlb;
@@ -1232,6 +1322,80 @@ mod tests {
     fn final_owner_drops_large_planning_metadata_before_publication() {
         assert!(core::mem::size_of::<KernelPageTablePlan<8, 1024>>() < 48 * 1024);
         assert!(core::mem::size_of::<MaterializedKernelPageTables<8>>() < 512);
+    }
+
+    #[test]
+    fn heap_preflights_both_guards_and_every_leaf_before_commit() {
+        let guard = VirtAddr::new(0xffff_ff90_0010_0000);
+        let start = VirtAddr::new(guard.as_usize() + PAGE_SIZE);
+        let backing = FrameRange::new(
+            PageFrame::from_start(PhysAddr::new(0x6400_0000)).unwrap(),
+            4,
+        )
+        .unwrap();
+        let mut plan = KernelPageTablePlan::<3, 0>::new().unwrap();
+        plan.reserve_l3_range(guard, 6 * PAGE_SIZE).unwrap();
+        let mut map = MemoryMap::<1>::new();
+        map.add_usable(range(0x6300_0000, 0x6300_3000)).unwrap();
+        let mut allocator = map.into_allocator();
+        let allocated = plan.allocate(&mut allocator).unwrap();
+        let frames: Vec<_> = allocated.tables().collect();
+        let mut memory = TestMemory::new(&frames);
+        let tables = allocated.materialize(&mut memory).unwrap();
+        let mut tlb = TestMaintenance::default();
+        for read in 0..6 {
+            memory.live_read_count = 0;
+            memory.fail_live_read = Some(read);
+            // SAFETY: Host model owns descriptors and backing; no hardware uses
+            // these mappings, and injected failure must retain the empty state.
+            assert!(
+                unsafe {
+                    super::publish_permanent_heap(&tables, &mut memory, &mut tlb, backing, start)
+                }
+                .is_err()
+            );
+            assert_eq!(memory.live_write_count, 0);
+            assert!(tlb.batches.is_empty());
+        }
+        memory.fail_live_read = None;
+        // SAFETY: The single-threaded host model exclusively retains all frames.
+        unsafe { super::publish_permanent_heap(&tables, &mut memory, &mut tlb, backing, start) }
+            .unwrap();
+        assert_eq!(memory.live_write_count, 4);
+        assert_eq!(tlb.batches.len(), 1);
+        assert!(!descriptor_for(&frames, &memory, guard).is_valid());
+        assert!(
+            !descriptor_for(
+                &frames,
+                &memory,
+                VirtAddr::new(start.as_usize() + 4 * PAGE_SIZE)
+            )
+            .is_valid()
+        );
+        for index in 0..4 {
+            assert_eq!(
+                descriptor_for(
+                    &frames,
+                    &memory,
+                    VirtAddr::new(start.as_usize() + index * PAGE_SIZE)
+                ),
+                Descriptor::leaf(
+                    TranslationLevel::L3,
+                    PhysAddr::new(0x6400_0000 + index * PAGE_SIZE),
+                    MappingAttributes::kernel_data()
+                )
+                .unwrap()
+            );
+        }
+        // SAFETY: Same host ownership; a second publication must fail unchanged.
+        assert!(
+            unsafe {
+                super::publish_permanent_heap(&tables, &mut memory, &mut tlb, backing, start)
+            }
+            .is_err()
+        );
+        assert_eq!(memory.live_write_count, 4);
+        assert_eq!(tlb.batches.len(), 1);
     }
 
     #[test]

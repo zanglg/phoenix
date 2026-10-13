@@ -1,5 +1,12 @@
 # QEMU Virt Bootstrap Physical Memory
 
+> Construction-stage mechanism record: runtime-status and remaining-work lists below
+> describe the earlier integration boundary. Current support, limits and evidence are
+> maintained in [0.1-CONTRACT.md](0.1-CONTRACT.md) and
+> [RUNTIME_VALIDATION.md](RUNTIME_VALIDATION.md); those records supersede historical
+> pending statements here. The ownership design remains applicable unless the
+> current contract explicitly refines it.
+
 This document describes the target-side private-frame access backend available while the temporary
 QEMU `virt` TTBR1 mapping remains active. The implementation is Cross Compiled and Host Tested for
 address validation. The recorded boot-memory, final-map, and loaded-init probes Runtime Verified

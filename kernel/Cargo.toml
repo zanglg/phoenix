@@ -13,6 +13,7 @@ boot-memory-probe = []
 el0-probe = []
 kernel-map-probe = []
 loaded-init-probe = []
+system = ["loaded-init-probe"]
 
 [lib]
 crate-type = ["rlib"]

@@ -1,5 +1,12 @@
 # AArch64 Boot Contract
 
+> Construction-stage mechanism record: runtime-status and remaining-work lists below
+> describe the earlier integration boundary. Current support, limits and evidence are
+> maintained in [0.1-CONTRACT.md](0.1-CONTRACT.md) and
+> [RUNTIME_VALIDATION.md](RUNTIME_VALIDATION.md); those records supersede historical
+> pending statements here. The ownership design remains applicable unless the
+> current contract explicitly refines it.
+
 This document records the current, intentionally small boot contract. It describes what the
 source and ELF layout require and the boundary verified by the recorded QEMU run. Unlisted entry
 state and negative paths must not be inferred from that positive evidence.

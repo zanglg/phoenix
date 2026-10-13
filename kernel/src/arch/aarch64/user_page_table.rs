@@ -660,6 +660,40 @@ impl<const MAPPINGS: usize, const PAGES: usize, const TABLES: usize, const LEAVE
         copy_to_user(&self.image, memory, raw_start, input)
     }
 
+    /// Switch to this retained process root before exception return.
+    ///
+    /// # Safety
+    /// The owner must remain live until another root is installed and the full
+    /// TLB invalidation completes. IRQs must be masked on the sole CPU; no
+    /// borrowed user alias may survive the switch. ASID ownership is exclusive.
+    #[cfg(target_arch = "aarch64")]
+    pub unsafe fn activate_for_return(&self, asid: AddressSpaceId) {
+        let value = super::asid::ttbr0_value(self.root_frame(), asid).expect("validated root");
+        let observed: u64;
+        // SAFETY: The caller retains all frames and serializes context switches.
+        // Global invalidation retires bootstrap and previous-process aliases
+        // before the caller may reap a no-longer-current address space.
+        unsafe {
+            core::arch::asm!("dsb ishst", "msr TTBR0_EL1, {value}", "isb",
+            "tlbi vmalle1", "dsb ish", "isb", "mrs {observed}, TTBR0_EL1", value = in(reg) value,
+            observed = out(reg) observed,
+            options(nostack, preserves_flags));
+        }
+        assert_eq!(observed, value, "TTBR0 root/ASID readback");
+    }
+
+    /// Reclaim a no-longer-active hierarchy after a completed root switch.
+    ///
+    /// # Safety
+    /// No CPU may execute this address space or retain any user-data borrow.
+    /// Its root must have been replaced and all translations invalidated.
+    pub unsafe fn release_retired<const RANGES: usize>(
+        self,
+        allocator: &mut FrameAllocator<RANGES>,
+    ) -> Result<(), (Self, AllocationError)> {
+        self.release_unpublished(allocator)
+    }
+
     /// Install this permanently retained owner in TTBR0 and enter EL0t.
     ///
     /// # Safety

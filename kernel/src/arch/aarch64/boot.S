@@ -323,6 +323,7 @@
 /* -------------------------------------------------------------------------- */
 
 _start:
+    mrs     x21, CurrentEL
     /*
      * Preserve the firmware boot argument.
      *
@@ -532,6 +533,8 @@ boot_enable_mmu_and_enter_rust:
      * kernel_main(boot_arg: usize) -> !
      */
     mov     x0, x20
+    mov     x1, x21
+    mov     x29, xzr
     ldr     x8, =kernel_main
     br      x8
 

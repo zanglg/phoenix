@@ -1,5 +1,12 @@
 # First Native User Program
 
+> Construction-stage mechanism record: runtime-status and remaining-work lists below
+> describe the earlier integration boundary. Current support, limits and evidence are
+> maintained in [0.1-CONTRACT.md](0.1-CONTRACT.md) and
+> [RUNTIME_VALIDATION.md](RUNTIME_VALIDATION.md); those records supersede historical
+> pending statements here. The ownership design remains applicable unless the
+> current contract explicitly refines it.
+
 This document describes Phoenix's first separately linked userspace executable,
 `userspace/init`. It is built, stripped for embedding, accepted by the real Phoenix ELF parser,
 stored byte-for-byte as `init` in a deterministic initramfs, and statically inspected. The focused

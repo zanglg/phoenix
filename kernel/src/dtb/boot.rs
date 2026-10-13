@@ -395,11 +395,12 @@ fn validate_cell_count(name: &'static str, count: u32) -> Result<(), Error> {
 
 fn read_cells(value: &[u8], count: u32) -> u64 {
     value
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .take(count as usize)
         .fold(0, |result, cell| {
-            let bytes: [u8; 4] = cell.try_into().expect("cell has four bytes");
-            (result << 32) | u64::from(u32::from_be_bytes(bytes))
+            (result << 32) | u64::from(u32::from_be_bytes(*cell))
         })
 }
 
