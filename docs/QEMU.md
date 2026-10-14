@@ -220,12 +220,32 @@ The panic case accepts only the deliberate panic with a real trace. Other cases
 reject panic/fatal-exception output. QEMU is killed and reaped on timeout/error.
 
 `cargo xtask test-system` builds three independent user ELFs and a deterministic
-archive, supplies `ok\n` through stdin, and selects `phoenix.system-test`.
-It requires two ordinary child reaps, nine fault reaps with restored frame counts,
-file/console completion, the exact system summary, `PHOENIX_SYSTEM_OK` and exit 0.
-Its input, output capture and timeout are bounded. `run-system` supplies no test
-argument or semihosting switch; the interactive conformance system halts normally.
+archive. It boots five scenarios: LF, CR and CRLF input; invalid input (expected
+exit 1); and a temporary image whose nine fault entries all begin with an illegal
+instruction. The latter exits 0 but must be rejected by the system oracle.
 
-These new transcripts are `qemu-<case>.log` and `qemu-system.log` beside the other
-artifacts. The harness prints each complete command line, log path and pass/fail
-result. The tested debug kernel uses forced frame pointers for offline diagnostics.
+The oracle obtains fault PCs from the exact stripped ELF's exported symbols and
+requires each kind, PC, FAR and full ESR in process-generation order, followed by
+its resource-restoration record. The fixed NX stack address is checked directly;
+SVC PC is the following instruction. Expected successful runs have twelve reaps,
+nine faults, file/console completion and `PHOENIX_SYSTEM_EXIT status=0 fault=false`.
+Conformance counts belong to xtask; the kernel reports generic init outcomes.
+
+`cargo xtask test-hardening` enables `phoenix.system-stress`. Boot diagnostics run
+through the real loader with each insufficient frame budget (0–9), every one of
+21 backend-operation failures, and all 254 unused ASIDs reserved. Exact rollback
+and a clean retry are required. The stress init then executes 64 rounds plus a
+final normal child, producing 705 reaps and 576 individually checked faults.
+Child stacks must be scrubbed, child descriptors may not leak across lifetimes,
+and a parent descriptor/offset survives. Every reap checks the whole allocator
+free set, ASID capacity, process slots and stale PID rejection. This run has a
+30-second budget; other cases retain ten seconds and the 1 MiB output limit.
+
+`run-system` supplies no test argument or semihosting switch; interactive init
+reports its status then halts. CR/LF acceptance is in conformance init; the native
+console remains a raw nonblocking byte stream.
+
+Logs are `qemu-<case>.log`, including `qemu-system-{lf,cr,crlf,bad-input,wrong-fault,stress}.log`.
+The harness prints command lines, paths and results. GitHub CI runs all commands
+with Rust 1.99.0 and QEMU 10.0.13 on Debian trixie, and retains serial/package
+artifacts for 30 days. The tested debug kernel uses forced frame pointers.

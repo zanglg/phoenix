@@ -15,9 +15,9 @@ canonical host tests. Every new unsafe block has an adjacent SAFETY explanation.
 | IRQ runtime | Release publication precedes Acquire lookup/delivery; outer runtime before timer lock; callbacks after EOI/unlock; delivery closes before removal | Existing host failure injection plus timer/IRQ-lock probe |
 | Singleton state | CPU 0 only, masked non-reentrant access, no borrowed reference across EL0 entry or context switch | Explicit accessor assertions and system/thread integration |
 | User roots | All ELF, stack and table frames retained by process slot; switch reads back TTBR0; complete global invalidation before reap | Different programs at identical user VAs; normal and nine fault exits |
-| ASID retirement | Old root no longer executable, translations invalidated, no stale owner; never-installed IDs can roll back | Host reuse beyond 255 allocations, target ASID 2 reuse |
+| ASID retirement | Old root no longer executable, translations invalidated, no stale owner; never-installed IDs can roll back | Host reuse beyond 255 allocations; 705 target child lifetimes and unused-ID exhaustion/recovery |
 | User copies | Complete residency/permission proof; access through owned physical frames; no retained raw user pointer | Host page-boundary cases plus valid/invalid target cross-page reads/writes |
-| Loader rollback | IRQ-masked private transaction; temporary owners die before restoring allocator snapshot; no publication on error | Existing loader failures and exact runtime child accounting |
+| Loader rollback | IRQ-masked private transaction; temporary owners die before restoring allocator snapshot; no publication on error | Target 0–9 frame budgets, all 21 injected backend operations, ASID exhaustion and exact free-set recovery |
 | Diagnostics | Frame records checked inside current owned mapped stack before volatile reads; increasing chain and text bounds; maximum 16 | Corrupt/overflow/cycle host tests; real panic trace resolved offline |
 | Semihosting | Only explicitly selected test boot arguments reach guest exit | Interactive system halts; new harnesses require exit status 0 and ordered proof |
 
@@ -39,3 +39,11 @@ owners intentionally live until halt; exited child and worker resources are reap
 
 SMP, nested interrupts, new scheduler contexts, DMA, FP/SIMD, dynamic mappings and
 larger capacities require another invariant review and target validation.
+
+The stress boot diagnostics run before first EL0 entry with IRQs masked. Withheld
+frames and ASIDs remain private; failed image/table owners are destroyed before
+allocator restoration, and diagnostic ASIDs are never installed in TTBR0. The
+parent init root is retained throughout. No native syscall enables fault injection.
+Successful retry and subsequent real child execution validate continued use of the
+same allocator. Failure injection models backend operation errors, not arbitrary
+hardware corruption or interrupted descriptor writes.

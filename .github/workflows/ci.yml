@@ -23,3 +23,45 @@ jobs:
         uses: actions/checkout@v5
       - name: Validate without an emulator
         run: cargo xtask ci
+
+  runtime:
+    name: QEMU runtime and recovery
+    runs-on: ubuntu-24.04
+    container: debian:trixie-slim
+    timeout-minutes: 20
+    env:
+      RUSTUP_TOOLCHAIN: 1.99.0
+      QEMU_PACKAGE_VERSION: 1:10.0.13+ds-0+deb13u1
+    steps:
+      - name: Install recorded emulator and build tools
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends ca-certificates curl git build-essential "qemu-system-arm=$QEMU_PACKAGE_VERSION"
+      - name: Check out source
+        uses: actions/checkout@v5
+      - name: Install recorded Rust toolchain
+        run: |
+          curl --fail --silent --show-error --location https://sh.rustup.rs -o /tmp/rustup-init.sh
+          sh /tmp/rustup-init.sh -y --profile minimal --default-toolchain "$RUSTUP_TOOLCHAIN" --component llvm-tools --target aarch64-unknown-none-softfloat
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Boot, memory, exception, IRQ and process tests
+        run: |
+          cargo xtask test-boot
+          cargo xtask test-memory
+          cargo xtask test-kernel-map
+          cargo xtask test-el0
+          cargo xtask test-init
+          cargo xtask test-runtime
+          cargo xtask test-system
+          cargo xtask test-hardening
+      - name: Package the tested source
+        run: cargo xtask package
+      - name: Retain serial evidence and exact system artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phoenix-runtime-${{ github.sha }}
+          path: |
+            target/phoenix/**/qemu-*.log
+            target/phoenix/packages/**
+          retention-days: 30

@@ -13,6 +13,14 @@
     b.ne .Lfail
 .endm
 _start:
+    /* The stress archive alias selects 64 rounds without adding a syscall. */
+    ldr x9, [sp, #8]
+    ldrb w9, [x9]
+    mov x26, #1
+    cmp w9, #'s'
+    b.ne .Lnormal
+    mov x26, #64
+.Lnormal:
     sub sp, sp, #256
     mov x0, #1
     adr x1, greeting
@@ -136,7 +144,14 @@ _start:
     mov x0, x19
     call 4
     expect 0
-    /* A full tmp file rejects the whole next write and remains readable. */
+    /* A full tmp file rejects the whole next write and preserves every byte. */
+    mov x9, #0x5a
+    mov x10, #0
+.Lpattern:
+    strb w9, [sp, x10]
+    add x10, x10, #1
+    cmp x10, #256
+    b.ne .Lpattern
     adr x0, full
     mov x1, #8
     mov x2, #1
@@ -173,6 +188,14 @@ _start:
     mov x2, #256
     call 2
     expect 256
+    mov x10, #0
+.Lverify_pattern:
+    ldrb w9, [sp, x10]
+    cmp w9, #0x5a
+    b.ne .Lfail
+    add x10, x10, #1
+    cmp x10, #256
+    b.ne .Lverify_pattern
     subs x20, x20, #1
     b.ne .Lreadfull
     mov x0, x19
@@ -250,8 +273,35 @@ _start:
     b.ne .Lfail
     ldrb w9, [sp, #2]
     cmp w9, #10
+    b.eq .Lline_done
+    cmp w9, #13
     b.ne .Lfail
-    /* Two normal runs must reuse process slot and frames while retaining x28. */
+.Lline_done:
+    /* Failed exec requests must leave enough resources for the next child. */
+    adr x0, missing
+    mov x1, #7
+    call 5
+    expect -2
+    adr x0, badelf
+    mov x1, #6
+    call 5
+    expect -22
+    /* Keep a parent descriptor and offset live across every child. */
+    adr x0, motd
+    mov x1, #8
+    mov x2, #0
+    call 3
+    expect 3
+    mov x0, #3
+    mov x1, sp
+    mov x2, #1
+    call 2
+    expect 1
+    ldrb w9, [sp]
+    cmp w9, #'P'
+    b.ne .Lfail
+.Lround:
+    /* Children exhaust their own descriptors and leave them open at exit. */
     mov x28, #0x1234
     adr x0, child
     mov x1, #5
@@ -275,12 +325,33 @@ _start:
     add x21, x21, #7
     subs x22, x22, #1
     b.ne .Lfaults
+    mov x9, #0x1234
+    cmp x28, x9
+    b.ne .Lfail
+    subs x26, x26, #1
+    b.ne .Lround
+    /* A normal child must still run after the final deliberate fault. */
+    adr x0, child
+    mov x1, #5
+    call 5
+    expect 7
+    mov x0, #3
+    mov x1, sp
+    mov x2, #64
+    call 2
+    expect 33
+    ldrb w9, [sp]
+    cmp w9, #'h'
+    b.ne .Lfail
+    mov x0, #3
+    call 4
+    expect 0
     mov x0, #1
     adr x1, done
     mov x2, #done_end-done
     call 1
     expect done_end-done
-    mov x0, #42
+    mov x0, #0
     call 0
 .Lfail:
     mov x0, #1
@@ -296,6 +367,8 @@ full: .ascii "tmp/full"
 file_names: .ascii "tmp/atmp/btmp/ctmp/dtmp/etmp/ftmp/g"
 payload: .ascii "phoenix!"
 child: .ascii "child"
+missing: .ascii "missing"
+badelf: .ascii "badelf"
 fault_names: .ascii "fault-pfault-tfault-nfault-ifault-sfault-wfault-lfault-rfault-g"
 done: .ascii "Phoenix system: file, console, child and fault checks passed\n"
 done_end:

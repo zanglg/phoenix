@@ -59,6 +59,7 @@ fn main() -> ExitCode {
         "test-init" => test_init(),
         "test-runtime" => test_runtime(),
         "test-system" => test_system(),
+        "test-hardening" => test_hardening(),
         "build-system" => {
             build_kernel_variant(KernelVariant::System)
                 && inspect_kernel_variant(KernelVariant::System)
@@ -108,6 +109,7 @@ fn print_help() {
     println!("  test-init  Run the bounded dynamically loaded init probe");
     println!("  test-runtime  Run guest-exit boot, exception, permission and IRQ probes");
     println!("  build-system / run-system / test-system  Build or exercise the native system");
+    println!("  test-hardening  Run target rollback and repeated process/ASID recovery checks");
     println!("  package  Collect system artifacts, provenance and SHA-256 checksums");
     println!("  ci       Run every validation available without an emulator");
     println!("  symbolize <ELF> <0xADDRESS>...  Resolve addresses using the exact kernel ELF");
@@ -236,7 +238,7 @@ fn llvm_tool(name: &str) -> Option<PathBuf> {
 }
 
 fn doctor() -> bool {
-    println!("Phoenix 0.0.0 environment");
+    println!("Phoenix {} environment", phoenix_kernel::VERSION);
 
     let target_check = match configured_target() {
         Some(target) => installed_item(
@@ -503,7 +505,7 @@ impl KernelVariant {
         match self {
             Self::El0Probe => Some((qemu::USER_FAULT_SENTINEL, qemu::EL0_FAILURE_SENTINEL)),
             Self::LoadedInitProbe => Some((qemu::USER_FAULT_SENTINEL, qemu::INIT_FAILURE_SENTINEL)),
-            Self::System => Some((qemu::USER_FAULT_SENTINEL, "PHOENIX_SYSTEM_FAIL")),
+            Self::System => Some((qemu::USER_FAULT_SENTINEL, "PHOENIX_SYSTEM_EXIT")),
             Self::Default | Self::BootMemoryProbe | Self::KernelMapProbe => None,
         }
     }
@@ -515,7 +517,7 @@ impl KernelVariant {
             Self::KernelMapProbe => qemu::KERNEL_MAP_SUCCESS_SENTINEL,
             Self::El0Probe => qemu::EL0_SUCCESS_SENTINEL,
             Self::LoadedInitProbe => qemu::INIT_SUCCESS_SENTINEL,
-            Self::System => "PHOENIX_SYSTEM_OK",
+            Self::System => "PHOENIX_SYSTEM_EXIT",
         }
     }
 }
@@ -1507,6 +1509,20 @@ fn test_system() -> bool {
     build_kernel_variant(KernelVariant::System)
         && inspect_kernel_variant(KernelVariant::System)
         && qemu::test_system(
+            &artifacts.image,
+            artifacts.image.parent().unwrap(),
+            &workspace_root(),
+        )
+}
+
+fn test_hardening() -> bool {
+    let Some(target) = require_aarch64_target() else {
+        return false;
+    };
+    let artifacts = kernel_artifacts(&target, KernelVariant::System);
+    build_kernel_variant(KernelVariant::System)
+        && inspect_kernel_variant(KernelVariant::System)
+        && qemu::test_hardening(
             &artifacts.image,
             artifacts.image.parent().unwrap(),
             &workspace_root(),

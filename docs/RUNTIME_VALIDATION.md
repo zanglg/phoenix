@@ -12,10 +12,13 @@ frame pointers and incremental compilation disabled. The environment installs
 Rust and QEMU locally under `/workspace/toolchains`; the user explicitly approved
 installing and executing QEMU as an exception to the absent-emulator agent rule.
 
-[validation/REPORT.md](validation/REPORT.md) records exact source identity, tool
-versions, commands, outcomes and reproduction hashes. Retained raw logs live beside
-that report. Each new harness requires ordered proof and a clean guest exit within
-ten seconds. Legacy focused smoke tests stop QEMU after their terminal marker.
+[validation/PRE2_REPORT.md](validation/PRE2_REPORT.md) describes the current
+candidate's validation and source/artifact identity. CI retains exact serial logs
+and packages; preserve a local evidence copy for retention beyond 30 days. The
+[pre.1 report](validation/REPORT.md) and logs remain historical evidence.
+Each harness requires ordered proof and the expected guest exit within ten seconds;
+the 705-lifetime hardening run has a 30-second budget. Legacy focused smoke tests
+stop QEMU after their terminal marker.
 
 ## Current evidence
 
@@ -29,7 +32,7 @@ that coverage does not imply those failures were reproduced in actual hardware.
 | RUN-BOOT-002 | Runtime Verified | `test-runtime` state/EL1 cases observe EL2 and EL1 entry, then EL1 Rust |
 | RUN-BOOT-003 | Runtime Verified | Higher-half Rust and stack continue across bootstrap and final TTBR1 |
 | RUN-BOOT-004 | Runtime Verified | Full BSS checked before singleton writes; bounded/aligned SP and exact VBAR asserted |
-| RUN-CONSOLE-001 | Runtime Verified | PL011 output/flush, stdin input and exact system completion |
+| RUN-CONSOLE-001 | Runtime Verified | PL011 output/flush, CR/LF/CRLF input, invalid-input rejection and generic init outcome |
 | RUN-PANIC-001 | Runtime Verified | Intentional panic, bounded nonempty trace, exact-ELF symbolization and guest exit |
 | RUN-SMOKE-001 | Runtime Verified | All bounded harnesses complete; new protocols require exit status 0 |
 | RUN-DTB-001 | Runtime Verified | Real boot DTB accepted with CPU, RAM and reservation ownership |
@@ -40,7 +43,7 @@ that coverage does not imply those failures were reproduced in actual hardware.
 | RUN-MMU-001 | Runtime Verified | Current eight-table final map; text write and data execution cause permission faults |
 | RUN-MMU-002 | Runtime Verified | System EL0 low RAM and PL011 aliases cause translation faults after TTBR0 replacement |
 | RUN-MMU-003 | Runtime Verified | Retained direct-map clear/read/write; unmanaged and cross-page requests rejected |
-| RUN-ASID-001 | Runtime Verified | System reads back every TTBR0 root/ASID; ASID 2 reused across normal/faulting children after TLBI |
+| RUN-ASID-001 | Runtime Verified | 705 child lifetimes read back TTBR0 root/ASID and reuse ASID 2 after TLBI; 254 unused IDs exhausted and retired before successful retry |
 | RUN-KSTACK-001 | Runtime Verified | Controlled boot-guard access reports expected translation fault and recovers |
 | RUN-KSTACK-002 | Runtime Verified | Both runtime guards fault while usable leaves remain mapped; two workers enter, preempt, sleep, exit and return 16 frames |
 | RUN-EXC-001 | Runtime Verified | Fatal BRK reaches vector 4 with exact syndrome/PC and complete register report |
@@ -48,11 +51,13 @@ that coverage does not imply those failures were reproduced in actual hardware.
 | RUN-SYNC-001 | Runtime Verified | Timer IRQ stays pending while lock held; enters and acquires it after mask restoration |
 | RUN-IRQ-001 | Runtime Verified | GIC publication/activation, exact PPI 30, dispatch, EOI, return and delivery shutdown |
 | RUN-TIME-001 | Runtime Verified | Monotonic observations, bound one-shot delivery, 2 ms preemption and absolute thread sleep |
-| RUN-UFAULT-001 | Runtime Verified | Nine faults terminate only the child, retain PC/address/syndrome and resume parent after reclaim |
+| RUN-UFAULT-001 | Runtime Verified | Nine exact kind/ELF-PC/FAR/ESR cases repeat for 576 contained faults; all-illegal-instruction QEMU negative control is rejected |
 | RUN-ELF-001 | Runtime Verified | Strict independently linked init/child/fault ELF images are populated, mapped and entered |
 | RUN-STACK-001 | Runtime Verified | Focused init verifies native SP, argc/argv/envp, auxv and terminators |
 | RUN-UCOPY-001 | Runtime Verified | Valid/invalid cross-page source/destination copies; failed destination leaves first page and offset unchanged |
-| RUN-FS-001 | Runtime Verified | Archive and tmp read/write/EOF/close; descriptor, file-count and byte-capacity exhaustion/recovery |
+| RUN-FS-001 | Runtime Verified | Archive/tmp I/O and ENOSPC content preservation; child FD exhaustion/reaping, independent parent FD/offset, and successful operation after capacity failures |
+| RUN-RECOVERY-001 | Runtime Verified | Real loader rollback with 0–9 free frames and each of 21 backend-operation failures; ASID exhaustion, clean retry and subsequent EL0 execution |
+| RUN-LIFETIME-001 | Runtime Verified | 705 reaps restore the entire free-frame set, ASID count and process slots; stale PID rejection and reused-stack scrubbing |
 | RUN-INIT-001 | Runtime Verified | Current loaded-init GIC/publication protocol and minimal system both pass |
 | RUN-EL0-001 | Runtime Verified | Static first-EL0 fixture handles unknown syscall and exit; dynamic programs enter/return separately |
 | RUN-ABI-001 | Runtime Verified | Calls 0–5, argument/result preservation, EFAULT/ENOSYS/EAGAIN/EMFILE/ENOSPC and parent restoration |
@@ -79,8 +84,11 @@ and passes without filtering its contents.
 
 ## Remaining boundary
 
-No active 0.1 runtime gate remains pending at the documented scope. SMP, nested
+The pre.2 candidate requires all current target commands plus the recorded CI job
+to pass on its tagged source; the report identifies the retained evidence. SMP, nested
 interrupts, concurrent userspace, optimized builds, demand paging, signal recovery,
 new devices and real hardware remain unimplemented/deferred rather than verified.
+A non-cooperating user program can retain the CPU indefinitely in the synchronous
+user-system model; worker preemption in another image does not resolve that limit.
 Future changes to capacities, stack workloads or these execution modes must add
 new ledger entries and fresh target evidence.

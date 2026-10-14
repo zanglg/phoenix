@@ -8,6 +8,7 @@ use core::sync::atomic::AtomicUsize;
 use phoenix_kernel::arch::aarch64::diagnostics as cpu;
 use phoenix_kernel::process::{ProcessTable, ProcessTermination};
 use phoenix_kernel::vfs::{FileTable, RamFs};
+mod hardening;
 
 struct Resources {
     space: InitAddressSpace,
@@ -28,7 +29,8 @@ struct State {
     children: usize,
     faults: usize,
     test: bool,
-    free_without_child: usize,
+    allocator_without_child: FrameAllocator<INIT_MEMORY_RANGES>,
+    asids_without_child: u16,
 }
 static mut STATE: MaybeUninit<State> = MaybeUninit::uninit();
 static mut TABLES: MaybeUninit<FinalKernelTables> = MaybeUninit::uninit();
@@ -92,7 +94,7 @@ pub(super) fn boot(argument: usize, console: &mut Console<EarlyPl011>) -> ! {
     let archive = Initramfs::from_bytes(INITRAMFS).expect("system archive");
     // SAFETY: Bootstrap mappings still cover all privately allocated RAM.
     let mut memory = unsafe { BootstrapPhysicalMemory::assume_bootstrap_mapping() };
-    let (plan, map, gic, test) = {
+    let (plan, map, gic, test, stress) = {
         let tree = memory
             .device_tree(PhysAddr::new(argument))
             .expect("system DTB");
@@ -110,7 +112,11 @@ pub(super) fn boot(argument: usize, console: &mut Console<EarlyPl011>) -> ! {
             plan,
             map,
             gic,
-            info.bootargs() == Some("phoenix.system-test"),
+            matches!(
+                info.bootargs(),
+                Some("phoenix.system-test" | "phoenix.system-stress")
+            ),
+            info.bootargs() == Some("phoenix.system-stress"),
         )
     };
     let mut allocator = map.into_allocator();
@@ -121,7 +127,13 @@ pub(super) fn boot(argument: usize, console: &mut Console<EarlyPl011>) -> ! {
         .expect("system table frames")
         .materialize(&mut memory)
         .unwrap_or_else(|_| panic!("system table materialization"));
-    let init = load(archive, "init", &mut allocator, &mut memory).expect("system init image");
+    let init = load(
+        archive,
+        if stress { "stress" } else { "init" },
+        &mut allocator,
+        &mut memory,
+    )
+    .expect("system init image");
     drop(memory);
     let pointer = &raw mut TABLES;
     // SAFETY: One-time pinned initialization; all translations and capabilities
@@ -148,7 +160,8 @@ pub(super) fn boot(argument: usize, console: &mut Console<EarlyPl011>) -> ! {
         .unwrap_or_else(|_| panic!("init process slot"));
     processes.make_ready(id).unwrap();
     processes.start(id).unwrap();
-    let free_without_child = allocator.total_free_frames();
+    let allocator_without_child = allocator;
+    let asids_without_child = asids.remaining();
     let runtime = State {
         processes,
         current: id,
@@ -162,7 +175,8 @@ pub(super) fn boot(argument: usize, console: &mut Console<EarlyPl011>) -> ! {
         children: 0,
         faults: 0,
         test,
-        free_without_child,
+        allocator_without_child,
+        asids_without_child,
     };
     let pointer = &raw mut STATE;
     // SAFETY: Published once before first EL0 entry, retained for the entire boot.
@@ -172,6 +186,9 @@ pub(super) fn boot(argument: usize, console: &mut Console<EarlyPl011>) -> ! {
     ACTIVE.store(true, Ordering::Release);
     events::record(2, id.slot() as u64, id.generation());
     let runtime = state();
+    if stress {
+        hardening::run(runtime, console);
+    }
     let resource = runtime.processes.get(id).unwrap().resources();
     let _ = writeln!(
         console,
@@ -298,6 +315,10 @@ fn run_child(
     let mut path = [0u8; 128];
     copy_from(runtime, pointer, &mut path[..length])?;
     let path = core::str::from_utf8(&path[..length]).map_err(|_| Errno::InvalidArgument)?;
+    spawn_child(runtime, frame, path)
+}
+
+fn spawn_child(runtime: &mut State, frame: &mut ExceptionFrame, path: &str) -> Result<(), Errno> {
     let mut memory = memory(runtime);
     let space = load(runtime.archive, path, &mut runtime.allocator, &mut memory)?;
     let asid = match runtime.asids.allocate() {
@@ -368,9 +389,18 @@ fn finish(runtime: &mut State, frame: &mut ExceptionFrame, result: SyscallReturn
         // the child root owner has been consumed and can never activate again.
         unsafe { runtime.asids.release_retired(resource.asid) }.unwrap();
         assert_eq!(
-            runtime.allocator.total_free_frames(),
-            runtime.free_without_child,
-            "child frame leak"
+            runtime.allocator, runtime.allocator_without_child,
+            "child changed free-frame ownership"
+        );
+        assert_eq!(
+            runtime.asids.remaining(),
+            runtime.asids_without_child,
+            "child ASID leak"
+        );
+        assert_eq!(runtime.processes.len(), 1, "child process slot leak");
+        assert!(
+            runtime.processes.get(child).is_err(),
+            "retired PID still resolves"
         );
         *frame = runtime
             .processes
@@ -386,17 +416,18 @@ fn finish(runtime: &mut State, frame: &mut ExceptionFrame, result: SyscallReturn
         let mut console = Console::new(EarlyPl011::new());
         let _ = writeln!(
             console,
-            "child: reaped={}.{} fault={was_fault} frames=restored",
+            "child: reaped={}.{} fault={was_fault} frames=restored asid={} slots=restored",
             child.slot(),
-            child.generation()
+            child.generation(),
+            resource.asid.raw()
         );
         return;
     }
     let mut console = Console::new(EarlyPl011::new());
-    let passed = result == SyscallReturn::success(42).unwrap()
-        && runtime.children == 11
-        && runtime.faults == 9
-        && READ_BYTES.load(Ordering::Relaxed) >= 3;
+    let faulted = matches!(
+        runtime.processes.get(child).unwrap().state(),
+        phoenix_kernel::process::ProcessState::Faulted(_)
+    );
     events::dump(&mut console);
     let _ = writeln!(
         console,
@@ -407,18 +438,16 @@ fn finish(runtime: &mut State, frame: &mut ExceptionFrame, result: SyscallReturn
     );
     let _ = writeln!(
         console,
-        "{}",
-        if passed {
-            "PHOENIX_SYSTEM_OK"
-        } else {
-            "PHOENIX_SYSTEM_FAIL"
-        }
+        "PHOENIX_SYSTEM_EXIT status={} fault={faulted}",
+        result.raw() as i64
     );
     console.sink_mut().flush();
     if runtime.test {
         // SAFETY: Only the explicit system-test boot argument enables this path.
         unsafe {
-            cpu::test_exit(usize::from(!passed));
+            cpu::test_exit(usize::from(
+                faulted || result != SyscallReturn::success(0).unwrap(),
+            ));
         }
     }
     halt()

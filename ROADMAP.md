@@ -6,9 +6,11 @@ Only explicit owner review and acceptance promotes a candidate to `0.1.0`.
 
 ## Current position
 
-The technical path is implemented and validated at the bounded scope in
-[docs/0.1-CONTRACT.md](docs/0.1-CONTRACT.md). The next gate is candidate review,
-corrections if requested, and explicit owner acceptance. Command results and
+The `0.1.0-pre.2` path adds fault-specific assertions, terminal input regression
+coverage, QEMU CI and resource/lifetime hardening to the bounded scope in
+[docs/0.1-CONTRACT.md](docs/0.1-CONTRACT.md). These are distinct from integrating
+kernel workers and user processes into one preemptible runtime. The next gate is
+complete candidate validation, review and explicit owner acceptance. Command results and
 source identity are recorded in [docs/RUNTIME_VALIDATION.md](docs/RUNTIME_VALIDATION.md).
 No support claim is inferred from compilation alone.
 
@@ -83,6 +85,19 @@ Technical evidence includes canonical CI, focused target tests, unsafe review,
 exact tool/source provenance, retained transcripts and repeatable artifact hashes.
 The package is the tested debug image. The reviewable contract explicitly excludes
 unsupported architectures, devices and execution modes.
+
+The pre.2 corrections require:
+
+- Exact kind, ELF-derived PC, FAR and ESR for each intentional user fault; a QEMU
+  image with all nine replaced by illegal instructions must be rejected.
+- LF, CR and CRLF console input and invalid-input rejection.
+- Generic init exit reporting; fixed conformance counts live in the host oracle.
+- Exact allocator, process-slot and ASID restoration across 705 child lifetimes;
+  fresh child stacks/descriptors and a retained parent descriptor/offset.
+- Target loader rollback for incomplete frame budgets, every memory/table operation
+  failure, and ASID exhaustion, followed by successful execution.
+- QEMU CI alongside host/static CI, and clean-source candidate packaging with
+  tag, test logs and artifact provenance identifying the same source commit.
 
 After technical gates pass:
 

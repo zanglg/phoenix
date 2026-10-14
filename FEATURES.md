@@ -33,6 +33,7 @@ _No unclassified entries._
 | BUILD-004 | Kernel artifact and image packaging | Implemented | 0.1.0 | ELF, raw image, linker map, and static inspection |
 | BUILD-005 | Reproducible release artifacts and provenance | Implemented | 0.1.0 | System artifact directory, exact tool/source provenance and SHA-256 checksums; reproduction uses the recorded checkout path and tools |
 | BUILD-006 | Explicit host/static/runtime validation states | Implemented | 0.1.0 | Runtime debt is recorded separately, never implied by compilation |
+| BUILD-008 | Automated QEMU runtime CI | Implemented | 0.1.0 | Recorded Rust/QEMU, all target suites, serial logs and clean-source artifact upload |
 | BUILD-007 | Early-stack footprint regression check | Captured | Unscheduled | A first final-map QEMU run exceeded the former 512 KiB stack; automate a build-time bound before shrinking the current 1 MiB temporary stack |
 
 ## Boot and firmware
@@ -54,7 +55,7 @@ _No unclassified entries._
 | ARCH-002 | Exception vectors and register context | Implemented | 0.1.0 | All GPRs, SP_EL0, status and ERET round-trip; controlled faults and epilogue context switching verified |
 | ARCH-003 | CPU feature discovery | Deferred | Unscheduled | Avoid assuming emulator-only features |
 | ARCH-004 | FP/SIMD ownership and context policy | Deferred | Unscheduled | Kernel starts without FP/SIMD use |
-| ARCH-005 | AArch64 ASID allocation and TTBR0 encoding | Implemented | 0.1.0 | Root/ASID readback; retired child IDs reused only after global TLB completion; host exhaustion and reuse tested |
+| ARCH-005 | AArch64 ASID allocation and TTBR0 encoding | Implemented | 0.1.0 | Root/ASID readback; retired child IDs reused only after global TLB completion; host exhaustion/reuse and 705 target child lifetimes tested |
 | PORT-001 | RISC-V 64 port | Deferred | Unscheduled | Initial platform: QEMU `virt` |
 | PORT-002 | x86_64 port | Deferred | Unscheduled | Initial platform: QEMU `q35` |
 
@@ -90,7 +91,7 @@ _No unclassified entries._
 
 | ID | Capability | State | Release | Notes |
 | --- | --- | --- | --- | --- |
-| PROC-001 | Process and thread lifecycle | Implemented | 0.1.0 | Generation IDs, Waiting parent, terminal child outcomes, root switch, exact frame reclamation and ASID retirement |
+| PROC-001 | Process and thread lifecycle | Implemented | 0.1.0 | Generation IDs, Waiting parent, terminal child outcomes, root switch, exact frame-set/ASID/slot recovery, 705 lifetimes, stale PID rejection and stack/FD reuse |
 | ABI-001 | Native Phoenix syscall ABI | Implemented | 0.1.0 | Revision 0 SVC calls 0–5; bounded serialized system dispatcher with explicit errors; native unstable ABI |
 | ABI-002 | ELF loader, user stack and auxiliary vector | Implemented | 0.1.0 | Strict static ELF subset, guarded four-page stack and native argc/argv/envp/minimal auxv; TLS tracked separately |
 | ABI-003 | Separately linked first native user program | Implemented | 0.1.0 | Independent init/child/fault ELF programs; normal execution and nine isolated user-fault cases verified |
@@ -142,7 +143,7 @@ _No unclassified entries._
 | OBS-001 | Structured logging and runtime ring buffer | Implemented | 0.1.0 | 32-record IRQ-locked structured ring, monotonic sequence and loss count; nonblocking panic snapshot |
 | OBS-002 | Panic register dump, symbols, and stack traces | Implemented | 0.1.0 | Fatal control-register report, sixteen-frame validated trace and exact-ELF offline symbol resolution |
 | OBS-003 | Tracing and profiling | Captured | Unscheduled | Avoid committing to a format early |
-| TEST-001 | QEMU boot smoke and focused probes with timeout and sentinels | Implemented | 0.1.0 | Five legacy focused runs, thirteen runtime cases and minimal-system test; guest exits required by new suites |
+| TEST-001 | QEMU boot smoke and focused probes with timeout and sentinels | Implemented | 0.1.0 | Five legacy runs, thirteen runtime cases, five system scenarios and target hardening; exact fault oracle, wrong-fault rejection and QEMU CI |
 | TEST-002 | Host-side unit and property tests | Implemented | 0.1.0 | Console, build identity, config, and ELF-layout logic |
 | TEST-003 | Fuzzing and fault injection | Deferred | Unscheduled | Add with parsers and failure paths |
 | HARD-001 | Unsafe-code review and invariant audit | Implemented | Continuous | Current unsafe ownership/order self-review in docs/UNSAFE_REVIEW.md; no independent security audit implied |

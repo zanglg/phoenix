@@ -3,7 +3,7 @@
 Phoenix is an experimental Unix-like Rust kernel for AArch64 QEMU `virt`.
 The 0.1 technical path now includes protected memory, exceptions, timer-driven
 kernel threads, independent user processes, console I/O and an in-memory filesystem.
-The current review candidate is **0.1.0-pre.1**. Development lives on `dev`;
+The current review candidate is **0.1.0-pre.2**. Development lives on `dev`;
 `main` is the owner review boundary.
 
 ## Build and run
@@ -15,11 +15,13 @@ cargo xtask doctor
 cargo xtask ci
 cargo xtask test-runtime
 cargo xtask test-system
+cargo xtask test-hardening
 cargo xtask run-system
 ```
 
 At the interactive console, type `ok` followed by Enter. The conformance init
-checks files and child processes, reports `PHOENIX_SYSTEM_OK`, then halts.
+checks files and child processes, accepts LF, CR or CRLF, reports
+`PHOENIX_SYSTEM_EXIT status=0 fault=false`, then halts.
 It is a minimal native system, not an interactive shell. The automatic system
 test supplies input and requires both ordered evidence and a clean guest exit.
 
@@ -44,7 +46,8 @@ compiler and QEMU versions are recorded in the [runtime ledger](docs/RUNTIME_VAL
 
 The kernel-thread/heap image and user-system image are separate integration targets.
 The system uses a serialized two-process model; it does not preempt concurrent user
-processes. Limits, error behavior, syscall numbers and ownership rules are defined
+processes. A child that never exits or faults can occupy the CPU indefinitely.
+Limits, error behavior, syscall numbers and ownership rules are defined
 in the [0.1 contract](docs/0.1-CONTRACT.md). Tests cover the stated bounded workloads.
 SMP, FP/SIMD, networking, persistent storage, POSIX/Linux compatibility, real hardware,
 RISC-V and x86_64 are deferred.
@@ -53,6 +56,8 @@ RISC-V and x86_64 are deferred.
 
 `cargo xtask ci` runs formatting, target checks, Clippy, host tests, and ELF/image
 inspection for every configured variant. It does not require or invoke QEMU.
+GitHub CI also runs a separate QEMU job with recorded Rust/emulator versions,
+and retains serial logs and the exact system package as workflow artifacts.
 The complete target suite is:
 
 ```bash
@@ -63,10 +68,15 @@ cargo xtask test-el0
 cargo xtask test-init
 cargo xtask test-runtime
 cargo xtask test-system
+cargo xtask test-hardening
 ```
 
 The first five commands retain focused boot protocols. `test-runtime` runs thirteen
 isolated cases, including negative protection tests, and uses guest-driven exits.
+`test-system` checks LF/CR/CRLF, invalid input and a wrong-fault negative control.
+Its oracle requires the exact PC, FAR, ESR and kind for all nine user fault cases.
+`test-hardening` injects loader failures, exhausts frame/ASID budgets, then runs
+705 child lifetimes with exact resource restoration and 576 contained faults.
 All emulator tests are bounded and retain logs under
 `target/phoenix/aarch64-unknown-none-softfloat/debug/`.
 See [QEMU.md](docs/QEMU.md) and the [validation ledger](docs/RUNTIME_VALIDATION.md).
@@ -78,6 +88,7 @@ cargo xtask symbolize <exact-kernel-ELF> <0xADDRESS>...
 
 Packaging collects the system kernel ELF, raw image, linker map, userspace ELFs,
 initramfs, provenance and SHA-256 checksums under `target/phoenix/packages/<version>/`.
+It requires a clean worktree and rejects source changes during the build.
 The supported package is the inspected debug profile; release optimization is not
 part of the target-validation claim. Reproduction requirements are documented in
 [RELEASE.md](docs/RELEASE.md).

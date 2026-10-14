@@ -28,11 +28,22 @@ fn capture(program: &str, args: &[&str]) -> Result<String, String> {
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 fn create() -> Result<PathBuf, String> {
+    let source = capture("git", &["rev-parse", "HEAD"])?;
+    if !capture("git", &["status", "--porcelain"])?.is_empty() {
+        return Err(
+            "candidate packages require a clean worktree; commit the reviewed source first".into(),
+        );
+    }
     let target = require_aarch64_target().ok_or("target missing")?;
     if !build_kernel_variant(KernelVariant::System)
         || !inspect_kernel_variant(KernelVariant::System)
     {
         return Err("system build/inspection failed".into());
+    }
+    if capture("git", &["rev-parse", "HEAD"])? != source
+        || !capture("git", &["status", "--porcelain"])?.is_empty()
+    {
+        return Err("source changed during packaging; no candidate package was copied".into());
     }
     let artifacts = kernel_artifacts(&target, KernelVariant::System);
     let directory = artifacts.image.parent().ok_or("image directory missing")?;
@@ -59,12 +70,8 @@ fn create() -> Result<PathBuf, String> {
     let provenance = format!(
         "Phoenix {}\nsource={}\nworktree={}\ncheckout={}\ntarget={target}\nprofile=debug\nCARGO_INCREMENTAL=0\ncommand=cargo xtask package\nboard=virt-9.1,virtualization=on,gic-version=3,highmem=off\ncpu=cortex-a72\naccel=tcg\nram=512M\ncpus=1\n\n{}\n\n{}\n\nQEMU: {}\n",
         phoenix_kernel::VERSION,
-        capture("git", &["rev-parse", "HEAD"])?,
-        if capture("git", &["status", "--porcelain"])?.is_empty() {
-            "clean"
-        } else {
-            "dirty"
-        },
+        source,
+        "clean",
         workspace_root().display(),
         capture("rustc", &["-Vv"])?,
         capture("cargo", &["-V"])?,

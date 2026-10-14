@@ -97,12 +97,16 @@ cargo xtask test-memory
 cargo xtask test-kernel-map
 cargo xtask test-el0
 cargo xtask test-init
+cargo xtask test-runtime
+cargo xtask test-system
+cargo xtask test-hardening
 cargo xtask ci
 ```
 
 Run `cargo xtask ci` before reporting completion. Never state that an unexecuted check passed.
 QEMU is optional during 0.0.0 construction. Static artifact inspection is required. `run`, `test-boot`,
-`test-memory`, `test-kernel-map`, `test-el0`, and `test-init` are runtime-only commands; do not
+`test-memory`, `test-kernel-map`, `test-el0`, `test-init`, `test-runtime`, `test-system`, and
+`test-hardening` are runtime-only commands; do not
 install or invoke QEMU in an environment where it is unavailable.
 
 Use these validation states consistently:

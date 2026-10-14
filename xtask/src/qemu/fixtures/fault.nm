@@ -1,0 +1,9 @@
+0000000000400000 T _start
+000000000040007c T fault_code_write
+0000000000400068 T fault_illegal
+000000000040004c T fault_kernel_read
+0000000000400088 T fault_low_mmio
+0000000000400094 T fault_low_ram
+00000000004000a0 T fault_stack_guard
+0000000000400070 T fault_svc
+0000000000400058 T fault_translation

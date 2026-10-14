@@ -1,6 +1,7 @@
 # Candidate packaging and reproduction
 
-Run the complete canonical/static and target commands in README before preparing
+Commit the candidate source and require a clean worktree. Run the complete
+canonical/static and target commands in README before preparing
 a candidate. `cargo xtask package` builds and inspects the minimal system and
 collects these files under `target/phoenix/packages/<version>/`:
 
@@ -26,6 +27,13 @@ The validation report compares two builds after deleting only the generated
 system kernel and userspace target directories between them. It compares kernel
 ELF/raw image/map, deterministic archive and all three user ELFs. Provenance and
 hash files preserve the tested state; packaging itself is not a runtime test.
+Packaging rejects dirty source before building and checks that the full commit and
+worktree remain unchanged before copying artifacts. The candidate tag must point
+to that tested commit. Runtime evidence is retained outside the source commit so
+adding a transcript does not change the tag/package identity. GitHub CI uploads
+logs and the package under `phoenix-runtime-<source SHA>` for 30 days; preserve a
+local copy for longer retention. A documentation follow-up is a new source identity
+and must not silently replace the tagged package.
 
 The supported release package is the tested debug profile. An optimized release
 profile, additional machines or changed capacities need their own evidence.

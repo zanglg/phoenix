@@ -7,6 +7,29 @@ numbers and remains explicitly unstable before 1.0.0. During construction, chang
 
 ## [Unreleased]
 
+## [0.1.0-pre.2] - 2026-10-14
+
+### Fixed
+
+- User-fault regression tests require each expected kind, ELF-derived fault PC,
+  FAR and ESR, including read/write/execute and translation level. A QEMU negative
+  control replaces all nine programs' entry instructions with illegal instructions
+  and requires the host oracle to reject the result.
+- Conformance init accepts CR, LF and CRLF console lines; invalid input is tested.
+- Normal system termination reports init status/fault without hardcoded test
+  counts or exit status 42. Conformance decisions belong to userspace and xtask.
+
+### Added
+
+- `test-hardening`: target rollback with 0–9 available frames, failure injection
+  at all 21 image/table memory operations, and exhaustion/retirement of 254 unused
+  ASIDs, followed by a successful load and 705 child lifetimes with 576 faults.
+- Exact free-frame-set, ASID and process-slot recovery assertions, stale PID
+  rejection, stack scrubbing, child descriptor exhaustion/reaping, retained parent
+  descriptor/offset checks, and tmp-file content verification after ENOSPC.
+- Recorded QEMU/Rust runtime CI covering all target suites and retaining logs/packages.
+- Clean-worktree packaging which rejects a source change during artifact generation.
+
 ## [0.1.0-pre.1] - 2026-10-13
 
 ### Added

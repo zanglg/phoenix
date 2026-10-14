@@ -1,4 +1,5 @@
 mod runtime;
+mod system;
 
 use std::ffi::{OsStr, OsString};
 use std::fs;
@@ -532,7 +533,12 @@ fn shell_quote(argument: &OsStr) -> String {
 
 /// Run the native system with supplied console input and guest-driven exit.
 pub fn test_system(image: &Path, directory: &Path, root: &Path) -> bool {
-    runtime::system(image, directory, root)
+    system::suite(image, directory, root, false)
+}
+
+/// Exercise allocation rollback, exhaustion recovery and repeated child retirement.
+pub fn test_hardening(image: &Path, directory: &Path, root: &Path) -> bool {
+    system::suite(image, directory, root, true)
 }
 
 /// Run opt-in destructive probes, requiring a clean guest-driven exit.

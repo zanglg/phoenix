@@ -24,10 +24,6 @@ pub(super) fn suite(image: &Path, directory: &Path, root: &Path) -> bool {
     .all(|name| run_probe(image, directory, root, name))
 }
 
-pub(super) fn system(image: &Path, directory: &Path, root: &Path) -> bool {
-    preflight() && run_probe(image, directory, root, "system")
-}
-
 fn valid_transcript(output: &[u8], name: &str) -> bool {
     let normalized = String::from_utf8_lossy(output).replace('\r', "");
     if name == "state-el1" {
@@ -35,38 +31,6 @@ fn valid_transcript(output: &[u8], name: &str) -> bool {
             .lines()
             .any(|line| line == "entry exception level: EL1")
             && valid_transcript(output, "state");
-    }
-    if name == "system" {
-        return !normalized.contains("PHOENIX_PANIC")
-            && !normalized.contains("PHOENIX_SYSTEM_FAIL")
-            && normalized
-                .lines()
-                .filter(|line| *line == "PHOENIX_SYSTEM_OK")
-                .count()
-                == 1
-            && contains_ordered(
-                normalized.as_bytes(),
-                &[
-                    "PHOENIX_SYSTEM_ENTER",
-                    "Phoenix system: init",
-                    "Phoenix initramfs: file I/O works",
-                    "child: reaped=1.1 fault=false frames=restored",
-                    "child: reaped=1.2 fault=false frames=restored",
-                    "PHOENIX_USER_FAULT",
-                    "child: reaped=1.3 fault=true frames=restored",
-                    "child: reaped=1.4 fault=true frames=restored",
-                    "child: reaped=1.5 fault=true frames=restored",
-                    "child: reaped=1.6 fault=true frames=restored",
-                    "child: reaped=1.7 fault=true frames=restored",
-                    "child: reaped=1.8 fault=true frames=restored",
-                    "child: reaped=1.9 fault=true frames=restored",
-                    "child: reaped=1.10 fault=true frames=restored",
-                    "child: reaped=1.11 fault=true frames=restored",
-                    "Phoenix system: file, console, child and fault checks passed",
-                    "system: children=11 faults=9 console-read=3 frame-accounting=ok",
-                    "PHOENIX_SYSTEM_OK",
-                ],
-            );
     }
     let begin = format!("PHOENIX_TEST_BEGIN {name}");
     let lines: Vec<_> = normalized.lines().collect();
@@ -130,14 +94,39 @@ fn run_probe(image: &Path, directory: &Path, root: &Path, name: &str) -> bool {
         "-semihosting-config".into(),
         "enable=on,target=native".into(),
         "-append".into(),
-        if name == "system" {
-            "phoenix.system-test".into()
-        } else if name == "state-el1" {
-            "phoenix.probe=state".into()
-        } else {
-            format!("phoenix.probe={name}").into()
-        },
+        format!(
+            "phoenix.probe={}",
+            if name == "state-el1" { "state" } else { name }
+        )
+        .into(),
     ]);
+    let passed = run_guest(specification, directory, root, name, None, TEST_TIMEOUT)
+        .is_some_and(|guest| guest.success() && valid_transcript(&guest.output, name));
+    report(passed)
+}
+
+pub(super) struct GuestRun {
+    pub output: Vec<u8>,
+    pub status: ExitStatus,
+}
+impl GuestRun {
+    pub fn success(&self) -> bool {
+        self.status.success()
+    }
+}
+pub(super) fn report(passed: bool) -> bool {
+    println!("QEMU_TEST_RESULT={}", if passed { "pass" } else { "fail" });
+    passed
+}
+
+pub(super) fn run_guest(
+    specification: QemuCommand,
+    directory: &Path,
+    root: &Path,
+    name: &str,
+    input: Option<&[u8]>,
+    timeout: Duration,
+) -> Option<GuestRun> {
     println!(
         "==> runtime probe {name}\ncommand: {}",
         specification.display()
@@ -145,7 +134,7 @@ fn run_probe(image: &Path, directory: &Path, root: &Path, name: &str) -> bool {
     let mut child = match specification
         .command()
         .current_dir(root)
-        .stdin(if name == "system" {
+        .stdin(if input.is_some() {
             Stdio::piped()
         } else {
             Stdio::null()
@@ -157,21 +146,21 @@ fn run_probe(image: &Path, directory: &Path, root: &Path, name: &str) -> bool {
         Ok(child) => child,
         Err(error) => {
             eprintln!("could not spawn QEMU: {error}");
-            return false;
+            return None;
         }
     };
-    if name == "system" {
+    if let Some(input) = input {
         use std::io::Write;
-        if child.stdin.take().unwrap().write_all(b"ok\n").is_err() {
+        if child.stdin.take().unwrap().write_all(input).is_err() {
             let _ = child.kill();
             let _ = child.wait();
-            return false;
+            return None;
         }
     }
     let (tx, rx) = mpsc::channel();
     let stdout = spawn_reader(child.stdout.take().unwrap(), tx.clone(), "stdout");
     let stderr = spawn_reader(child.stderr.take().unwrap(), tx, "stderr");
-    let deadline = Instant::now() + TEST_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     let mut output = Vec::new();
     let mut failure = None;
     let status = loop {
@@ -210,22 +199,18 @@ fn run_probe(image: &Path, directory: &Path, root: &Path, name: &str) -> bool {
     let log = directory.join(format!("qemu-{name}.log"));
     if let Err(error) = fs::write(&log, &output) {
         eprintln!("could not save {}: {error}", log.display());
-        return false;
+        return None;
     }
     print!("{}", String::from_utf8_lossy(&output));
-    let passed = failure.is_none()
-        && output.len() <= OUTPUT_LIMIT
-        && status.is_some_and(|status| status.success())
-        && valid_transcript(&output, name);
-    println!(
-        "QEMU_TEST_LOG={}\nQEMU_TEST_RESULT={}",
-        log.display(),
-        if passed { "pass" } else { "fail" }
-    );
-    if !passed {
+    println!("QEMU_TEST_LOG={}", log.display());
+    if failure.is_some() || output.len() > OUTPUT_LIMIT || status.is_none() {
         eprintln!("probe={name} status={status:?} failure={failure:?}");
+        return None;
     }
-    passed
+    Some(GuestRun {
+        output,
+        status: status.unwrap(),
+    })
 }
 
 #[cfg(test)]

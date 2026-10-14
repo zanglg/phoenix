@@ -78,6 +78,8 @@ pub(super) fn archive(target: &str) -> Option<PathBuf> {
     }
     append_newc_record(&mut archive, 13, "etc", 0o040_755, &[]).ok()?;
     append_newc_record(&mut archive, 14, "etc/motd", 0o100_444, INIT_FILE).ok()?;
+    append_newc_record(&mut archive, 15, "stress", 0o100_755, &programs[0]).ok()?;
+    append_newc_record(&mut archive, 16, "badelf", 0o100_755, b"not an ELF").ok()?;
     append_newc_record(&mut archive, 0, "TRAILER!!!", 0, &[]).ok()?;
     let parsed = phoenix_kernel::initramfs::Initramfs::from_bytes(&archive).ok()?;
     for (index, name) in ["init", "child", "fault"].iter().enumerate() {
