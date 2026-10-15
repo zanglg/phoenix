@@ -7,6 +7,18 @@ numbers and remains explicitly unstable before 1.0.0. During construction, chang
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-10-15
+
+### Release
+
+- First formal experimental AArch64 QEMU virt release, promoting the reviewed
+  0.1.0-pre.2 implementation at the scope in docs/0.1-CONTRACT.md.
+- Includes protected memory, exceptions and diagnostics, focused kernel worker
+  preemption, independent ELF processes, native syscalls, console/archive/tmp I/O,
+  fault isolation and resource recovery, with runtime CI and reproducible packaging.
+- Formal-source validation and artifact provenance must be regenerated after
+  promotion; prerelease artifacts are not relabeled as release artifacts.
+
 ## [0.1.0-pre.2] - 2026-10-14
 
 ### Fixed

@@ -46,3 +46,18 @@ Incremental compilation is disabled by the artifact-building commands. A first
 reproduction attempt found differing incremental object suffixes in otherwise
 equivalent linker maps. Disabling `CARGO_INCREMENTAL` removes that nondeterminism;
 the repeat comparison includes the map rather than excluding or normalizing it.
+
+## Accepted 0.1.0 release on dev
+
+On 2026-10-15 the owner accepted 0.1.0-pre.2 and instructed continued development
+on dev. This release promotes that implementation on dev, runs all formal-source
+checks there and creates annotated v0.1.0 on the exact tested dev commit. PR #1
+remains the dev-to-main review record; this release does not require its merge.
+The usual merge/recreate procedure applies only when a main merge is requested.
+
+Formal artifacts are regenerated at version 0.1.0; the pre.2 package remains
+historical. The formal receipt records the release commit, clean worktree, owner
+acceptance, canonical/static/MSRV results, all 24 QEMU outcomes, seven-artifact
+reproduction and hashes, GitHub CI and tag identity. Evidence remains outside the
+source commit so writing it does not change the tested identity. Retain the exact
+ELF and provenance with the package; later dev commits are not the released source.

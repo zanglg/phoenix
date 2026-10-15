@@ -6,12 +6,16 @@ Only explicit owner review and acceptance promotes a candidate to `0.1.0`.
 
 ## Current position
 
-The `0.1.0-pre.2` path adds fault-specific assertions, terminal input regression
-coverage, QEMU CI and resource/lifetime hardening to the bounded scope in
-[docs/0.1-CONTRACT.md](docs/0.1-CONTRACT.md). These are distinct from integrating
-kernel workers and user processes into one preemptible runtime. The next gate is
-complete candidate validation, review and explicit owner acceptance. Command results and
-source identity are recorded in [docs/RUNTIME_VALIDATION.md](docs/RUNTIME_VALIDATION.md).
+The first formal `0.1.0` release promotes the accepted `0.1.0-pre.2` implementation
+at the scope in [docs/0.1-CONTRACT.md](docs/0.1-CONTRACT.md). Its technical path and
+review corrections are complete. Exact formal-source validation and package
+identity are recorded in the release receipt described by
+[docs/RELEASE.md](docs/RELEASE.md); prerelease evidence remains historical.
+
+Worker/heap and synchronous user-system integrations remain distinct. Future
+user scheduling and other deferred capabilities require a new scoped roadmap.
+The owner accepted the candidate on 2026-10-15 and requested continued dev work;
+this release is validated and tagged on dev as documented in CONTRIBUTING.md.
 No support claim is inferred from compilation alone.
 
 ## 1. Bootstrap and early console

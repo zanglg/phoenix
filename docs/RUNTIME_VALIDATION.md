@@ -1,6 +1,6 @@
 # Runtime validation ledger
 
-The 0.1 support boundary is defined in [0.1-CONTRACT.md](0.1-CONTRACT.md).
+The formal 0.1 support boundary is defined in [0.1-CONTRACT.md](0.1-CONTRACT.md).
 Host Tested, Cross Compiled and ELF Inspected evidence is kept distinct from
 Runtime Verified behavior. Current evidence uses QEMU 10.0.13 on x86_64 Linux,
 `virt-9.1,virtualization=on,gic-version=3,highmem=off`, Cortex-A72, TCG, 512 MiB
@@ -12,8 +12,10 @@ frame pointers and incremental compilation disabled. The environment installs
 Rust and QEMU locally under `/workspace/toolchains`; the user explicitly approved
 installing and executing QEMU as an exception to the absent-emulator agent rule.
 
-[validation/PRE2_REPORT.md](validation/PRE2_REPORT.md) describes the current
-candidate's validation and source/artifact identity. CI retains exact serial logs
+[validation/PRE2_REPORT.md](validation/PRE2_REPORT.md) describes the accepted
+prerelease validation and source/artifact identity. Formal release runs use the
+new tested dev source identity and retain their own receipt as described in
+RELEASE.md. CI retains exact serial logs
 and packages; preserve a local evidence copy for retention beyond 30 days. The
 [pre.1 report](validation/REPORT.md) and logs remain historical evidence.
 Each harness requires ordered proof and the expected guest exit within ten seconds;
@@ -84,8 +86,8 @@ and passes without filtering its contents.
 
 ## Remaining boundary
 
-The pre.2 candidate requires all current target commands plus the recorded CI job
-to pass on its tagged source; the report identifies the retained evidence. SMP, nested
+The formal release requires all current target commands plus the recorded CI job
+to pass on its tagged source; its receipt identifies the retained evidence. SMP, nested
 interrupts, concurrent userspace, optimized builds, demand paging, signal recovery,
 new devices and real hardware remain unimplemented/deferred rather than verified.
 A non-cooperating user program can retain the CPU indefinitely in the synchronous

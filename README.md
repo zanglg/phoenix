@@ -3,8 +3,9 @@
 Phoenix is an experimental Unix-like Rust kernel for AArch64 QEMU `virt`.
 The 0.1 technical path now includes protected memory, exceptions, timer-driven
 kernel threads, independent user processes, console I/O and an in-memory filesystem.
-The current review candidate is **0.1.0-pre.2**. Development lives on `dev`;
-`main` is the owner review boundary.
+The first formal release is **0.1.0**. Development lives on `dev`;
+`main` is the owner review boundary. The owner accepted this first release for
+validation and tagging on `dev`; development continues there.
 
 ## Build and run
 
@@ -113,6 +114,7 @@ not the architecture of the host running xtask.
 The version has one source of truth in `workspace.package.version`. Construction
 uses `0.0.0`; technically complete candidates use `0.1.0-pre.N`. A candidate is
 promoted to `0.1.0` only after explicit owner acceptance of the reviewed result.
-No formal 0.1.0 acceptance is inferred from passing automated tests.
+The accepted 0.1 release retains the bounded experimental contract; future
+release acceptance is not inferred from passing automated tests.
 
 Phoenix is licensed under MIT OR Apache-2.0.

@@ -21,3 +21,11 @@ a rebase or maintainer-merge policy instead of silently changing history rules.
 Do not tag construction snapshots. After the technical release boundary is complete, reviewed
 candidates use annotated `v0.1.0-pre.N` tags. The annotated `v0.1.0` tag is created only after
 explicit owner acceptance of a candidate and any requested corrections.
+
+## Current owner-directed release flow
+
+The owner accepted the 0.1.0-pre.2 candidate on 2026-10-15 and requested continued
+work on dev. The first formal 0.1.0 release is therefore validated and tagged on
+dev. Keep development on dev and PR #1 available for main review. A main merge
+and any subsequent dev recreation require a separate instruction; the generic
+squash workflow above does not authorize them for this release.

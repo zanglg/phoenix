@@ -6,6 +6,9 @@ Phoenix is an experimental Unix-like Rust kernel. The current development target
 QEMU `virt`. The Cargo version remains 0.0.0 throughout the linear construction path. After the
 technical Roadmap is complete, release candidates use `0.1.0-pre.N`; promotion to `0.1.0` requires
 explicit owner review and acceptance.
+The owner accepted 0.1.0-pre.2 on 2026-10-15 and requested continued development
+on dev. The formal 0.1.0 release is validated/tagged on dev; do not merge into main
+or recreate dev as part of this release. See CONTRIBUTING.md and docs/RELEASE.md.
 Follow the Roadmap in dependency order. A runtime-pending item may remain open while work moves
 to the next explicitly host-verifiable item, but only when that work does not depend on an
 unobserved hardware result. Never convert static evidence into a runtime support claim.
