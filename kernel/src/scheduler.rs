@@ -27,6 +27,8 @@ pub enum ThreadState {
     Running,
     /// Ineligible until its absolute deadline is reached.
     Sleeping(TickInstant),
+    /// Ineligible until the owner explicitly publishes a completed event.
+    Blocked,
     /// Terminal state, retained until explicit reaping.
     Exited,
 }
@@ -108,6 +110,22 @@ impl<const CAPACITY: usize> Scheduler<CAPACITY> {
         self.current = None;
         Ok(())
     }
+    /// Block the current thread at a lock-free scheduling boundary.
+    pub fn block(&mut self) -> Result<(), ScheduleError> {
+        let id = self.current.ok_or(ScheduleError::State)?;
+        self.threads[id.slot].state = Some(ThreadState::Blocked);
+        self.current = None;
+        Ok(())
+    }
+    /// Publish a completed event before making its blocked owner runnable.
+    /// Duplicate wakes and stale generations leave the queue unchanged.
+    pub fn wake(&mut self, id: ThreadId) -> Result<(), ScheduleError> {
+        if self.state(id)? != ThreadState::Blocked {
+            return Err(ScheduleError::State);
+        }
+        self.threads[id.slot].state = Some(ThreadState::Ready);
+        Ok(())
+    }
     /// Mark the current thread terminal without freeing its active stack.
     pub fn exit(&mut self) -> Result<(), ScheduleError> {
         let id = self.current.ok_or(ScheduleError::State)?;
@@ -157,6 +175,32 @@ impl<const CAPACITY: usize> Scheduler<CAPACITY> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn blocked_threads_require_one_generation_checked_wake() {
+        let mut queue = Scheduler::<2>::new();
+        let parent = queue.spawn().unwrap();
+        let child = queue.spawn().unwrap();
+        let now = TickInstant::from_raw(0);
+        assert_eq!(queue.wake(parent), Err(ScheduleError::State));
+        assert_eq!(queue.block(), Err(ScheduleError::State));
+        assert_eq!(queue.select(now), Some(parent));
+        queue.block().unwrap();
+        assert_eq!(queue.state(parent), Ok(ThreadState::Blocked));
+        // Advancing time must never wake an event waiter.
+        assert_eq!(queue.select(TickInstant::from_raw(u64::MAX)), Some(child));
+        queue.block().unwrap();
+        assert_eq!(queue.select(now), None);
+        queue.wake(parent).unwrap();
+        assert_eq!(queue.wake(parent), Err(ScheduleError::State));
+        assert_eq!(queue.select(now), Some(parent));
+        queue.exit().unwrap();
+        assert_eq!(queue.wake(parent), Err(ScheduleError::State));
+        queue.reap(parent).unwrap();
+        let replacement = queue.spawn().unwrap();
+        assert_eq!(queue.wake(parent), Err(ScheduleError::Stale));
+        assert_eq!(queue.select(now), Some(replacement));
+        assert_eq!(queue.state(child), Ok(ThreadState::Blocked));
+    }
     #[test]
     fn round_robin_sleep_exit_and_generation_reuse() {
         let mut scheduler = Scheduler::<3>::new();

@@ -60,6 +60,7 @@ fn main() -> ExitCode {
         "test-runtime" => test_runtime(),
         "test-system" => test_system(),
         "test-hardening" => test_hardening(),
+        "test-scheduling" => test_scheduling(),
         "build-system" => {
             build_kernel_variant(KernelVariant::System)
                 && inspect_kernel_variant(KernelVariant::System)
@@ -110,6 +111,7 @@ fn print_help() {
     println!("  test-runtime  Run guest-exit boot, exception, permission and IRQ probes");
     println!("  build-system / run-system / test-system  Build or exercise the native system");
     println!("  test-hardening  Run target rollback and repeated process/ASID recovery checks");
+    println!("  test-scheduling Run cooperative user scheduling, wait and isolation checks");
     println!("  package  Collect system artifacts, provenance and SHA-256 checksums");
     println!("  ci       Run every validation available without an emulator");
     println!("  symbolize <ELF> <0xADDRESS>...  Resolve addresses using the exact kernel ELF");
@@ -1523,6 +1525,20 @@ fn test_hardening() -> bool {
     build_kernel_variant(KernelVariant::System)
         && inspect_kernel_variant(KernelVariant::System)
         && qemu::test_hardening(
+            &artifacts.image,
+            artifacts.image.parent().unwrap(),
+            &workspace_root(),
+        )
+}
+
+fn test_scheduling() -> bool {
+    let Some(target) = require_aarch64_target() else {
+        return false;
+    };
+    let artifacts = kernel_artifacts(&target, KernelVariant::System);
+    build_kernel_variant(KernelVariant::System)
+        && inspect_kernel_variant(KernelVariant::System)
+        && qemu::test_scheduling(
             &artifacts.image,
             artifacts.image.parent().unwrap(),
             &workspace_root(),

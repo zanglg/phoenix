@@ -9,6 +9,7 @@ collects these files under `target/phoenix/packages/<version>/`:
 - `phoenix-system.bin` and `phoenix-system.map`: bootable image and link map;
 - `phoenix-system.cpio`: deterministic initramfs;
 - `phoenix-system.elf`, `phoenix-child.elf`, `phoenix-fault.elf`: stripped user ELFs;
+- `phoenix-cooperative.elf`: development scheduling conformance ELF (added for 0.2);
 - `PROVENANCE.txt`: full source commit, dirty/clean state, checkout path, compiler,
   Cargo, available QEMU identity, target/profile and board configuration;
 - `SHA256SUMS`: hashes of every preceding file.

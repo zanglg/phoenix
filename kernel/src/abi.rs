@@ -30,6 +30,12 @@ pub enum NativeSyscall {
     Close,
     /// Run one child synchronously (`number=5`), returning its terminal status.
     Run,
+    /// Create the root process's single asynchronous child (`number=6`).
+    Spawn,
+    /// Consume the caller's single child outcome (`number=7`).
+    Wait,
+    /// Cooperatively reschedule and return zero (`number=8`).
+    Yield,
     /// Unassigned number retained for forward-compatible rejection.
     Unknown(u64),
 }
@@ -44,6 +50,9 @@ impl NativeSyscall {
             3 => Self::Open,
             4 => Self::Close,
             5 => Self::Run,
+            6 => Self::Spawn,
+            7 => Self::Wait,
+            8 => Self::Yield,
             number => Self::Unknown(number),
         }
     }
@@ -57,6 +66,9 @@ impl NativeSyscall {
             Self::Open => 3,
             Self::Close => 4,
             Self::Run => 5,
+            Self::Spawn => 6,
+            Self::Wait => 7,
+            Self::Yield => 8,
             Self::Unknown(number) => number,
         }
     }
@@ -263,6 +275,8 @@ pub enum Errno {
     InputOutput = 5,
     /// File descriptor is not open for the requested operation.
     BadFileDescriptor = 9,
+    /// The caller has no child whose completion it can consume.
+    NoChild = 10,
     /// Memory allocation failed.
     NoMemory = 12,
     /// A filesystem object does not grant the requested access.
@@ -356,6 +370,15 @@ mod tests {
         assert_eq!(NativeSyscall::decode(3), NativeSyscall::Open);
         assert_eq!(NativeSyscall::decode(4), NativeSyscall::Close);
         assert_eq!(NativeSyscall::Close.number(), 4);
+        for (number, operation) in [
+            (5, NativeSyscall::Run),
+            (6, NativeSyscall::Spawn),
+            (7, NativeSyscall::Wait),
+            (8, NativeSyscall::Yield),
+        ] {
+            assert_eq!(NativeSyscall::decode(number), operation);
+            assert_eq!(operation.number(), number);
+        }
         assert_eq!(NativeSyscall::decode(99), NativeSyscall::Unknown(99));
         assert_eq!(NativeSyscall::Unknown(u64::MAX).number(), u64::MAX);
     }

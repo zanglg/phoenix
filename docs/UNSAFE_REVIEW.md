@@ -1,4 +1,4 @@
-# 0.1 unsafe ownership and ordering review
+# Unsafe ownership and ordering review
 
 This is a source review and test-supported invariant audit, not an independent
 security assessment. It covers the AArch64/QEMU single-CPU configuration and the
@@ -39,6 +39,29 @@ owners intentionally live until halt; exited child and worker resources are reap
 
 SMP, nested interrupts, new scheduler contexts, DMA, FP/SIMD, dynamic mappings and
 larger capacities require another invariant review and target validation.
+
+## 0.2 cooperative scheduling extension
+
+All user dispatch remains IRQ-masked and non-reentrant on CPU 0. The run queue
+and process table publish/retire their identity binding together; every selection
+checks the complete generation-checked binding. A running frame is copied into
+its process owner before it becomes Ready or Waiting. No pointer into the shared
+boot/exception stack and no suspended Rust continuation is retained by a process.
+Selection installs/readbacks the next retained root and completes global TLBI,
+then copies its owned frame onto the active exception stack. ERET occurs only
+after dispatch returns and the unique State/frame borrows end.
+
+Terminal children either retain all resources as an unschedulable zombie, or
+have the parent's root installed before reap. Reap revokes process identity,
+queue identity and their binding before reuse; exact allocator and ASID baselines
+are asserted. Waiting results are written into the parent's owned frame before
+waking it, and selection is a separate transition. Init exit ends the system;
+remaining owners stay retained until halt. No orphan cleanup is claimed.
+
+`test-scheduling` observes both completion/wait orderings, 257 child reaps and
+128 faults, all preserved GPRs/NZCV, private stack contents and independent file
+cursors. Timer preemption is a separate pending gate; this review does not yet
+authorize EL0 IRQ unmasking.
 
 The stress boot diagnostics run before first EL0 entry with IRQs masked. Withheld
 frames and ASIDs remain private; failed image/table owners are destroyed before

@@ -143,6 +143,64 @@ impl Contract {
                 ],
             )
     }
+
+    fn valid_cooperative(&self, output: &[u8]) -> bool {
+        let text = String::from_utf8_lossy(output).replace('\r', "");
+        if text.contains(PANIC_SENTINEL) || text.contains(EXCEPTION_SENTINEL) {
+            return false;
+        }
+        let mut expected = vec!["PHOENIX_SYSTEM_ENTER pid=0.1 asid=1".to_owned()];
+        let fault = &self.faults[3];
+        for generation in 1..=257 {
+            let faulted = generation <= 256 && (generation - 1) % 4 >= 2;
+            if faulted {
+                expected.push(format!(
+                    "PHOENIX_USER_FAULT pid=1.{generation} kind={} pc={:#x} address={:?} esr={:#x}",
+                    fault.kind, fault.pc, fault.address, fault.esr
+                ));
+            }
+            expected.push(format!(
+                "child: reaped=1.{generation} fault={faulted} frames=restored asid=2 slots=restored"
+            ));
+        }
+        expected
+            .push("Phoenix cooperative: rounds=64 registers=ok stack=ok files=ok waits=ok".into());
+        expected.push("system: children=257 faults=128 console-read=0 frame-accounting=ok".into());
+        expected.push("PHOENIX_SYSTEM_EXIT status=0 fault=false".into());
+        let actual: Vec<_> = text
+            .lines()
+            .filter(|line| {
+                line.starts_with("PHOENIX_SYSTEM_")
+                    || line.starts_with(USER_FAULT_SENTINEL)
+                    || line.starts_with("child: reaped=")
+                    || line.starts_with("Phoenix cooperative:")
+                    || line.starts_with("system: children=")
+            })
+            .collect();
+        actual == expected
+    }
+}
+
+pub(super) fn cooperative_suite(image: &Path, directory: &Path, root: &Path) -> bool {
+    if !preflight() {
+        return false;
+    }
+    let Some(contract) = Contract::load(directory) else {
+        return false;
+    };
+    let mut command = command(image, false);
+    *command.arguments.last_mut().unwrap() = "phoenix.system-cooperative".into();
+    runtime::report(
+        runtime::run_guest(
+            command,
+            directory,
+            root,
+            "system-cooperative",
+            None,
+            Duration::from_secs(30),
+        )
+        .is_some_and(|guest| guest.success() && contract.valid_cooperative(&guest.output)),
+    )
 }
 
 fn command(image: &Path, stress: bool) -> QemuCommand {
@@ -360,5 +418,28 @@ mod tests {
         let mut symbols = parse_nm_symbols(SYMBOLS);
         symbols.remove("fault_code_write");
         assert!(Contract::from_symbols(&symbols).is_none());
+    }
+
+    #[test]
+    fn cooperative_oracle_rejects_corrupted_lifetimes_and_context_proof() {
+        let observed = include_str!("fixtures/cooperative.txt");
+        let contract = contract();
+        assert!(contract.valid_cooperative(observed.as_bytes()));
+        for (from, to) in [
+            ("reaped=1.257", "reaped=1.256"),
+            ("fault=true", "fault=false"),
+            ("esr=0x2000000", "esr=0x9200000f"),
+            ("pc=0x400068", "pc=0x400000"),
+            ("registers=ok", "registers=bad"),
+            ("faults=128", "faults=127"),
+            ("asid=2", "asid=3"),
+            ("status=0 fault=false", "status=1 fault=false"),
+        ] {
+            assert!(observed.contains(from));
+            assert!(!contract.valid_cooperative(observed.replacen(from, to, 1).as_bytes()));
+        }
+        let without_first = observed.lines().skip(1).collect::<Vec<_>>().join("\n");
+        assert!(!contract.valid_cooperative(without_first.as_bytes()));
+        assert!(!contract.valid_cooperative(format!("{observed}PHOENIX_PANIC\n").as_bytes()));
     }
 }

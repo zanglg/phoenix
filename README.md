@@ -6,6 +6,8 @@ kernel threads, independent user processes, console I/O and an in-memory filesys
 The first formal release is **0.1.0**. Development lives on `dev`;
 `main` is the owner review boundary. The owner accepted this first release for
 validation and tagging on `dev`; development continues there.
+The active development version is **0.2.0-dev.0**. Its first step adds cooperative
+user scheduling; [the 0.2 design](docs/0.2-SCHEDULING.md) records the new boundary.
 
 ## Build and run
 
@@ -17,6 +19,7 @@ cargo xtask ci
 cargo xtask test-runtime
 cargo xtask test-system
 cargo xtask test-hardening
+cargo xtask test-scheduling
 cargo xtask run-system
 ```
 
@@ -40,14 +43,15 @@ compiler and QEMU versions are recorded in the [runtime ledger](docs/RUNTIME_VAL
 - real GICv3 timer delivery, IRQ-safe locking, round-robin kernel threads,
   preemption, sleep, idle and stack reclamation in the focused runtime image;
 - strict ELF loading, isolated user roots, checked cross-page copies,
-  synchronous child execution, fault containment, frame reclamation and ASID reuse;
+  synchronous run and cooperative single-child spawn/wait/yield, fault containment,
+  frame reclamation and ASID reuse;
 - read-only initramfs, bounded writable `tmp/`, process-local file descriptors,
   nonblocking console input and polled output;
 - structured diagnostic ring, resource-exhaustion tests and deterministic packaging.
 
 The kernel-thread/heap image and user-system image are separate integration targets.
-The system uses a serialized two-process model; it does not preempt concurrent user
-processes. A child that never exits or faults can occupy the CPU indefinitely.
+The development system schedules two user processes cooperatively; it does not
+yet preempt them. A child that never yields, exits or faults can occupy the CPU indefinitely.
 Limits, error behavior, syscall numbers and ownership rules are defined
 in the [0.1 contract](docs/0.1-CONTRACT.md). Tests cover the stated bounded workloads.
 SMP, FP/SIMD, networking, persistent storage, POSIX/Linux compatibility, real hardware,
@@ -70,6 +74,7 @@ cargo xtask test-init
 cargo xtask test-runtime
 cargo xtask test-system
 cargo xtask test-hardening
+cargo xtask test-scheduling
 ```
 
 The first five commands retain focused boot protocols. `test-runtime` runs thirteen
@@ -78,6 +83,8 @@ isolated cases, including negative protection tests, and uses guest-driven exits
 Its oracle requires the exact PC, FAR, ESR and kind for all nine user fault cases.
 `test-hardening` injects loader failures, exhausts frame/ASID budgets, then runs
 705 child lifetimes with exact resource restoration and 576 contained faults.
+`test-scheduling` exercises 64 cooperative rounds, 257 child reaps and 128 faults,
+both wait/completion orderings and complete preserved GPR/NZCV/stack/FD checks.
 All emulator tests are bounded and retain logs under
 `target/phoenix/aarch64-unknown-none-softfloat/debug/`.
 See [QEMU.md](docs/QEMU.md) and the [validation ledger](docs/RUNTIME_VALIDATION.md).

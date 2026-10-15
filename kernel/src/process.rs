@@ -277,6 +277,16 @@ impl ProcessControl {
         self.transition(ProcessPhase::Ready, ProcessState::Running)
     }
 
+    /// Return the active process to the run queue after saving its context.
+    pub fn deschedule(&mut self) -> Result<(), ProcessTransitionError> {
+        self.transition(ProcessPhase::Running, ProcessState::Ready)
+    }
+
+    /// Publish a completed child outcome before scheduling its waiting parent.
+    pub fn wake(&mut self) -> Result<(), ProcessTransitionError> {
+        self.transition(ProcessPhase::Waiting, ProcessState::Ready)
+    }
+
     /// Block the running parent while its synchronous child executes.
     pub fn wait_for_child(&mut self) -> Result<(), ProcessTransitionError> {
         self.transition(ProcessPhase::Running, ProcessState::Waiting)
@@ -490,6 +500,24 @@ impl<T, const CAPACITY: usize> ProcessTable<T, CAPACITY> {
             .map_err(ProcessTableStateError::Transition)
     }
 
+    /// Save-before-switch transition from running back to ready.
+    pub fn deschedule(&mut self, id: ProcessId) -> Result<(), ProcessTableStateError> {
+        self.get_mut(id)
+            .map_err(ProcessTableStateError::Lookup)?
+            .control
+            .deschedule()
+            .map_err(ProcessTableStateError::Transition)
+    }
+
+    /// Wake a waiting process without implicitly selecting it as current.
+    pub fn wake(&mut self, id: ProcessId) -> Result<(), ProcessTableStateError> {
+        self.get_mut(id)
+            .map_err(ProcessTableStateError::Lookup)?
+            .control
+            .wake()
+            .map_err(ProcessTableStateError::Transition)
+    }
+
     /// Suspend the parent for synchronous child execution.
     pub fn wait_for_child(&mut self, id: ProcessId) -> Result<(), ProcessTableStateError> {
         self.get_mut(id)
@@ -603,6 +631,39 @@ mod tests {
         ProcessReapError, ProcessSlot, ProcessState, ProcessTable, ProcessTableStateError,
         ProcessTermination, UserFault, UserFaultAccess, UserFaultKind,
     };
+
+    #[test]
+    fn saved_context_and_completed_wait_require_explicit_selection() {
+        let mut table = ProcessTable::<[u64; 2], 1>::new();
+        let id = table.insert([0x1234, 0x5678]).unwrap();
+        assert!(table.deschedule(id).is_err());
+        assert!(table.wake(id).is_err());
+        table.make_ready(id).unwrap();
+        table.start(id).unwrap();
+        table.deschedule(id).unwrap();
+        assert_eq!(table.get(id).unwrap().state(), ProcessState::Ready);
+        assert!(table.deschedule(id).is_err());
+        table.start(id).unwrap();
+        table.wait_for_child(id).unwrap();
+        assert!(table.start(id).is_err());
+        table.wake(id).unwrap();
+        assert_eq!(table.get(id).unwrap().state(), ProcessState::Ready);
+        assert!(table.wake(id).is_err());
+        assert_eq!(table.get(id).unwrap().resources(), &[0x1234, 0x5678]);
+        table.start(id).unwrap();
+        table.exit(id, ExitStatus::new(0)).unwrap();
+        table.reap(id).unwrap();
+        let replacement = table.insert([0, 0]).unwrap();
+        assert_ne!(replacement, id);
+        assert!(matches!(
+            table.wake(id),
+            Err(ProcessTableStateError::Lookup(_))
+        ));
+        assert_eq!(
+            table.get(replacement).unwrap().state(),
+            ProcessState::Created
+        );
+    }
 
     #[test]
     fn lifecycle_accepts_only_created_ready_running_exited() {

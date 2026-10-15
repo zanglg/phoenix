@@ -24,6 +24,32 @@ stop QEMU after their terminal marker.
 
 ## Current evidence
 
+### 0.2 development extension
+
+The cooperative checkpoint passed `cargo xtask ci` (234 kernel and 20 tooling
+tests) and all nine target commands: the existing 24 QEMU launches plus the new
+cooperative run. This is development evidence, not a formal 0.2 release receipt.
+
+`test-scheduling` runs the `phoenix.system-cooperative` boot mode without console
+input and with a 30-second bound. An observed run completed 64 rounds, 257 reaps,
+128 exact ELF-derived illegal-instruction faults and init status 0. Both
+wait-before-exit and exit-before-wait are exercised for normal and fault exits.
+The two normal processes check all preserved GPRs, NZCV, SP, private stack words,
+shared-file handoff and independent descriptor offsets. Ready and zombie children
+occupy the single slot; nested spawn and absent-child wait are rejected. The final
+legacy synchronous run also succeeds. Raw evidence is `qemu-system-cooperative.log`
+under the standard target directory; the host oracle also uses a retained observed
+protocol fixture and rejects corrupted lifetimes, faults and context proof.
+
+| ID | State | Observed evidence |
+| --- | --- | --- |
+| RUN-USCHED-001 | Runtime Verified | Cooperative two-process round robin, blocked-parent and same-process yields, complete saved-context checks, exact resource reuse |
+| RUN-USCHED-002 | Runtime Pending | EL0 timer preemption and non-yielding user progress; next scoped step |
+| RUN-USCHED-003 | Runtime Pending | User sleep and no-runnable idle; not implemented yet |
+
+The following rows retain the 0.1 release scope; new scheduling evidence does not
+retroactively expand that tag's contract.
+
 Every Runtime Verified row below applies only to the stated bounded test and board.
 Malformed inputs and injected hardware/backend failures also have host coverage;
 that coverage does not imply those failures were reproduced in actual hardware.

@@ -33,3 +33,9 @@ name = "phoenix-fault"
 path = "src/fault.rs"
 test = false
 bench = false
+
+[[bin]]
+name = "phoenix-cooperative"
+path = "src/cooperative.rs"
+test = false
+bench = false

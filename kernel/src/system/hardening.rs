@@ -55,7 +55,7 @@ impl<M: TranslationTableMemory> TranslationTableMemory for Inject<'_, M> {
 }
 
 pub(super) fn run(runtime: &mut State, console: &mut Console<EarlyPl011>) {
-    assert!(runtime.test && irqs_masked() && runtime.parent.is_none());
+    assert!(runtime.test && irqs_masked() && runtime.child.is_none());
     let before = runtime.allocator;
     let mut memory = memory(runtime);
     // Withhold all but each incomplete frame budget from the real allocator.
@@ -144,7 +144,7 @@ pub(super) fn run(runtime: &mut State, console: &mut Console<EarlyPl011>) {
     let mut frame = ExceptionFrame::zeroed();
     let parent = runtime.current;
     assert_eq!(
-        spawn_child(runtime, &mut frame, "child"),
+        spawn_child(runtime, &mut frame, "child", true),
         Err(Errno::NoMemory)
     );
     assert_eq!(frame, ExceptionFrame::zeroed());
@@ -153,7 +153,7 @@ pub(super) fn run(runtime: &mut State, console: &mut Console<EarlyPl011>) {
         "ASID exhaustion leaked loaded frames"
     );
     assert_eq!(runtime.current, parent);
-    assert!(runtime.parent.is_none());
+    assert!(runtime.child.is_none());
     assert_eq!(runtime.processes.len(), 1);
     for asid in held.into_iter().flatten() {
         // SAFETY: These diagnostic reservations never had a root installed and

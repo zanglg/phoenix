@@ -1,4 +1,4 @@
-//! Serialized two-process native system. A parent waits while its child runs.
+//! Two-process native system with cooperative, bounded round-robin scheduling.
 //!
 //! All mutable state belongs to CPU 0 with DAIF.I masked. EL0 never borrows
 //! kernel objects. Root switches invalidate translations before child reaping;
@@ -7,6 +7,7 @@ use super::*;
 use core::sync::atomic::AtomicUsize;
 use phoenix_kernel::arch::aarch64::diagnostics as cpu;
 use phoenix_kernel::process::{ProcessTable, ProcessTermination};
+use phoenix_kernel::scheduler::{Scheduler, ThreadId, ThreadState};
 use phoenix_kernel::vfs::{FileTable, RamFs};
 mod hardening;
 
@@ -15,11 +16,15 @@ struct Resources {
     asid: AddressSpaceId,
     files: FileTable<'static, 8>,
     suspended: Option<ExceptionFrame>,
+    thread: Option<ThreadId>,
 }
 struct State {
     processes: ProcessTable<Resources, 2>,
     current: ProcessId,
-    parent: Option<ProcessId>,
+    root: ProcessId,
+    child: Option<ProcessId>,
+    queue: Scheduler<2>,
+    scheduled: [Option<ProcessId>; 2],
     allocator: FrameAllocator<INIT_MEMORY_RANGES>,
     asids: AsidAllocator,
     tables: &'static FinalKernelTables,
@@ -94,7 +99,7 @@ pub(super) fn boot(argument: usize, console: &mut Console<EarlyPl011>) -> ! {
     let archive = Initramfs::from_bytes(INITRAMFS).expect("system archive");
     // SAFETY: Bootstrap mappings still cover all privately allocated RAM.
     let mut memory = unsafe { BootstrapPhysicalMemory::assume_bootstrap_mapping() };
-    let (plan, map, gic, test, stress) = {
+    let (plan, map, gic, test, stress, cooperative) = {
         let tree = memory
             .device_tree(PhysAddr::new(argument))
             .expect("system DTB");
@@ -114,9 +119,12 @@ pub(super) fn boot(argument: usize, console: &mut Console<EarlyPl011>) -> ! {
             gic,
             matches!(
                 info.bootargs(),
-                Some("phoenix.system-test" | "phoenix.system-stress")
+                Some(
+                    "phoenix.system-test" | "phoenix.system-stress" | "phoenix.system-cooperative"
+                )
             ),
             info.bootargs() == Some("phoenix.system-stress"),
+            info.bootargs() == Some("phoenix.system-cooperative"),
         )
     };
     let mut allocator = map.into_allocator();
@@ -129,7 +137,13 @@ pub(super) fn boot(argument: usize, console: &mut Console<EarlyPl011>) -> ! {
         .unwrap_or_else(|_| panic!("system table materialization"));
     let init = load(
         archive,
-        if stress { "stress" } else { "init" },
+        if stress {
+            "stress"
+        } else if cooperative {
+            "cooperate"
+        } else {
+            "init"
+        },
         &mut allocator,
         &mut memory,
     )
@@ -156,16 +170,26 @@ pub(super) fn boot(argument: usize, console: &mut Console<EarlyPl011>) -> ! {
             asid,
             files: FileTable::new(),
             suspended: None,
+            thread: None,
         })
         .unwrap_or_else(|_| panic!("init process slot"));
     processes.make_ready(id).unwrap();
     processes.start(id).unwrap();
+    let mut queue = Scheduler::new();
+    let thread = queue.spawn().unwrap();
+    processes.resources_mut(id).unwrap().thread = Some(thread);
+    let mut scheduled = [None; 2];
+    scheduled[thread.slot()] = Some(id);
+    assert_eq!(queue.select(cpu::counter()), Some(thread));
     let allocator_without_child = allocator;
     let asids_without_child = asids.remaining();
     let runtime = State {
         processes,
         current: id,
-        parent: None,
+        root: id,
+        child: None,
+        queue,
+        scheduled,
         allocator,
         asids,
         tables,
@@ -250,18 +274,26 @@ pub(super) fn dispatch(frame: &mut ExceptionFrame, slot: Option<VectorSlot>) {
                 .processes
                 .exit(runtime.current, ExitStatus::new(args[0]))
                 .unwrap();
-            finish(
-                runtime,
-                frame,
-                SyscallReturn::success(args[0])
-                    .unwrap_or_else(|_| SyscallReturn::error(Errno::InvalidArgument)),
-            );
+            finish(runtime, frame);
             return;
         }
-        if number == 5 {
-            if let Err(error) = run_child(runtime, frame, args[0], args[1]) {
+        if number == 5 || number == 6 {
+            if let Err(error) = run_child(runtime, frame, args[0], args[1], number == 5) {
+                syscall::set_return(frame, SyscallReturn::error(error));
+            } else if number == 6 {
+                syscall::set_return(frame, SyscallReturn::success(0).unwrap());
+            }
+            return;
+        }
+        if number == 7 {
+            if let Err(error) = wait_child(runtime, frame) {
                 syscall::set_return(frame, SyscallReturn::error(error));
             }
+            return;
+        }
+        if number == 8 {
+            syscall::set_return(frame, SyscallReturn::success(0).unwrap());
+            select(runtime, frame);
             return;
         }
         let result = io(runtime, number, args);
@@ -289,7 +321,7 @@ pub(super) fn dispatch(frame: &mut ExceptionFrame, slot: Option<VectorSlot>) {
             fault.fault_address(),
             fault.architecture_code()
         );
-        finish(runtime, frame, SyscallReturn::error(Errno::BadAddress));
+        finish(runtime, frame);
         return;
     }
     panic!(
@@ -304,8 +336,9 @@ fn run_child(
     frame: &mut ExceptionFrame,
     pointer: u64,
     length: u64,
+    wait: bool,
 ) -> Result<(), Errno> {
-    if runtime.parent.is_some() {
+    if runtime.current != runtime.root || runtime.child.is_some() {
         return Err(Errno::TryAgain);
     }
     let length = usize::try_from(length)
@@ -315,10 +348,15 @@ fn run_child(
     let mut path = [0u8; 128];
     copy_from(runtime, pointer, &mut path[..length])?;
     let path = core::str::from_utf8(&path[..length]).map_err(|_| Errno::InvalidArgument)?;
-    spawn_child(runtime, frame, path)
+    spawn_child(runtime, frame, path, wait)
 }
 
-fn spawn_child(runtime: &mut State, frame: &mut ExceptionFrame, path: &str) -> Result<(), Errno> {
+fn spawn_child(
+    runtime: &mut State,
+    frame: &mut ExceptionFrame,
+    path: &str,
+    wait: bool,
+) -> Result<(), Errno> {
     let mut memory = memory(runtime);
     let space = load(runtime.archive, path, &mut runtime.allocator, &mut memory)?;
     let asid = match runtime.asids.allocate() {
@@ -336,7 +374,8 @@ fn spawn_child(runtime: &mut State, frame: &mut ExceptionFrame, path: &str) -> R
         space,
         asid,
         files: FileTable::new(),
-        suspended: None,
+        suspended: Some(initial),
+        thread: None,
     };
     let child = match runtime.processes.insert(resources) {
         Ok(id) => id,
@@ -351,81 +390,194 @@ fn spawn_child(runtime: &mut State, frame: &mut ExceptionFrame, path: &str) -> R
             return Err(Errno::TryAgain);
         }
     };
-    let parent = runtime.current;
-    runtime.processes.resources_mut(parent).unwrap().suspended = Some(*frame);
-    runtime.processes.wait_for_child(parent).unwrap();
+    // Process and queue slots have the same fixed capacity and are published /
+    // retired together. No handler can observe the intermediate binding while
+    // local IRQs are masked. A successful insertion proves queue capacity.
+    let thread = runtime
+        .queue
+        .spawn()
+        .expect("process/queue capacity invariant");
+    runtime.processes.resources_mut(child).unwrap().thread = Some(thread);
+    runtime.scheduled[thread.slot()] = Some(child);
     runtime.processes.make_ready(child).unwrap();
-    runtime.processes.start(child).unwrap();
-    runtime.current = child;
-    runtime.parent = Some(parent);
+    runtime.child = Some(child);
     events::record(2, child.slot() as u64, child.generation());
-    let resource = runtime.processes.get(child).unwrap().resources();
-    // SAFETY: Process table retains both roots. No user borrow is live, IRQs
-    // remain masked, and global invalidation precedes return into this child.
-    unsafe {
-        resource.space.activate_for_return(resource.asid);
+    if wait {
+        wait_child(runtime, frame).expect("new child belongs to running root");
     }
-    *frame = initial;
     Ok(())
 }
 
-fn finish(runtime: &mut State, frame: &mut ExceptionFrame, result: SyscallReturn) {
-    let child = runtime.current;
-    if let Some(parent) = runtime.parent.take() {
-        let resource = runtime.processes.get(parent).unwrap().resources();
-        // SAFETY: The retained parent's mapping is complete. The full switch
-        // invalidates all child translations before its unique owner is reaped.
-        unsafe {
-            resource.space.activate_for_return(resource.asid);
-        }
-        runtime.current = parent;
-        let reaped = runtime.processes.reap(child).unwrap();
-        let was_fault = matches!(reaped.termination(), ProcessTermination::Faulted(_));
-        let resource = reaped.into_resources();
-        // SAFETY: Child is terminal and no longer current, all translations
-        // were invalidated above, and no borrow of its frames remains.
-        unsafe { resource.space.release_retired(&mut runtime.allocator) }.unwrap();
-        // SAFETY: Parent root is current and global TLBI completed before reap;
-        // the child root owner has been consumed and can never activate again.
-        unsafe { runtime.asids.release_retired(resource.asid) }.unwrap();
-        assert_eq!(
-            runtime.allocator, runtime.allocator_without_child,
-            "child changed free-frame ownership"
-        );
-        assert_eq!(
-            runtime.asids.remaining(),
-            runtime.asids_without_child,
-            "child ASID leak"
-        );
-        assert_eq!(runtime.processes.len(), 1, "child process slot leak");
-        assert!(
-            runtime.processes.get(child).is_err(),
-            "retired PID still resolves"
-        );
-        *frame = runtime
-            .processes
-            .resources_mut(parent)
-            .unwrap()
-            .suspended
-            .take()
-            .unwrap();
+fn thread(runtime: &State, id: ProcessId) -> ThreadId {
+    runtime
+        .processes
+        .get(id)
+        .unwrap()
+        .resources()
+        .thread
+        .unwrap()
+}
+
+fn activate(runtime: &State, id: ProcessId) {
+    let resource = runtime.processes.get(id).unwrap().resources();
+    // SAFETY: The table retains this complete root. Local IRQs are masked and
+    // no user-memory borrow survives dispatch. Global TLBI completes before any
+    // retired root's frames or ASID may be returned by reap_child.
+    unsafe { resource.space.activate_for_return(resource.asid) };
+}
+
+/// Copy complete contexts at the outer exception boundary. The shared kernel
+/// stack never contains a suspended Rust continuation; only owned frame values
+/// survive this call. No lock guard or State borrow survives assembly ERET.
+fn select(runtime: &mut State, frame: &mut ExceptionFrame) {
+    let old = runtime.current;
+    if runtime.processes.get(old).unwrap().state() == phoenix_kernel::process::ProcessState::Running
+    {
+        runtime.processes.resources_mut(old).unwrap().suspended = Some(*frame);
+        runtime.processes.deschedule(old).unwrap();
+    }
+    let next = runtime
+        .queue
+        .select(cpu::counter())
+        .expect("runnable process");
+    let id = runtime.scheduled[next.slot()].expect("published process binding");
+    assert_eq!(thread(runtime, id), next, "stale queue binding");
+    runtime.processes.start(id).unwrap();
+    activate(runtime, id);
+    runtime.current = id;
+    *frame = runtime
+        .processes
+        .resources_mut(id)
+        .unwrap()
+        .suspended
+        .take()
+        .unwrap();
+    events::record(5, old.slot() as u64, id.slot() as u64);
+}
+
+fn wait_child(runtime: &mut State, frame: &mut ExceptionFrame) -> Result<(), Errno> {
+    if runtime.current != runtime.root {
+        return Err(Errno::NoChild);
+    }
+    let child = runtime.child.ok_or(Errno::NoChild)?;
+    if runtime
+        .processes
+        .get(child)
+        .unwrap()
+        .state()
+        .termination()
+        .is_some()
+    {
+        let result = reap_child(runtime);
         syscall::set_return(frame, result);
-        runtime.processes.resume(parent).unwrap();
-        runtime.children += 1;
-        events::record(3, child.generation(), resource.asid.raw() as u64);
-        let mut console = Console::new(EarlyPl011::new());
-        let _ = writeln!(
-            console,
-            "child: reaped={}.{} fault={was_fault} frames=restored asid={} slots=restored",
-            child.slot(),
-            child.generation(),
-            resource.asid.raw()
-        );
+    } else {
+        let parent = runtime.current;
+        runtime.processes.resources_mut(parent).unwrap().suspended = Some(*frame);
+        runtime.processes.wait_for_child(parent).unwrap();
+        runtime.queue.block().unwrap();
+        select(runtime, frame);
+    }
+    Ok(())
+}
+
+fn reap_child(runtime: &mut State) -> SyscallReturn {
+    assert_eq!(runtime.current, runtime.root);
+    let child = runtime.child.take().expect("owned child");
+    let id = thread(runtime, child);
+    assert_eq!(runtime.queue.state(id), Ok(ThreadState::Exited));
+    let reaped = runtime.processes.reap(child).unwrap();
+    let result = termination_result(reaped.termination());
+    let was_fault = matches!(reaped.termination(), ProcessTermination::Faulted(_));
+    let resource = reaped.into_resources();
+    // SAFETY: Child is terminal and no longer current, all translations
+    // were invalidated above, and no borrow of its frames remains.
+    unsafe { resource.space.release_retired(&mut runtime.allocator) }.unwrap();
+    // SAFETY: Parent root is current and global TLBI completed before reap;
+    // the child root owner has been consumed and can never activate again.
+    unsafe { runtime.asids.release_retired(resource.asid) }.unwrap();
+    runtime.queue.reap(id).unwrap();
+    runtime.scheduled[id.slot()] = None;
+    assert!(
+        runtime.queue.state(id).is_err(),
+        "retired queue ID still resolves"
+    );
+    assert_eq!(
+        runtime.scheduled.iter().flatten().count(),
+        1,
+        "queue binding leak"
+    );
+    assert_eq!(
+        runtime.allocator, runtime.allocator_without_child,
+        "child changed free-frame ownership"
+    );
+    assert_eq!(
+        runtime.asids.remaining(),
+        runtime.asids_without_child,
+        "child ASID leak"
+    );
+    assert_eq!(runtime.processes.len(), 1, "child process slot leak");
+    assert!(
+        runtime.processes.get(child).is_err(),
+        "retired PID still resolves"
+    );
+    runtime.children += 1;
+    events::record(3, child.generation(), resource.asid.raw() as u64);
+    let mut console = Console::new(EarlyPl011::new());
+    let _ = writeln!(
+        console,
+        "child: reaped={}.{} fault={was_fault} frames=restored asid={} slots=restored",
+        child.slot(),
+        child.generation(),
+        resource.asid.raw()
+    );
+    result
+}
+
+fn termination_result(termination: ProcessTermination) -> SyscallReturn {
+    match termination {
+        ProcessTermination::Exited(status) => SyscallReturn::success(status.raw())
+            .unwrap_or_else(|_| SyscallReturn::error(Errno::InvalidArgument)),
+        ProcessTermination::Faulted(_) => SyscallReturn::error(Errno::BadAddress),
+    }
+}
+
+fn finish(runtime: &mut State, frame: &mut ExceptionFrame) {
+    runtime.queue.exit().unwrap();
+    if runtime.current != runtime.root {
+        assert_eq!(runtime.child, Some(runtime.current));
+        let parent = runtime.root;
+        if runtime.processes.get(parent).unwrap().state()
+            == phoenix_kernel::process::ProcessState::Waiting
+        {
+            activate(runtime, parent);
+            runtime.current = parent;
+            let result = reap_child(runtime);
+            let saved = runtime
+                .processes
+                .resources_mut(parent)
+                .unwrap()
+                .suspended
+                .as_mut()
+                .unwrap();
+            syscall::set_return(saved, result);
+            runtime.processes.wake(parent).unwrap();
+            runtime.queue.wake(thread(runtime, parent)).unwrap();
+        }
+        select(runtime, frame);
         return;
     }
+    let result = termination_result(
+        runtime
+            .processes
+            .get(runtime.root)
+            .unwrap()
+            .state()
+            .termination()
+            .unwrap(),
+    );
     let mut console = Console::new(EarlyPl011::new());
     let faulted = matches!(
-        runtime.processes.get(child).unwrap().state(),
+        runtime.processes.get(runtime.root).unwrap().state(),
         phoenix_kernel::process::ProcessState::Faulted(_)
     );
     events::dump(&mut console);

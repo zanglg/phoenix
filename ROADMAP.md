@@ -12,11 +12,46 @@ review corrections are complete. Exact formal-source validation and package
 identity are recorded in the release receipt described by
 [docs/RELEASE.md](docs/RELEASE.md); prerelease evidence remains historical.
 
-Worker/heap and synchronous user-system integrations remain distinct. Future
-user scheduling and other deferred capabilities require a new scoped roadmap.
+Worker/heap and user-system integrations remain distinct. The owner authorized
+the following 0.2.0 path on 2026-10-15; the 0.1 release record below is historical.
 The owner accepted the candidate on 2026-10-15 and requested continued dev work;
 this release is validated and tagged on dev as documented in CONTRIBUTING.md.
 No support claim is inferred from compilation alone.
+
+## Active path: 0.2.0 user scheduling
+
+Scope and ordering invariants are recorded in [docs/0.2-SCHEDULING.md](docs/0.2-SCHEDULING.md).
+Development stays on dev. Keep changes under Unreleased until a milestone has
+passed its gates; do not imply that starting development releases 0.2.0.
+
+### pre.1: cooperative process scheduling
+
+- [x] Route user contexts through the existing bounded round-robin policy.
+- [x] Explicit block/wake transitions, independent saved integer frames, and
+  root retirement before resource reclamation.
+- [x] Two-process cooperative spawn/wait/yield, retaining synchronous run.
+- [x] QEMU evidence for both child-exit/wait orderings, fault completion,
+  register/address-space/FD isolation, capacity errors and repeated reuse.
+
+The minimal spawn/wait/yield interface is introduced with pre.1 so that actual
+concurrent readiness can be tested before enabling IRQ-driven preemption.
+
+### pre.2: EL0 timer preemption
+
+- [ ] Arm timer delivery for the system image and enable IRQs only on EL0 return.
+- [ ] Switch at the outer exception epilogue with every kernel borrow ended.
+- [ ] A non-yielding user loop cannot starve a second runnable user process.
+- [ ] Stress full register preservation, root/ASID isolation and exit/fault races.
+
+### 0.2.0: blocking and release hardening
+
+- [ ] Define bounded sleep, deadline wakeup and the no-runnable-process idle path.
+- [ ] Exercise low-memory rollback and exact resource restoration under scheduling.
+- [ ] Complete MSRV, host/static and target gates, unsafe review and reproducible
+  clean-source candidate artifacts, followed by owner review for formal release.
+
+Single CPU, fixed capacity, native unstable ABI and current filesystem remain
+the boundary. SMP, FP/SIMD, networking, persistent storage and POSIX are excluded.
 
 ## 1. Bootstrap and early console
 

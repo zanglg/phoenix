@@ -9,6 +9,8 @@ explicit owner review and acceptance.
 The owner accepted 0.1.0-pre.2 on 2026-10-15 and requested continued development
 on dev. The formal 0.1.0 release is validated/tagged on dev; do not merge into main
 or recreate dev as part of this release. See CONTRIBUTING.md and docs/RELEASE.md.
+The owner authorized 0.2.0 development on 2026-10-15. Follow the new 0.2 path
+in ROADMAP.md and docs/0.2-SCHEDULING.md; keep all development on dev.
 Follow the Roadmap in dependency order. A runtime-pending item may remain open while work moves
 to the next explicitly host-verifiable item, but only when that work does not depend on an
 unobserved hardware result. Never convert static evidence into a runtime support claim.
@@ -103,13 +105,14 @@ cargo xtask test-init
 cargo xtask test-runtime
 cargo xtask test-system
 cargo xtask test-hardening
+cargo xtask test-scheduling
 cargo xtask ci
 ```
 
 Run `cargo xtask ci` before reporting completion. Never state that an unexecuted check passed.
 QEMU is optional during 0.0.0 construction. Static artifact inspection is required. `run`, `test-boot`,
 `test-memory`, `test-kernel-map`, `test-el0`, `test-init`, `test-runtime`, `test-system`, and
-`test-hardening` are runtime-only commands; do not
+`test-hardening`, and `test-scheduling` are runtime-only commands; do not
 install or invoke QEMU in an environment where it is unavailable.
 
 Use these validation states consistently:
@@ -126,7 +129,7 @@ Record every Runtime Pending claim in `docs/RUNTIME_VALIDATION.md`.
 
 - Put newly discovered kernel capabilities in `FEATURES.md`.
 - Keep unscheduled work as `Captured` or `Deferred`; do not create placeholder implementations.
-- Add work to `ROADMAP.md` only when it belongs on the committed path to 0.1.0.
+- Add work to `ROADMAP.md` only when it belongs on the owner-authorized release path.
 - Update `CHANGELOG.md` only for completed changes.
 - Do not leave long-lived source TODOs; record them in `FEATURES.md` with context.
 - Update README support claims whenever a target becomes buildable or bootable.

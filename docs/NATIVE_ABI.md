@@ -1,13 +1,16 @@
 # Native Phoenix ABI revision 0
 
-The authoritative current syscall table, limits and error behavior are in
-[0.1-CONTRACT.md](0.1-CONTRACT.md#processes-and-native-abi). Revision 0 is native
+The released 0.1 syscall table, limits and error behavior are in
+[0.1-CONTRACT.md](0.1-CONTRACT.md#processes-and-native-abi). Development additions
+and scheduling invariants are in [0.2-SCHEDULING.md](0.2-SCHEDULING.md). Revision 0 is native
 and unstable; it implies no Linux or POSIX compatibility.
 
 AArch64 uses `SVC #0`, number in x8, six arguments in x0–x5, return in x0.
 Returning calls preserve other integer registers and the architectural next PC.
 Numbers 0–5 are exit, write, read, open, close and synchronous child run. Unknown
-numbers return ENOSYS. A nonzero SVC immediate is a terminal BadSystemCall fault,
+numbers return ENOSYS. Development calls 6–8 add single-child spawn, wait and
+cooperative yield with the bounded semantics defined in the 0.2 design.
+A nonzero SVC immediate is a terminal BadSystemCall fault,
 which kills the child and returns EFAULT to its waiting parent.
 
 The system dispatcher supports console descriptors 0/1/2, eight regular descriptors,

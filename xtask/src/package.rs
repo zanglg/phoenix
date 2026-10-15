@@ -61,6 +61,7 @@ fn create() -> Result<PathBuf, String> {
         "phoenix-system.elf",
         "phoenix-child.elf",
         "phoenix-fault.elf",
+        "phoenix-cooperative.elf",
     ] {
         files.push((directory.join(name), name));
     }

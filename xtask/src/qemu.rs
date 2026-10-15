@@ -541,6 +541,11 @@ pub fn test_hardening(image: &Path, directory: &Path, root: &Path) -> bool {
     system::suite(image, directory, root, true)
 }
 
+/// Verify cooperative user scheduling with exact ordered lifecycle evidence.
+pub fn test_scheduling(image: &Path, directory: &Path, root: &Path) -> bool {
+    system::cooperative_suite(image, directory, root)
+}
+
 /// Run opt-in destructive probes, requiring a clean guest-driven exit.
 pub fn test_runtime(image: &Path, log_directory: &Path, root: &Path) -> bool {
     runtime::suite(image, log_directory, root)

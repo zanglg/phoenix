@@ -7,6 +7,15 @@ numbers and remains explicitly unstable before 1.0.0. During construction, chang
 
 ## [Unreleased]
 
+### Added
+
+- Development version 0.2.0-dev.0 and a scoped user-scheduling roadmap on dev.
+- Cooperative two-process scheduling through the existing round-robin policy,
+  explicit block/wake, owned saved integer frames and root retirement before reap.
+- Native single-child spawn/wait/yield calls 6–8, preserving synchronous run.
+- `test-scheduling`: 64 target rounds, 257 reaps, 128 faults, both wait/completion
+  orderings, capacity rejection, GPR/NZCV/stack/descriptor isolation and ASID reuse.
+
 ## [0.1.0] - 2026-10-15
 
 ### Release

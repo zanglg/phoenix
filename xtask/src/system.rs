@@ -8,7 +8,7 @@ pub(super) fn archive(target: &str) -> Option<PathBuf> {
     let target_dir = root.join("target/phoenix/build/system-users");
     let objcopy = llvm_tool("llvm-objcopy")?;
     let mut programs = Vec::new();
-    for name in ["system", "child", "fault"] {
+    for name in ["system", "child", "fault", "cooperative"] {
         let binary = format!("phoenix-{name}");
         let mut cargo = Command::new("cargo");
         cargo.env("CARGO_INCREMENTAL", "0");
@@ -80,6 +80,8 @@ pub(super) fn archive(target: &str) -> Option<PathBuf> {
     append_newc_record(&mut archive, 14, "etc/motd", 0o100_444, INIT_FILE).ok()?;
     append_newc_record(&mut archive, 15, "stress", 0o100_755, &programs[0]).ok()?;
     append_newc_record(&mut archive, 16, "badelf", 0o100_755, b"not an ELF").ok()?;
+    append_newc_record(&mut archive, 17, "cooperate", 0o100_755, &programs[3]).ok()?;
+    append_newc_record(&mut archive, 18, "yield-child", 0o100_755, &programs[3]).ok()?;
     append_newc_record(&mut archive, 0, "TRAILER!!!", 0, &[]).ok()?;
     let parsed = phoenix_kernel::initramfs::Initramfs::from_bytes(&archive).ok()?;
     for (index, name) in ["init", "child", "fault"].iter().enumerate() {
@@ -89,6 +91,8 @@ pub(super) fn archive(target: &str) -> Option<PathBuf> {
     }
     let path = output.join("phoenix-system.cpio");
     fs::write(&path, archive).ok()?;
-    println!("ok: independently linked init/child/fault ELF images and system archive inspected");
+    println!(
+        "ok: independently linked init/child/fault/cooperative ELF images and system archive inspected"
+    );
     Some(path)
 }
