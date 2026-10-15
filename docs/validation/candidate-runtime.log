@@ -1,0 +1,315 @@
+==> build AArch64 kernel ELF (kernel-map-probe)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.00s
+==> create raw AArch64 kernel image
+artifact: ELF: /workspace/phoenix/target/phoenix/build/kernel-map-probe/aarch64-unknown-none-softfloat/debug/phoenix-kernel
+artifact: raw image: /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-kernel-map.bin
+artifact: linker map: /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-kernel-map.map
+ok: expected terminal sentinel is embedded: PHOENIX_KERNEL_MAP_OK
+ok: kernel-map heap sentinel is embedded: PHOENIX_KERNEL_HEAP_OK
+ok: kernel-map stack sentinel is embedded: PHOENIX_KERNEL_STACK_OK
+ok: GIC preparation sentinel is embedded: PHOENIX_GIC_PREPARED
+ok: IRQ runtime publication sentinel is embedded: PHOENIX_IRQ_RUNTIME_PUBLISHED
+ok: AArch64 ELF machine, entry, load addresses, and symbols
+ok: bootstrap page table, exception vectors, BSS, stack, image, and map
+ok: QEMU emulator version 10.0.13 (Debian 1:10.0.13+ds-0+deb13u1)
+==> runtime probe state
+command: qemu-system-aarch64 -machine virt-9.1,virtualization=on,gic-version=3,highmem=off -cpu cortex-a72 -accel tcg -m 512M -smp 1 -nodefaults -nographic -monitor none -serial stdio -no-reboot -kernel /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-kernel-map.bin -semihosting-config enable=on,target=native -append phoenix.probe=state
+Phoenix 0.1.0-pre.1 (commit 7abc06647037, clean, target aarch64-unknown-none-softfloat, profile debug)
+entry exception level: EL2
+boot argument: 0x0000000048000000
+PHOENIX_BOOT_OK
+PHOENIX_TEST_BEGIN state
+kernel-map: root=0x0000000040000000 tables=8 leaves=815
+PHOENIX_KERNEL_MAP_ENTER
+gicv3: timer-intid=30 poll-budget=100000 delivery=closed
+PHOENIX_GIC_PREPARED
+PHOENIX_IRQ_RUNTIME_PUBLISHED
+kernel-heap: start=0x0000000040008000 frames=4 bytes=16384 records=4
+PHOENIX_KERNEL_HEAP_OK
+kernel-stack: start=0xffffff9000001000 pages=8 sp=0xffffff9000009000
+PHOENIX_KERNEL_STACK_OK
+state: EL=1 SP=0xffffff80401a9b00 VBAR=0xffffff8040080800 BSS=zero
+PHOENIX_TEST_OK
+QEMU_TEST_LOG=/workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/qemu-state.log
+QEMU_TEST_RESULT=pass
+==> runtime probe state-el1
+command: qemu-system-aarch64 -machine virt-9.1,virtualization=off,gic-version=3,highmem=off -cpu cortex-a72 -accel tcg -m 512M -smp 1 -nodefaults -nographic -monitor none -serial stdio -no-reboot -kernel /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-kernel-map.bin -semihosting-config enable=on,target=native -append phoenix.probe=state
+Phoenix 0.1.0-pre.1 (commit 7abc06647037, clean, target aarch64-unknown-none-softfloat, profile debug)
+entry exception level: EL1
+boot argument: 0x0000000048000000
+PHOENIX_BOOT_OK
+PHOENIX_TEST_BEGIN state
+kernel-map: root=0x0000000040000000 tables=8 leaves=815
+PHOENIX_KERNEL_MAP_ENTER
+gicv3: timer-intid=30 poll-budget=100000 delivery=closed
+PHOENIX_GIC_PREPARED
+PHOENIX_IRQ_RUNTIME_PUBLISHED
+kernel-heap: start=0x0000000040008000 frames=4 bytes=16384 records=4
+PHOENIX_KERNEL_HEAP_OK
+kernel-stack: start=0xffffff9000001000 pages=8 sp=0xffffff9000009000
+PHOENIX_KERNEL_STACK_OK
+state: EL=1 SP=0xffffff80401a9b00 VBAR=0xffffff8040080800 BSS=zero
+PHOENIX_TEST_OK
+QEMU_TEST_LOG=/workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/qemu-state-el1.log
+QEMU_TEST_RESULT=pass
+==> runtime probe panic
+command: qemu-system-aarch64 -machine virt-9.1,virtualization=on,gic-version=3,highmem=off -cpu cortex-a72 -accel tcg -m 512M -smp 1 -nodefaults -nographic -monitor none -serial stdio -no-reboot -kernel /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-kernel-map.bin -semihosting-config enable=on,target=native -append phoenix.probe=panic
+Phoenix 0.1.0-pre.1 (commit 7abc06647037, clean, target aarch64-unknown-none-softfloat, profile debug)
+entry exception level: EL2
+boot argument: 0x0000000048000000
+PHOENIX_BOOT_OK
+PHOENIX_TEST_BEGIN panic
+PHOENIX_PANIC
+panicked at kernel/src/runtime_probe.rs:52:13:
+deliberate runtime probe
+trace: return=0xffffff8040086c94
+trace: return=0xffffff80400e13f4
+trace: return=0xffffff80400a89b4
+trace: return=0xffffff804008a3fc
+trace: frames=4 limit=16
+event: seq=0 ticks=69404 kind=1 a=0x2 b=0x48000000
+events: lost=0
+PHOENIX_TEST_OK
+QEMU_TEST_LOG=/workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/qemu-panic.log
+QEMU_TEST_RESULT=pass
+==> runtime probe registers
+command: qemu-system-aarch64 -machine virt-9.1,virtualization=on,gic-version=3,highmem=off -cpu cortex-a72 -accel tcg -m 512M -smp 1 -nodefaults -nographic -monitor none -serial stdio -no-reboot -kernel /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-kernel-map.bin -semihosting-config enable=on,target=native -append phoenix.probe=registers
+Phoenix 0.1.0-pre.1 (commit 7abc06647037, clean, target aarch64-unknown-none-softfloat, profile debug)
+entry exception level: EL2
+boot argument: 0x0000000048000000
+PHOENIX_BOOT_OK
+PHOENIX_TEST_BEGIN registers
+kernel-map: root=0x0000000040000000 tables=8 leaves=815
+PHOENIX_KERNEL_MAP_ENTER
+gicv3: timer-intid=30 poll-budget=100000 delivery=closed
+PHOENIX_GIC_PREPARED
+PHOENIX_IRQ_RUNTIME_PUBLISHED
+kernel-heap: start=0x0000000040008000 frames=4 bytes=16384 records=4
+PHOENIX_KERNEL_HEAP_OK
+kernel-stack: start=0xffffff9000001000 pages=8 sp=0xffffff9000009000
+PHOENIX_KERNEL_STACK_OK
+registers: saved=31 restored=31 eret=ok
+PHOENIX_TEST_OK
+QEMU_TEST_LOG=/workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/qemu-registers.log
+QEMU_TEST_RESULT=pass
+==> runtime probe guard
+command: qemu-system-aarch64 -machine virt-9.1,virtualization=on,gic-version=3,highmem=off -cpu cortex-a72 -accel tcg -m 512M -smp 1 -nodefaults -nographic -monitor none -serial stdio -no-reboot -kernel /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-kernel-map.bin -semihosting-config enable=on,target=native -append phoenix.probe=guard
+Phoenix 0.1.0-pre.1 (commit 7abc06647037, clean, target aarch64-unknown-none-softfloat, profile debug)
+entry exception level: EL2
+boot argument: 0x0000000048000000
+PHOENIX_BOOT_OK
+PHOENIX_TEST_BEGIN guard
+kernel-map: root=0x0000000040000000 tables=8 leaves=815
+PHOENIX_KERNEL_MAP_ENTER
+gicv3: timer-intid=30 poll-budget=100000 delivery=closed
+PHOENIX_GIC_PREPARED
+PHOENIX_IRQ_RUNTIME_PUBLISHED
+kernel-heap: start=0x0000000040008000 frames=4 bytes=16384 records=4
+PHOENIX_KERNEL_HEAP_OK
+kernel-stack: start=0xffffff9000001000 pages=8 sp=0xffffff9000009000
+PHOENIX_KERNEL_STACK_OK
+fault: guard address=0xffffff80400f4000 recovered=1
+PHOENIX_TEST_OK
+QEMU_TEST_LOG=/workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/qemu-guard.log
+QEMU_TEST_RESULT=pass
+==> runtime probe readonly
+command: qemu-system-aarch64 -machine virt-9.1,virtualization=on,gic-version=3,highmem=off -cpu cortex-a72 -accel tcg -m 512M -smp 1 -nodefaults -nographic -monitor none -serial stdio -no-reboot -kernel /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-kernel-map.bin -semihosting-config enable=on,target=native -append phoenix.probe=readonly
+Phoenix 0.1.0-pre.1 (commit 7abc06647037, clean, target aarch64-unknown-none-softfloat, profile debug)
+entry exception level: EL2
+boot argument: 0x0000000048000000
+PHOENIX_BOOT_OK
+PHOENIX_TEST_BEGIN readonly
+kernel-map: root=0x0000000040000000 tables=8 leaves=815
+PHOENIX_KERNEL_MAP_ENTER
+gicv3: timer-intid=30 poll-budget=100000 delivery=closed
+PHOENIX_GIC_PREPARED
+PHOENIX_IRQ_RUNTIME_PUBLISHED
+kernel-heap: start=0x0000000040008000 frames=4 bytes=16384 records=4
+PHOENIX_KERNEL_HEAP_OK
+kernel-stack: start=0xffffff9000001000 pages=8 sp=0xffffff9000009000
+PHOENIX_KERNEL_STACK_OK
+fault: readonly address=0xffffff8040080000 recovered=1
+PHOENIX_TEST_OK
+QEMU_TEST_LOG=/workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/qemu-readonly.log
+QEMU_TEST_RESULT=pass
+==> runtime probe nx
+command: qemu-system-aarch64 -machine virt-9.1,virtualization=on,gic-version=3,highmem=off -cpu cortex-a72 -accel tcg -m 512M -smp 1 -nodefaults -nographic -monitor none -serial stdio -no-reboot -kernel /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-kernel-map.bin -semihosting-config enable=on,target=native -append phoenix.probe=nx
+Phoenix 0.1.0-pre.1 (commit 7abc06647037, clean, target aarch64-unknown-none-softfloat, profile debug)
+entry exception level: EL2
+boot argument: 0x0000000048000000
+PHOENIX_BOOT_OK
+PHOENIX_TEST_BEGIN nx
+kernel-map: root=0x0000000040000000 tables=8 leaves=815
+PHOENIX_KERNEL_MAP_ENTER
+gicv3: timer-intid=30 poll-budget=100000 delivery=closed
+PHOENIX_GIC_PREPARED
+PHOENIX_IRQ_RUNTIME_PUBLISHED
+kernel-heap: start=0x0000000040008000 frames=4 bytes=16384 records=4
+PHOENIX_KERNEL_HEAP_OK
+kernel-stack: start=0xffffff9000001000 pages=8 sp=0xffffff9000009000
+PHOENIX_KERNEL_STACK_OK
+fault: nx address=0xffffff80401a9ca0 recovered=1
+PHOENIX_TEST_OK
+QEMU_TEST_LOG=/workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/qemu-nx.log
+QEMU_TEST_RESULT=pass
+==> runtime probe timer
+command: qemu-system-aarch64 -machine virt-9.1,virtualization=on,gic-version=3,highmem=off -cpu cortex-a72 -accel tcg -m 512M -smp 1 -nodefaults -nographic -monitor none -serial stdio -no-reboot -kernel /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-kernel-map.bin -semihosting-config enable=on,target=native -append phoenix.probe=timer
+Phoenix 0.1.0-pre.1 (commit 7abc06647037, clean, target aarch64-unknown-none-softfloat, profile debug)
+entry exception level: EL2
+boot argument: 0x0000000048000000
+PHOENIX_BOOT_OK
+PHOENIX_TEST_BEGIN timer
+kernel-map: root=0x0000000040000000 tables=8 leaves=815
+PHOENIX_KERNEL_MAP_ENTER
+gicv3: timer-intid=30 poll-budget=100000 delivery=closed
+PHOENIX_GIC_PREPARED
+PHOENIX_IRQ_RUNTIME_PUBLISHED
+kernel-heap: start=0x0000000040008000 frames=4 bytes=16384 records=4
+PHOENIX_KERNEL_HEAP_OK
+kernel-stack: start=0xffffff9000001000 pages=8 sp=0xffffff9000009000
+PHOENIX_KERNEL_STACK_OK
+timer: intid=30 event=20552 irq=1 eoi=ok return=ok lock=ok gates=closed
+PHOENIX_TEST_OK
+QEMU_TEST_LOG=/workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/qemu-timer.log
+QEMU_TEST_RESULT=pass
+==> runtime probe threads
+command: qemu-system-aarch64 -machine virt-9.1,virtualization=on,gic-version=3,highmem=off -cpu cortex-a72 -accel tcg -m 512M -smp 1 -nodefaults -nographic -monitor none -serial stdio -no-reboot -kernel /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-kernel-map.bin -semihosting-config enable=on,target=native -append phoenix.probe=threads
+Phoenix 0.1.0-pre.1 (commit 7abc06647037, clean, target aarch64-unknown-none-softfloat, profile debug)
+entry exception level: EL2
+boot argument: 0x0000000048000000
+PHOENIX_BOOT_OK
+PHOENIX_TEST_BEGIN threads
+kernel-map: root=0x0000000040000000 tables=8 leaves=815
+PHOENIX_KERNEL_MAP_ENTER
+gicv3: timer-intid=30 poll-budget=100000 delivery=closed
+PHOENIX_GIC_PREPARED
+PHOENIX_IRQ_RUNTIME_PUBLISHED
+kernel-heap: start=0x0000000040008000 frames=4 bytes=16384 records=4
+PHOENIX_KERNEL_HEAP_OK
+kernel-stack: start=0xffffff9000001000 pages=8 sp=0xffffff9000009000
+PHOENIX_KERNEL_STACK_OK
+threads: workers=2 preemption=ok sleep=ok exit=ok reclaimed=16 ticks=9
+PHOENIX_TEST_OK
+QEMU_TEST_LOG=/workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/qemu-threads.log
+QEMU_TEST_RESULT=pass
+==> runtime probe heap-low
+command: qemu-system-aarch64 -machine virt-9.1,virtualization=on,gic-version=3,highmem=off -cpu cortex-a72 -accel tcg -m 512M -smp 1 -nodefaults -nographic -monitor none -serial stdio -no-reboot -kernel /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-kernel-map.bin -semihosting-config enable=on,target=native -append phoenix.probe=heap-low
+Phoenix 0.1.0-pre.1 (commit 7abc06647037, clean, target aarch64-unknown-none-softfloat, profile debug)
+entry exception level: EL2
+boot argument: 0x0000000048000000
+PHOENIX_BOOT_OK
+PHOENIX_TEST_BEGIN heap-low
+kernel-map: root=0x0000000040000000 tables=8 leaves=815
+PHOENIX_KERNEL_MAP_ENTER
+gicv3: timer-intid=30 poll-budget=100000 delivery=closed
+PHOENIX_GIC_PREPARED
+PHOENIX_IRQ_RUNTIME_PUBLISHED
+kernel-heap: start=0x0000000040008000 frames=4 bytes=16384 records=4
+PHOENIX_KERNEL_HEAP_OK
+kernel-stack: start=0xffffff9000001000 pages=8 sp=0xffffff9000009000
+PHOENIX_KERNEL_STACK_OK
+fault: heap-low address=0xffffff9000100000 recovered=1
+PHOENIX_TEST_OK
+QEMU_TEST_LOG=/workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/qemu-heap-low.log
+QEMU_TEST_RESULT=pass
+==> runtime probe heap-high
+command: qemu-system-aarch64 -machine virt-9.1,virtualization=on,gic-version=3,highmem=off -cpu cortex-a72 -accel tcg -m 512M -smp 1 -nodefaults -nographic -monitor none -serial stdio -no-reboot -kernel /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-kernel-map.bin -semihosting-config enable=on,target=native -append phoenix.probe=heap-high
+Phoenix 0.1.0-pre.1 (commit 7abc06647037, clean, target aarch64-unknown-none-softfloat, profile debug)
+entry exception level: EL2
+boot argument: 0x0000000048000000
+PHOENIX_BOOT_OK
+PHOENIX_TEST_BEGIN heap-high
+kernel-map: root=0x0000000040000000 tables=8 leaves=815
+PHOENIX_KERNEL_MAP_ENTER
+gicv3: timer-intid=30 poll-budget=100000 delivery=closed
+PHOENIX_GIC_PREPARED
+PHOENIX_IRQ_RUNTIME_PUBLISHED
+kernel-heap: start=0x0000000040008000 frames=4 bytes=16384 records=4
+PHOENIX_KERNEL_HEAP_OK
+kernel-stack: start=0xffffff9000001000 pages=8 sp=0xffffff9000009000
+PHOENIX_KERNEL_STACK_OK
+fault: heap-high address=0xffffff9000105000 recovered=1
+PHOENIX_TEST_OK
+QEMU_TEST_LOG=/workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/qemu-heap-high.log
+QEMU_TEST_RESULT=pass
+==> runtime probe stack-guards
+command: qemu-system-aarch64 -machine virt-9.1,virtualization=on,gic-version=3,highmem=off -cpu cortex-a72 -accel tcg -m 512M -smp 1 -nodefaults -nographic -monitor none -serial stdio -no-reboot -kernel /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-kernel-map.bin -semihosting-config enable=on,target=native -append phoenix.probe=stack-guards
+Phoenix 0.1.0-pre.1 (commit 7abc06647037, clean, target aarch64-unknown-none-softfloat, profile debug)
+entry exception level: EL2
+boot argument: 0x0000000048000000
+PHOENIX_BOOT_OK
+PHOENIX_TEST_BEGIN stack-guards
+kernel-map: root=0x0000000040000000 tables=8 leaves=815
+PHOENIX_KERNEL_MAP_ENTER
+gicv3: timer-intid=30 poll-budget=100000 delivery=closed
+PHOENIX_GIC_PREPARED
+PHOENIX_IRQ_RUNTIME_PUBLISHED
+kernel-heap: start=0x0000000040008000 frames=4 bytes=16384 records=4
+PHOENIX_KERNEL_HEAP_OK
+stack: guards=2 recovered=2 while-mapped=yes
+kernel-stack: start=0xffffff9000001000 pages=8 sp=0xffffff9000009000
+PHOENIX_KERNEL_STACK_OK
+PHOENIX_TEST_OK
+QEMU_TEST_LOG=/workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/qemu-stack-guards.log
+QEMU_TEST_RESULT=pass
+==> runtime probe fatal
+command: qemu-system-aarch64 -machine virt-9.1,virtualization=on,gic-version=3,highmem=off -cpu cortex-a72 -accel tcg -m 512M -smp 1 -nodefaults -nographic -monitor none -serial stdio -no-reboot -kernel /workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/phoenix-kernel-map.bin -semihosting-config enable=on,target=native -append phoenix.probe=fatal
+Phoenix 0.1.0-pre.1 (commit 7abc06647037, clean, target aarch64-unknown-none-softfloat, profile debug)
+entry exception level: EL2
+boot argument: 0x0000000048000000
+PHOENIX_BOOT_OK
+PHOENIX_TEST_BEGIN fatal
+kernel-map: root=0x0000000040000000 tables=8 leaves=815
+PHOENIX_KERNEL_MAP_ENTER
+gicv3: timer-intid=30 poll-budget=100000 delivery=closed
+PHOENIX_GIC_PREPARED
+PHOENIX_IRQ_RUNTIME_PUBLISHED
+kernel-heap: start=0x0000000040008000 frames=4 bytes=16384 records=4
+PHOENIX_KERNEL_HEAP_OK
+kernel-stack: start=0xffffff9000001000 pages=8 sp=0xffffff9000009000
+PHOENIX_KERNEL_STACK_OK
+PHOENIX_EXCEPTION
+vector: Some(VectorSlot { origin: CurrentSpX, kind: Synchronous })
+pc: 0xffffff80400dbfa4
+spsr: 0x00000000600003c5
+esr: 0x00000000f2000456
+far: 0x0000000000000000
+x0: 0x000000000000000c
+x1: 0x0000000000000002
+x2: 0xffffff80400ed208
+x3: 0xffffff80400b7334
+x4: 0x0000000000000002
+x5: 0x0000000000000010
+x6: 0x0000000000000003
+x7: 0xffffff80401a87b0
+x8: 0x0000000000000000
+x9: 0x0000000000000002
+x10: 0xffffff8009000018
+x11: 0xffffff80400e6d48
+x12: 0x0000000000000066
+x13: 0xffffff80401a86c1
+x14: 0xffffff900000a000
+x15: 0x7473206c656e7265
+x16: 0x0000000000000064
+x17: 0x000000000098967f
+x18: 0x0000000000000001
+x19: 0x0000000000000000
+x20: 0x0000000048000000
+x21: 0x0000000000000008
+x22: 0x0000000000000000
+x23: 0x0000000000000000
+x24: 0x0000000000000000
+x25: 0x0000000000000000
+x26: 0x0000000000000000
+x27: 0x0000000000000000
+x28: 0x0000000000000000
+x29: 0xffffff80401a9e30
+x30: 0xffffff80400a8ba4
+trace: return=0xffffff804008a8b0
+trace: return=0xffffff8040081008
+trace: frames=2 limit=16
+event: seq=0 ticks=73738 kind=1 a=0x2 b=0x48000000
+events: lost=0
+PHOENIX_TEST_OK
+QEMU_TEST_LOG=/workspace/phoenix/target/phoenix/aarch64-unknown-none-softfloat/debug/qemu-fatal.log
+QEMU_TEST_RESULT=pass

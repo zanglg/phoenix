@@ -1,0 +1,16 @@
+Phoenix 0.1.0-pre.1 (commit 7abc06647037, clean, target aarch64-unknown-none-softfloat, profile debug)
+entry exception level: EL2
+boot argument: 0x0000000048000000
+PHOENIX_BOOT_OK
+PHOENIX_TEST_BEGIN stack-guards
+kernel-map: root=0x0000000040000000 tables=8 leaves=815
+PHOENIX_KERNEL_MAP_ENTER
+gicv3: timer-intid=30 poll-budget=100000 delivery=closed
+PHOENIX_GIC_PREPARED
+PHOENIX_IRQ_RUNTIME_PUBLISHED
+kernel-heap: start=0x0000000040008000 frames=4 bytes=16384 records=4
+PHOENIX_KERNEL_HEAP_OK
+stack: guards=2 recovered=2 while-mapped=yes
+kernel-stack: start=0xffffff9000001000 pages=8 sp=0xffffff9000009000
+PHOENIX_KERNEL_STACK_OK
+PHOENIX_TEST_OK

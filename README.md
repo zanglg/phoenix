@@ -1,109 +1,136 @@
 # Phoenix
 
-Phoenix is an experimental Unix-like kernel written in Rust. Development starts with AArch64
-on QEMU `virt`; RISC-V 64 and x86_64 are future ports, not current claims of support.
+Phoenix is an experimental Unix-like Rust kernel for AArch64 QEMU `virt`.
+The 0.1 technical path now includes protected memory, exceptions, timer-driven
+kernel threads, independent user processes, console I/O and an in-memory filesystem.
+The first formal release is **0.1.0**. Development lives on `dev`;
+`main` is the owner review boundary. The owner accepted this first release for
+validation and tagging on `dev`; development continues there.
+The active development version is **0.2.0-dev.0**, with cooperative user scheduling
+and EL0 timer preemption; [the 0.2 design](docs/0.2-SCHEDULING.md) records the boundary.
+The [0.2 review contract](docs/0.2-CONTRACT.md) collects supported behavior and limits.
 
-## Current status
+## Build and run
 
-The project version is **0.0.0**. This repository state is an engineering baseline only:
-
-- the Rust workspace follows stable Rust and declares Rust 1.95 as its minimum version;
-- an empty `no_std` kernel crate can be checked for AArch64;
-- rust-analyzer can use the configured kernel target from an x86_64 development host;
-- host-side validation is available through `cargo xtask`;
-- no Phoenix kernel image is built or booted yet.
-
-[`boot.S`](boot.S) is Phoenix's first AArch64 bootstrap implementation. It is the starting point
-for the first development step, although it is not wired into the 0.0.0 Cargo build yet.
-
-## Development targets
-
-| Architecture | Rust target | Initial platform | Status |
-| --- | --- | --- | --- |
-| AArch64 | `aarch64-unknown-none-softfloat` | QEMU `virt` | Primary development target |
-| RISC-V 64 | `riscv64gc-unknown-none-elf` | QEMU `virt` | Deferred |
-| x86_64 | `x86_64-unknown-none` | QEMU `q35` | Deferred |
-
-Only the first row is configured and checked in version 0.0.0.
-
-## Quick start
-
-Install [rustup](https://rustup.rs/), enter the repository, and run:
+Install rustup and QEMU with the AArch64 system emulator, then run:
 
 ```bash
 cargo xtask doctor
 cargo xtask ci
+cargo xtask test-runtime
+cargo xtask test-system
+cargo xtask test-hardening
+cargo xtask test-scheduling
+cargo xtask run-system
 ```
 
-The project toolchain follows the current stable Rust release and installs the AArch64 target,
-rustfmt, Clippy, rust-analyzer, `rust-src`, and LLVM tools. QEMU is reported by `doctor` but is
-optional until the bootstrap is wired into the build.
+At the interactive console, type `ok` followed by Enter. The conformance init
+checks files and child processes, accepts LF, CR or CRLF, reports
+`PHOENIX_SYSTEM_EXIT status=0 fault=false`, then halts.
+It is a minimal native system, not an interactive shell. The automatic system
+test supplies input and requires both ordered evidence and a clean guest exit.
 
-Canonical commands are:
+The supported configuration is `virt-9.1`, Cortex-A72, GICv3, TCG, 512 MiB RAM,
+one CPU and 4 KiB pages. The target is `aarch64-unknown-none-softfloat`.
+The toolchain follows stable Rust; the declared MSRV is Rust 1.95. Exact tested
+compiler and QEMU versions are recorded in the [runtime ledger](docs/RUNTIME_VALIDATION.md).
+
+## Current capabilities
+
+- EL2/EL1 boot, complete BSS validation, aligned stack and installed vectors;
+- complete integer exception-frame preservation, bounded panic traces and offline symbols;
+- DTB reservations, fallible frame allocation, permission-separated final TTBR1,
+  guarded heap and stacks with transactional mapping/TLB maintenance;
+- real GICv3 timer delivery, IRQ-safe locking, round-robin kernel threads,
+  preemption, sleep, idle and stack reclamation in the focused runtime image;
+- strict ELF loading, isolated user roots, checked cross-page copies,
+  synchronous run and cooperative single-child spawn/wait/yield, fault containment,
+  frame reclamation and ASID reuse;
+- read-only initramfs, bounded writable `tmp/`, process-local file descriptors,
+  nonblocking console input and polled output;
+- structured diagnostic ring, resource-exhaustion tests and deterministic packaging.
+
+The kernel-thread/heap image and user-system image are separate integration targets.
+The development system schedules two user processes with a 2 ms timer quantum.
+IRQs are enabled in EL0 and masked throughout kernel dispatch; syscalls complete
+before switching. A non-yielding child cannot starve its runnable parent.
+Bounded user sleep retains contexts until their deadlines; an EL1 WFI loop waits
+when all users are blocked, without retaining a Rust continuation.
+Limits, error behavior, syscall numbers and ownership rules are defined
+in the [0.1 contract](docs/0.1-CONTRACT.md). Tests cover the stated bounded workloads.
+SMP, FP/SIMD, networking, persistent storage, POSIX/Linux compatibility, real hardware,
+RISC-V and x86_64 are deferred.
+
+## Validation and artifacts
+
+`cargo xtask ci` runs formatting, target checks, Clippy, host tests, and ELF/image
+inspection for every configured variant. It does not require or invoke QEMU.
+GitHub CI also runs a separate QEMU job with recorded Rust/emulator versions,
+and retains serial logs and the exact system package as workflow artifacts.
+The complete target suite is:
 
 ```bash
-cargo xtask doctor
-cargo xtask fmt
-cargo xtask check
-cargo xtask lint
-cargo xtask test
-cargo xtask ci
+cargo xtask test-boot
+cargo xtask test-memory
+cargo xtask test-kernel-map
+cargo xtask test-el0
+cargo xtask test-init
+cargo xtask test-runtime
+cargo xtask test-system
+cargo xtask test-hardening
+cargo xtask test-scheduling
 ```
 
-There is deliberately no `build`, `run`, or `debug` command for a bootable kernel yet.
+The first five commands retain focused boot protocols. `test-runtime` runs thirteen
+isolated cases, including negative protection tests, and uses guest-driven exits.
+`test-system` checks LF/CR/CRLF, invalid input and a wrong-fault negative control.
+Its oracle requires the exact PC, FAR, ESR and kind for all nine user fault cases.
+`test-hardening` injects loader failures, exhausts frame/ASID budgets, then runs
+705 child lifetimes with exact resource restoration and 576 contained faults.
+`test-scheduling` exercises 64 cooperative rounds, 257 child reaps and 128 faults,
+both wait/completion orderings and complete preserved GPR/NZCV/stack/FD checks.
+It also preempts two non-yielding contexts, checks all 31 GPRs/NZCV/private stacks,
+and requires init to progress while its child loops forever. The same successful
+guest output with timer preemption disabled must be rejected by the host oracle.
+Sixteen overlapping sleep rounds additionally require 32 balanced deadline/wake
+records, observed idle IRQs, stable idle stack top and exact child resource recovery.
+All emulator tests are bounded and retain logs under
+`target/phoenix/aarch64-unknown-none-softfloat/debug/`.
+See [QEMU.md](docs/QEMU.md) and the [validation ledger](docs/RUNTIME_VALIDATION.md).
 
-## LSP target
-
-The default rust-analyzer architecture is controlled by one file:
-
-```toml
-# .cargo/lsp.toml
-[build]
-target = "aarch64-unknown-none-softfloat"
+```bash
+cargo xtask package
+cargo xtask symbolize <exact-kernel-ELF> <0xADDRESS>...
 ```
 
-VS Code is configured to pass that file to rust-analyzer. Other editors should set the
-rust-analyzer `cargo.configPath` option to `.cargo/lsp.toml`.
+Packaging collects the system kernel ELF, raw image, linker map, userspace ELFs,
+initramfs, provenance and SHA-256 checksums under `target/phoenix/packages/<version>/`.
+It requires a clean worktree and rejects source changes during the build.
+The supported package is the inspected debug profile; release optimization is not
+part of the target-validation claim. Reproduction requirements are documented in
+[RELEASE.md](docs/RELEASE.md).
 
-When a future port exists, install its Rust target and change this one `target` value. For
-example:
+`build`/`run` retain the small boot smoke image; use `build-system`/`run-system`
+for the full minimal system. `build-init`/`inspect-init` inspect the standalone
+first-user-program fixture. `cargo xtask help` lists all commands.
 
-```toml
-target = "riscv64gc-unknown-none-elf"
-```
+## Development records
 
-This LSP setting does not change the host architecture used to run xtask. Rust-analyzer covers
-Rust source; assembly such as `boot.S` requires separate editor support.
+- [ROADMAP.md](ROADMAP.md): ordered technical path and release acceptance gate.
+- [FEATURES.md](FEATURES.md): implemented scope and unscheduled capabilities.
+- [CHANGELOG.md](CHANGELOG.md): completed changes.
+- [AGENTS.md](AGENTS.md): repository engineering contract.
+- [CONTRIBUTING.md](CONTRIBUTING.md): `dev` to `main` review flow.
+- [0.1-CONTRACT.md](docs/0.1-CONTRACT.md): current supported interfaces and limits.
+- [UNSAFE_REVIEW.md](docs/UNSAFE_REVIEW.md): ownership and ordering review.
 
-## Project records
+The rust-analyzer target lives in `.cargo/lsp.toml`. It changes editor checking,
+not the architecture of the host running xtask.
 
-- [`FEATURES.md`](FEATURES.md) is the long-lived kernel capability catalog. Entries may remain
-  deferred and unscheduled.
-- [`ROADMAP.md`](ROADMAP.md) contains the single ordered path to the first release.
-- [`CHANGELOG.md`](CHANGELOG.md) records completed, visible changes.
-- [`AGENTS.md`](AGENTS.md) defines the repository rules for coding agents.
+The version has one source of truth in `workspace.package.version`. Construction
+uses `0.0.0`; technically complete candidates use `0.1.0-pre.N`. A candidate is
+promoted to `0.1.0` only after explicit owner acceptance of the reviewed result.
+The accepted 0.1 release retains the bounded experimental contract; future
+release acceptance is not inferred from passing automated tests.
 
-Recording a feature does not authorize its implementation. It must first be promoted into the
-ordered Roadmap, and only the first incomplete section is active.
-
-## Versioning
-
-Phoenix reserves SemVer-compatible version numbers for releases. The project version has one
-source of truth: `workspace.package.version` in [`Cargo.toml`](Cargo.toml).
-
-During the long pre-release construction period, the Cargo version remains `0.0.0`, the ordered
-Roadmap describes progress, and Git commit hashes identify exact states. Development steps do not
-create releases or tags. `CHANGELOG.md` remains under `Unreleased` during this period.
-
-The first formal release is `0.1.0`, created only after the release boundary in `ROADMAP.md` is
-satisfied. Only releases receive annotated `vX.Y.Z` tags, and strict SemVer compatibility meaning
-begins when the corresponding public contract is documented. ABI-specific versions will be
-introduced only when those ABIs actually exist.
-
-The workspace declares Rust 1.95 as its minimum supported Rust version (MSRV). Development follows
-`stable`; the exact compiler identity will be embedded in release provenance. If a stable update
-causes a kernel regression, the toolchain may be temporarily pinned with the reason documented.
-
-## License
-
-Phoenix is licensed under either Apache License 2.0 or the MIT license, at your option.
+Phoenix is licensed under MIT OR Apache-2.0.

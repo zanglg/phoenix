@@ -1,0 +1,5 @@
+PHOENIX_SYSTEM_ENTER pid=0.1 asid=1
+Phoenix preemption: non-yielding init progressed registers=ok stack=ok
+PHOENIX_SCHED root-ticks=66 child-ticks=65 switches=130 child-ready=true
+system: children=0 faults=0 console-read=0 frame-accounting=ok
+PHOENIX_SYSTEM_EXIT status=0 fault=false

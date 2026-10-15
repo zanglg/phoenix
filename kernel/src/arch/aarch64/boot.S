@@ -158,6 +158,28 @@
 
 .equiv CNTHCTL_EL2_EL1_TIMER_ACCESS, (CNTHCTL_EL2_EL1PCTEN | CNTHCTL_EL2_EL1PCEN)
 
+/*
+ * ICC_SRE_EL2:
+ *
+ * SRE:
+ *   enable the GIC system-register interface at EL2.
+ *
+ * DFB/DIB:
+ *   disable the legacy FIQ/IRQ bypass paths.
+ *
+ * Enable:
+ *   allow Non-secure EL1 to control ICC_SRE_EL1.
+ *
+ * This is configured only when Phoenix entered at EL2. Direct EL1 entry must
+ * arrive from firmware that already permits the GICv3 system-register
+ * interface; the later bounded EL1 preparation validates ICC_SRE_EL1.SRE.
+ */
+.equiv ICC_SRE_EL2_SRE,        BIT_0
+.equiv ICC_SRE_EL2_DFB,        BIT_1
+.equiv ICC_SRE_EL2_DIB,        BIT_2
+.equiv ICC_SRE_EL2_ENABLE,     BIT_3
+.equiv ICC_SRE_EL2_BOOT_VALUE, (ICC_SRE_EL2_SRE | ICC_SRE_EL2_DFB | ICC_SRE_EL2_DIB | ICC_SRE_EL2_ENABLE)
+
 /* -------------------------------------------------------------------------- */
 /* SCTLR_EL1                                                                   */
 /* -------------------------------------------------------------------------- */
@@ -301,6 +323,7 @@
 /* -------------------------------------------------------------------------- */
 
 _start:
+    mrs     x21, CurrentEL
     /*
      * Preserve the firmware boot argument.
      *
@@ -396,6 +419,16 @@ boot_drop_el2_to_el1:
     mov     x0, #CNTHCTL_EL2_EL1_TIMER_ACCESS
     msr     cnthctl_el2, x0
     msr     cntvoff_el2, xzr
+
+    /*
+     * Permit the EL1 kernel to use the GICv3 system-register interface while
+     * keeping the legacy bypass paths disabled. Preserve implementation-
+     * defined and reserved read-as-written state outside these named bits.
+     */
+    mrs     x0, ICC_SRE_EL2
+    orr     x0, x0, #ICC_SRE_EL2_BOOT_VALUE
+    msr     ICC_SRE_EL2, x0
+    isb
 
     /*
      * Program EL1 SCTLR before entering EL1.
@@ -500,6 +533,8 @@ boot_enable_mmu_and_enter_rust:
      * kernel_main(boot_arg: usize) -> !
      */
     mov     x0, x20
+    mov     x1, x21
+    mov     x29, xzr
     ldr     x8, =kernel_main
     br      x8
 

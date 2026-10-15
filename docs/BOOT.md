@@ -1,0 +1,104 @@
+# AArch64 Boot Contract
+
+> Construction-stage mechanism record: runtime-status and remaining-work lists below
+> describe the earlier integration boundary. Current support, limits and evidence are
+> maintained in [0.1-CONTRACT.md](0.1-CONTRACT.md) and
+> [RUNTIME_VALIDATION.md](RUNTIME_VALIDATION.md); those records supersede historical
+> pending statements here. The ownership design remains applicable unless the
+> current contract explicitly refines it.
+
+This document records the current, intentionally small boot contract. It describes what the
+source and ELF layout require and the boundary verified by the recorded QEMU run. Unlisted entry
+state and negative paths must not be inferred from that positive evidence.
+
+## Image and entry
+
+- Rust target: `aarch64-unknown-none-softfloat`.
+- Initial platform: QEMU AArch64 `virt` using direct raw-kernel loading.
+- Raw image physical load address: `0x40080000`.
+- Linked virtual entry: `0xffffff8040080000` at `_start`.
+- The entry CPU must already be in AArch64 state at EL1 or non-secure EL2. EL3 is unsupported.
+- EL2 entry preserves `ICC_SRE_EL2` and sets `SRE`, `DFB`, `DIB`, and `Enable` before the drop to
+  EL1. Direct EL1 entry requires firmware/higher ELs to permit `ICC_SRE_EL1` system-register use.
+- Stage-1 translation must be disabled at entry. Instruction and data caches must be disabled, or
+  firmware must have completed the cache maintenance needed to make the loaded image coherent.
+- Asynchronous exceptions are masked during bootstrap; Rust installs vectors before any later
+  interrupt source may be enabled.
+- `x0` is preserved and passed to `kernel_main` as the physical DTB address. A target helper can
+  validate and borrow that blob through the temporary high RAM alias; the default boot path does
+  not consume it yet.
+- Only a CPU whose `MPIDR_EL1.Aff0` is zero proceeds. Other CPUs remain in a `wfe` loop.
+
+## Temporary execution environment
+
+The bootstrap installs one 4 KiB L1 table in both TTBR0_EL1 and TTBR1_EL1 for a 39-bit, 4 KiB
+translation regime:
+
+- low `0..1 GiB` maps to the same physical range as Device-nGnRnE for early MMIO;
+- low `1..2 GiB` maps to the same physical range as normal memory;
+- `0xffffff8040000000..0xffffff807fffffff` maps physical
+  `0x40000000..0x7fffffff` as normal memory.
+
+`TCR_EL1.AS` remains clear, so TTBR ASIDs are eight bits. Bootstrap translations use ASID zero;
+process address spaces reserve that value and begin at one. See `docs/AARCH64_ASIDS.md`.
+
+The MMU is enabled before entering Rust. Instruction and data caches, FP/SIMD, and interrupts
+remain disabled or deferred. The default image retains the coarse mapping; the opt-in
+`kernel-map-probe` replaces TTBR1 with the final permission-separated hierarchy. Rust installs the
+linked EL1 exception vector table before emitting its first console line, but keeps asynchronous
+exceptions masked.
+
+Before either final-map consumer replaces TTBR1, it uses the low device identity window for
+read-only, naturally aligned GICR PIDR2/TYPER discovery. Access is bounded below 1 GiB, selects the
+current CPU by `MPIDR_EL1` affinity, and is dropped before final-table publication. This is Cross
+Compiled and Host Tested through an abstract register fixture; it remains Runtime Pending and does
+not enable GIC interrupt delivery. After final TTBR1 publication, the final-map consumers check
+that `DAIF.I` remains masked, perform finite-budget GIC preparation, claim and disable the physical
+timer, capture its initial counter, and pin the combined runtime plus IRQ lookup with both Group-1
+gates closed. That target path is Cross Compiled but remains Runtime Pending; it never activates
+delivery or unmasks IRQs.
+
+The linker reserves a zeroed BSS, one page-aligned 4 KiB guard frame, and a 1 MiB,
+16-byte-aligned boot-construction stack. The coarse bootstrap mappings still map the guard; the
+final TTBR1 hierarchy deliberately omits it. The larger temporary stack covers the statically
+inspected debug-build footprint of allocation-free page-table and process-image planning; it is
+not the future per-thread stack policy. Rust receives the higher-half stack address. QEMU `virt`
+PL011 is physically at `0x09000000`, but Rust accesses its temporary higher-half device alias at
+`0xffffff8009000000`; diagnostics therefore survive an opt-in replacement of TTBR0.
+
+The linker additionally exposes page-aligned text, rodata, and writable-data boundaries and
+rejects an image extending beyond physical `0x40200000`. The final address-space contract is in
+`docs/FINAL_KERNEL_ADDRESS_SPACE.md`.
+
+## Observable output
+
+On the intended platform, `kernel_main` should print the Phoenix build identity, the boot
+argument, and `PHOENIX_BOOT_OK`, then flush PL011 and wait. A Rust panic should print
+`PHOENIX_PANIC`, the available panic information, flush, and wait.
+
+These strings define the implemented smoke-test protocol. On QEMU 9.1.3 with `virt-9.1`, the
+bounded boot probe observed the build identity, DTB argument `0x0000000048000000`, and
+`PHOENIX_BOOT_OK`.
+
+## Current validation
+
+```bash
+cargo xtask build
+cargo xtask inspect
+cargo xtask qemu-command
+```
+
+These commands build and statically verify the ELF machine type, entry address, first physical
+and virtual load addresses, required boot symbols, page-table alignment, BSS ordering, exact guard
+placement, stack size/alignment, raw image, and linker map. `cargo xtask ci` includes both commands.
+
+The bounded `cargo xtask test-boot` runner is documented in `docs/QEMU.md`. It is Host Tested and
+Runtime Verified for the recorded QEMU 9.1.3 environment. The focused `cargo xtask test-kernel-map`
+probe also passed there; negative panic, exception, and guard-fault paths remain Runtime Pending.
+
+## Open runtime decisions
+
+- a guest-driven process-exit mechanism to replace host termination after the sentinel;
+- confirmation that direct boot supplies every assumed register and cache state.
+
+Resolve these from real emulator evidence before treating any runtime command as support evidence.

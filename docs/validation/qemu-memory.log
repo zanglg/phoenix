@@ -1,0 +1,8 @@
+Phoenix 0.1.0-pre.1 (commit 7abc06647037, clean, target aarch64-unknown-none-softfloat, profile debug)
+entry exception level: EL2
+boot argument: 0x0000000048000000
+PHOENIX_BOOT_OK
+DTB: size=1048576 boot-cpu=0
+memory-boundaries: ranges=3 endpoints=ok exhaustion=ok restored=ok outside=rejected
+memory: free-frames=130522 probe-frame=0x0000000040000000
+PHOENIX_MEMORY_OK

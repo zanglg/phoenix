@@ -1,0 +1,4 @@
+0xffffff8040086c90: __rustc::rust_begin_unwind+0xc0
+0xffffff80400e13f0: core::panicking::panic_fmt+0x24
+0xffffff80400a89b0: phoenix_kernel::runtime_probe::select+0x240
+0xffffff804008a3f8: kernel_main+0x190

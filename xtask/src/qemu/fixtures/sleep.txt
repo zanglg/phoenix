@@ -1,0 +1,86 @@
+PHOENIX_SYSTEM_ENTER pid=0.1 asid=1
+PHOENIX_SLEEP pid=1.1 start=25262233 ns=30000000 hz=62500000 deadline=27137233
+PHOENIX_SLEEP pid=0.1 start=25346531 ns=40000000 hz=62500000 deadline=27846531
+PHOENIX_WAKE pid=1.1 deadline=27137233 now=27247659
+PHOENIX_WAKE pid=0.1 deadline=27846531 now=27905389
+child: reaped=1.1 fault=false frames=restored asid=2 slots=restored
+PHOENIX_SLEEP pid=0.1 start=28263646 ns=20000000 hz=62500000 deadline=29513646
+PHOENIX_SLEEP pid=1.2 start=28281464 ns=30000000 hz=62500000 deadline=30156464
+PHOENIX_WAKE pid=0.1 deadline=29513646 now=29613333
+PHOENIX_WAKE pid=1.2 deadline=30156464 now=30276287
+child: reaped=1.2 fault=false frames=restored asid=2 slots=restored
+PHOENIX_SLEEP pid=1.3 start=30474119 ns=30000000 hz=62500000 deadline=32349119
+PHOENIX_SLEEP pid=0.1 start=30495601 ns=40000000 hz=62500000 deadline=32995601
+PHOENIX_WAKE pid=1.3 deadline=32349119 now=32463491
+PHOENIX_WAKE pid=0.1 deadline=32995601 now=33126268
+child: reaped=1.3 fault=false frames=restored asid=2 slots=restored
+PHOENIX_SLEEP pid=1.4 start=33272616 ns=30000000 hz=62500000 deadline=35147616
+PHOENIX_SLEEP pid=0.1 start=33288452 ns=20000000 hz=62500000 deadline=34538452
+PHOENIX_WAKE pid=0.1 deadline=34538452 now=34580790
+PHOENIX_WAKE pid=1.4 deadline=35147616 now=35238686
+child: reaped=1.4 fault=false frames=restored asid=2 slots=restored
+PHOENIX_SLEEP pid=1.5 start=35404912 ns=30000000 hz=62500000 deadline=37279912
+PHOENIX_SLEEP pid=0.1 start=35420678 ns=40000000 hz=62500000 deadline=37920678
+PHOENIX_WAKE pid=1.5 deadline=37279912 now=37374803
+PHOENIX_WAKE pid=0.1 deadline=37920678 now=37920741
+child: reaped=1.5 fault=false frames=restored asid=2 slots=restored
+PHOENIX_SLEEP pid=1.6 start=38110672 ns=30000000 hz=62500000 deadline=39985672
+PHOENIX_SLEEP pid=0.1 start=38130889 ns=20000000 hz=62500000 deadline=39380889
+PHOENIX_WAKE pid=0.1 deadline=39380889 now=39430673
+PHOENIX_WAKE pid=1.6 deadline=39985672 now=40089585
+child: reaped=1.6 fault=false frames=restored asid=2 slots=restored
+PHOENIX_SLEEP pid=1.7 start=40279582 ns=30000000 hz=62500000 deadline=42154582
+PHOENIX_SLEEP pid=0.1 start=40306155 ns=40000000 hz=62500000 deadline=42806155
+PHOENIX_WAKE pid=1.7 deadline=42154582 now=42255042
+PHOENIX_WAKE pid=0.1 deadline=42806155 now=42924432
+child: reaped=1.7 fault=false frames=restored asid=2 slots=restored
+PHOENIX_SLEEP pid=1.8 start=43097584 ns=30000000 hz=62500000 deadline=44972584
+PHOENIX_SLEEP pid=0.1 start=43120321 ns=20000000 hz=62500000 deadline=44370321
+PHOENIX_WAKE pid=0.1 deadline=44370321 now=44420552
+PHOENIX_WAKE pid=1.8 deadline=44972584 now=45081689
+child: reaped=1.8 fault=false frames=restored asid=2 slots=restored
+PHOENIX_SLEEP pid=1.9 start=45312887 ns=30000000 hz=62500000 deadline=47187887
+PHOENIX_SLEEP pid=0.1 start=45327725 ns=40000000 hz=62500000 deadline=47827725
+PHOENIX_WAKE pid=1.9 deadline=47187887 now=47268830
+PHOENIX_WAKE pid=0.1 deadline=47827725 now=47931980
+child: reaped=1.9 fault=false frames=restored asid=2 slots=restored
+PHOENIX_SLEEP pid=1.10 start=48089721 ns=30000000 hz=62500000 deadline=49964721
+PHOENIX_SLEEP pid=0.1 start=48108861 ns=20000000 hz=62500000 deadline=49358861
+PHOENIX_WAKE pid=0.1 deadline=49358861 now=49394993
+PHOENIX_WAKE pid=1.10 deadline=49964721 now=50066453
+child: reaped=1.10 fault=false frames=restored asid=2 slots=restored
+PHOENIX_SLEEP pid=1.11 start=50248970 ns=30000000 hz=62500000 deadline=52123970
+PHOENIX_SLEEP pid=0.1 start=50261778 ns=40000000 hz=62500000 deadline=52761778
+PHOENIX_WAKE pid=1.11 deadline=52123970 now=52245093
+PHOENIX_WAKE pid=0.1 deadline=52761778 now=52775402
+child: reaped=1.11 fault=false frames=restored asid=2 slots=restored
+PHOENIX_SLEEP pid=1.12 start=52958649 ns=30000000 hz=62500000 deadline=54833649
+PHOENIX_SLEEP pid=0.1 start=52982486 ns=20000000 hz=62500000 deadline=54232486
+PHOENIX_WAKE pid=0.1 deadline=54232486 now=54265414
+PHOENIX_WAKE pid=1.12 deadline=54833649 now=54927834
+child: reaped=1.12 fault=false frames=restored asid=2 slots=restored
+PHOENIX_SLEEP pid=1.13 start=55095398 ns=30000000 hz=62500000 deadline=56970398
+PHOENIX_SLEEP pid=0.1 start=55110747 ns=40000000 hz=62500000 deadline=57610747
+PHOENIX_WAKE pid=1.13 deadline=56970398 now=57084749
+PHOENIX_WAKE pid=0.1 deadline=57610747 now=57622239
+child: reaped=1.13 fault=false frames=restored asid=2 slots=restored
+PHOENIX_SLEEP pid=1.14 start=57820908 ns=30000000 hz=62500000 deadline=59695908
+PHOENIX_SLEEP pid=0.1 start=57834635 ns=20000000 hz=62500000 deadline=59084635
+PHOENIX_WAKE pid=0.1 deadline=59084635 now=59139861
+PHOENIX_WAKE pid=1.14 deadline=59695908 now=59810546
+child: reaped=1.14 fault=false frames=restored asid=2 slots=restored
+PHOENIX_SLEEP pid=1.15 start=59972045 ns=30000000 hz=62500000 deadline=61847045
+PHOENIX_SLEEP pid=0.1 start=59992337 ns=40000000 hz=62500000 deadline=62492337
+PHOENIX_WAKE pid=1.15 deadline=61847045 now=61940855
+PHOENIX_WAKE pid=0.1 deadline=62492337 now=62608357
+child: reaped=1.15 fault=false frames=restored asid=2 slots=restored
+PHOENIX_SLEEP pid=1.16 start=62758803 ns=30000000 hz=62500000 deadline=64633803
+PHOENIX_SLEEP pid=0.1 start=62776112 ns=20000000 hz=62500000 deadline=64026112
+PHOENIX_WAKE pid=0.1 deadline=64026112 now=64072884
+PHOENIX_WAKE pid=1.16 deadline=64633803 now=64737160
+child: reaped=1.16 fault=false frames=restored asid=2 slots=restored
+Phoenix sleep: rounds=16 deadlines=ok stack=ok wait=ok
+PHOENIX_CHILD_DONE waiting=8 sleeping=8 ready=0
+PHOENIX_IDLE ticks=278
+system: children=16 faults=0 console-read=0 frame-accounting=ok
+PHOENIX_SYSTEM_EXIT status=0 fault=false

@@ -1,0 +1,15 @@
+Phoenix 0.1.0-pre.1 (commit 7abc06647037, clean, target aarch64-unknown-none-softfloat, profile debug)
+entry exception level: EL2
+boot argument: 0x0000000048000000
+PHOENIX_BOOT_OK
+init-kernel-map: root=0x000000004000a000 tables=8 leaves=815
+PHOENIX_INIT_KERNEL_MAP_ENTER
+gicv3: timer-intid=30 poll-budget=100000 delivery=closed
+PHOENIX_GIC_PREPARED
+PHOENIX_IRQ_RUNTIME_PUBLISHED
+PHOENIX_INIT_KERNEL_MAP_OK
+init: pid=0.1 asid=1 entry=0x0000000000400000 stack=0x0000007fffffef70 pages=5 root=0x0000000040005000
+PHOENIX_INIT_ENTER
+Phoenix init: hello from EL0
+Phoenix initramfs: file I/O works
+PHOENIX_INIT_OK

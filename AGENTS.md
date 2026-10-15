@@ -3,9 +3,17 @@
 ## Mission and current boundary
 
 Phoenix is an experimental Unix-like Rust kernel. The current development target is AArch64 on
-QEMU `virt`. The Cargo version remains 0.0.0 throughout the linear pre-release construction path.
-Only the first incomplete Roadmap section is active; do not claim capabilities from later
-sections.
+QEMU `virt`. The Cargo version remains 0.0.0 throughout the linear construction path. After the
+technical Roadmap is complete, release candidates use `0.1.0-pre.N`; promotion to `0.1.0` requires
+explicit owner review and acceptance.
+The owner accepted 0.1.0-pre.2 on 2026-10-15 and requested continued development
+on dev. The formal 0.1.0 release is validated/tagged on dev; do not merge into main
+or recreate dev as part of this release. See CONTRIBUTING.md and docs/RELEASE.md.
+The owner authorized 0.2.0 development on 2026-10-15. Follow the new 0.2 path
+in ROADMAP.md and docs/0.2-SCHEDULING.md; keep all development on dev.
+Follow the Roadmap in dependency order. A runtime-pending item may remain open while work moves
+to the next explicitly host-verifiable item, but only when that work does not depend on an
+unobserved hardware result. Never convert static evidence into a runtime support claim.
 
 RISC-V 64 and x86_64 are deferred ports. The source tree must not prevent them, but agents must
 not create speculative implementations for them.
@@ -20,10 +28,38 @@ not create speculative implementations for them.
 ## Repository map
 
 - `Cargo.toml`: Phoenix version and kernel workspace policy.
-- `kernel/`: freestanding kernel code; currently a non-bootable skeleton.
+- `kernel/`: freestanding kernel library, AArch64 bootstrap, and image linker layout.
+- `kernel/src/timer_service.rs`: IRQ-locked transactional timer queue/programming core.
+- `userspace/init/`: first independently linked native AArch64 ELF conformance program.
 - `xtask/`: standalone host-side development tool.
 - `.cargo/lsp.toml`: rust-analyzer's default kernel target.
-- `boot.S`: first AArch64 bootstrap implementation and the starting point for boot work.
+- `kernel/src/arch/aarch64/boot.S`: first AArch64 bootstrap implementation.
+- `docs/BOOT.md`: current boot contract and runtime-validation boundary.
+- `docs/AARCH64_PAGING.md`: temporary and final page-table model, permissions, and remaining work.
+- `docs/FINAL_KERNEL_ADDRESS_SPACE.md`: final QEMU `virt` TTBR1 layout, ownership, publication, and deferrals.
+- `docs/FINAL_DIRECT_MAP.md`: managed-RAM proof and retained final-TTBR1 access capability.
+- `docs/KERNEL_HEAP.md`: fallible allocation, backing-frame ownership, failure, and synchronization boundary.
+- `docs/KERNEL_STACKS.md`: boot guard plus owned runtime-stack layout, frames, and activation boundary.
+- `docs/SYNCHRONIZATION.md`: IRQ-save spinlock, memory ordering, context, and target boundary.
+- `docs/AARCH64_USER_PAGE_TABLES.md`: user-table topology, ownership, materialization, and activation boundary.
+- `docs/QEMU_VIRT_BOOTSTRAP_MEMORY.md`: checked target access to private RAM under the temporary TTBR1 alias.
+- `docs/BOOT_MEMORY_MAP.md`: DTB-to-allocator construction and mandatory boot reservations.
+- `docs/BOOT_MEMORY_PROBE.md`: opt-in end-to-end boot memory integration and runtime boundary.
+- `docs/AARCH64_EXCEPTIONS.md`: vector, frame, syndrome, and remaining runtime-handler contract.
+- `docs/AARCH64_INTERRUPT_RUNTIME.md`: pinned GIC/timer publication, lock order, dispatch, and removal contract.
+- `docs/USER_ADDRESS_SPACE.md`: EL0 virtual region, permissions, mapping plan, and guarded stack.
+- `docs/ELF_LOADER.md`: strict initial executable subset and transactional loading requirements.
+- `docs/PROCESS_IMAGE.md`: executable/stack page planning and transactional frame ownership.
+- `docs/INITIAL_USER_STACK.md`: native argc/argv/envp/auxv layout and process-image integration.
+- `docs/USER_COPY.md`: checked bidirectional physical-frame user copies and bounded I/O contract.
+- `docs/FILE_DESCRIPTORS.md`: read-only initramfs file table and transactional offset contract.
+- `docs/FIRST_USER_PROGRAM.md`: standalone init ELF contract and static validation boundary.
+- `docs/INITRAMFS.md`: strict initial archive subset, lookup rules, validation, and deferrals.
+- `docs/LOADED_INIT_PROBE.md`: end-to-end archive-to-ELF loading, ownership, entry, and runtime boundary.
+- `docs/NATIVE_ABI.md`: unstable native syscall numbers, AArch64 registers, and return encoding.
+- `docs/EL0_PROBE.md`: opt-in static first-user-mode bridge and exact validation boundary.
+- `docs/QEMU.md`: pinned virtual board, runtime commands, timeout, sentinels, and evidence policy.
+- `docs/RUNTIME_VALIDATION.md`: hardware-dependent checks deferred until an emulator is available.
 - `FEATURES.md`: comprehensive capability catalog.
 - `ROADMAP.md`: ordered path to the first formal release.
 - `CHANGELOG.md`: completed changes.
@@ -55,20 +91,50 @@ cargo xtask fmt
 cargo xtask check
 cargo xtask lint
 cargo xtask test
+cargo xtask build
+cargo xtask inspect
+cargo xtask build-init
+cargo xtask inspect-init
+cargo xtask qemu-command
+cargo xtask run
+cargo xtask test-boot
+cargo xtask test-memory
+cargo xtask test-kernel-map
+cargo xtask test-el0
+cargo xtask test-init
+cargo xtask test-runtime
+cargo xtask test-system
+cargo xtask test-hardening
+cargo xtask test-scheduling
 cargo xtask ci
 ```
 
 Run `cargo xtask ci` before reporting completion. Never state that an unexecuted check passed.
-QEMU is optional in 0.0.0, and there is no boot test yet.
+QEMU is optional during 0.0.0 construction. Static artifact inspection is required. `run`, `test-boot`,
+`test-memory`, `test-kernel-map`, `test-el0`, `test-init`, `test-runtime`, `test-system`, and
+`test-hardening`, and `test-scheduling` are runtime-only commands; do not
+install or invoke QEMU in an environment where it is unavailable.
+
+Use these validation states consistently:
+
+- **Host Tested**: behavior executed in host-side tests.
+- **Cross Compiled**: compiled for the configured bare-metal target.
+- **ELF Inspected**: artifact structure checked without execution.
+- **Runtime Pending**: implementation exists but has not run on the target platform.
+- **Runtime Verified**: the documented target command and observed evidence passed.
+
+Record every Runtime Pending claim in `docs/RUNTIME_VALIDATION.md`.
 
 ## Feature and documentation policy
 
 - Put newly discovered kernel capabilities in `FEATURES.md`.
 - Keep unscheduled work as `Captured` or `Deferred`; do not create placeholder implementations.
-- Add work to `ROADMAP.md` only when it belongs on the committed path to 0.1.0.
+- Add work to `ROADMAP.md` only when it belongs on the owner-authorized release path.
 - Update `CHANGELOG.md` only for completed changes.
 - Do not leave long-lived source TODOs; record them in `FEATURES.md` with context.
 - Update README support claims whenever a target becomes buildable or bootable.
+- Never promote a `0.1.0-pre.N` candidate to `0.1.0` without explicit owner acceptance after
+  review and any requested corrections.
 
 ## Prohibited changes
 
