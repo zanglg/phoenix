@@ -58,6 +58,17 @@ pub fn idle() {
     }
 }
 
+/// Stack-neutral EL1h idle entry for a user runtime with no runnable process.
+/// Its owner must retain the exception stack and publish an active IRQ source.
+/// The two-instruction range also identifies the only legal EL1 idle IRQ origin.
+#[unsafe(naked)]
+pub extern "C" fn idle_forever() -> ! {
+    // SAFETY: WFI/branch do not access memory or change SP. Exception return
+    // enters with a retained aligned stack and IRQ enabled; no Rust continuation
+    // or borrow is suspended here. Each re-entry uses exactly the same stack top.
+    core::arch::naked_asm!("2: wfi", "b 2b");
+}
+
 /// Enter a constructed process frame using the common register-restore path.
 ///
 /// # Safety

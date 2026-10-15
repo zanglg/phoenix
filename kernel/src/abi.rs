@@ -2,7 +2,7 @@
 
 /// Current experimental native ABI revision.
 ///
-/// Revision zero carries no stability promise and changes with the 0.0.0 tree.
+/// Revision zero carries no stability promise during pre-1.0 development.
 pub const NATIVE_ABI_REVISION: u16 = 0;
 /// Immediate reserved for native Phoenix calls made with AArch64 `SVC`.
 pub const NATIVE_SVC_IMMEDIATE: u16 = 0;
@@ -36,6 +36,8 @@ pub enum NativeSyscall {
     Wait,
     /// Cooperatively reschedule and return zero (`number=8`).
     Yield,
+    /// Sleep for 0–1,000,000,000 nanoseconds (`number=9`); zero yields.
+    Sleep,
     /// Unassigned number retained for forward-compatible rejection.
     Unknown(u64),
 }
@@ -53,6 +55,7 @@ impl NativeSyscall {
             6 => Self::Spawn,
             7 => Self::Wait,
             8 => Self::Yield,
+            9 => Self::Sleep,
             number => Self::Unknown(number),
         }
     }
@@ -69,6 +72,7 @@ impl NativeSyscall {
             Self::Spawn => 6,
             Self::Wait => 7,
             Self::Yield => 8,
+            Self::Sleep => 9,
             Self::Unknown(number) => number,
         }
     }
@@ -291,7 +295,7 @@ pub enum Errno {
     TooManyOpenFiles = 24,
     /// Writable filesystem capacity is exhausted.
     NoSpace = 28,
-    /// No console input is currently available.
+    /// A bounded resource or nonblocking operation cannot proceed yet.
     TryAgain = 11,
     /// The system call is unknown or not implemented.
     NotImplemented = 38,
@@ -375,6 +379,7 @@ mod tests {
             (6, NativeSyscall::Spawn),
             (7, NativeSyscall::Wait),
             (8, NativeSyscall::Yield),
+            (9, NativeSyscall::Sleep),
         ] {
             assert_eq!(NativeSyscall::decode(number), operation);
             assert_eq!(operation.number(), number);

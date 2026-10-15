@@ -84,6 +84,8 @@ pub(super) fn archive(target: &str) -> Option<PathBuf> {
     append_newc_record(&mut archive, 18, "yield-child", 0o100_755, &programs[3]).ok()?;
     append_newc_record(&mut archive, 19, "preempt", 0o100_755, &programs[3]).ok()?;
     append_newc_record(&mut archive, 20, "busy-child", 0o100_755, &programs[3]).ok()?;
+    append_newc_record(&mut archive, 21, "sleeptest", 0o100_755, &programs[3]).ok()?;
+    append_newc_record(&mut archive, 22, "nap-child", 0o100_755, &programs[3]).ok()?;
     append_newc_record(&mut archive, 0, "TRAILER!!!", 0, &[]).ok()?;
     let parsed = phoenix_kernel::initramfs::Initramfs::from_bytes(&archive).ok()?;
     for (index, name) in ["init", "child", "fault"].iter().enumerate() {

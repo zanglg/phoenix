@@ -1,5 +1,6 @@
 //! Architecture-neutral process identity, lifecycle, and bounded registry.
 
+use crate::time::TickInstant;
 use core::num::NonZeroU64;
 
 /// Failure while constructing a process identifier.
@@ -160,8 +161,10 @@ pub enum ProcessPhase {
     Ready,
     /// The process currently owns an execution context.
     Running,
-    /// A synchronous child owns execution until completion.
+    /// Waiting for the owned child's completion.
     Waiting,
+    /// Ineligible until its absolute counter deadline.
+    Sleeping,
     /// Execution ended and resources await an explicit reap.
     Exited,
     /// A terminal user fault ended execution and awaits an explicit reap.
@@ -177,8 +180,10 @@ pub enum ProcessState {
     Ready,
     /// The process currently owns an execution context.
     Running,
-    /// A synchronous child owns execution until completion.
+    /// Waiting for the owned child's completion.
     Waiting,
+    /// Retains resources and context until the absolute deadline.
+    Sleeping(TickInstant),
     /// Execution ended with the retained native status.
     Exited(ExitStatus),
     /// Execution ended with a classified user fault.
@@ -193,6 +198,7 @@ impl ProcessState {
             Self::Ready => ProcessPhase::Ready,
             Self::Running => ProcessPhase::Running,
             Self::Waiting => ProcessPhase::Waiting,
+            Self::Sleeping(_) => ProcessPhase::Sleeping,
             Self::Exited(_) => ProcessPhase::Exited,
             Self::Faulted(_) => ProcessPhase::Faulted,
         }
@@ -202,7 +208,12 @@ impl ProcessState {
     pub const fn exit_status(self) -> Option<ExitStatus> {
         match self {
             Self::Exited(status) => Some(status),
-            Self::Created | Self::Ready | Self::Running | Self::Waiting | Self::Faulted(_) => None,
+            Self::Created
+            | Self::Ready
+            | Self::Running
+            | Self::Waiting
+            | Self::Sleeping(_)
+            | Self::Faulted(_) => None,
         }
     }
 
@@ -211,7 +222,7 @@ impl ProcessState {
         match self {
             Self::Exited(status) => Some(ProcessTermination::Exited(status)),
             Self::Faulted(fault) => Some(ProcessTermination::Faulted(fault)),
-            Self::Created | Self::Ready | Self::Running | Self::Waiting => None,
+            Self::Created | Self::Ready | Self::Running | Self::Waiting | Self::Sleeping(_) => None,
         }
     }
 }
@@ -280,6 +291,25 @@ impl ProcessControl {
     /// Return the active process to the run queue after saving its context.
     pub fn deschedule(&mut self) -> Result<(), ProcessTransitionError> {
         self.transition(ProcessPhase::Running, ProcessState::Ready)
+    }
+
+    /// Suspend the active process after saving its context and success result.
+    pub fn sleep(&mut self, until: TickInstant) -> Result<(), ProcessTransitionError> {
+        self.transition(ProcessPhase::Running, ProcessState::Sleeping(until))
+    }
+
+    /// Make an expired sleeper ready without selecting it or releasing resources.
+    pub fn wake_sleep(&mut self, now: TickInstant) -> Result<(), ProcessTransitionError> {
+        if matches!(self.state, ProcessState::Sleeping(until) if until <= now) {
+            self.state = ProcessState::Ready;
+            Ok(())
+        } else {
+            Err(ProcessTransitionError {
+                process_id: self.id,
+                from: self.state.phase(),
+                to: ProcessPhase::Ready,
+            })
+        }
     }
 
     /// Publish a completed child outcome before scheduling its waiting parent.
@@ -509,6 +539,32 @@ impl<T, const CAPACITY: usize> ProcessTable<T, CAPACITY> {
             .map_err(ProcessTableStateError::Transition)
     }
 
+    /// Retain a running process until its absolute deadline.
+    pub fn sleep(
+        &mut self,
+        id: ProcessId,
+        until: TickInstant,
+    ) -> Result<(), ProcessTableStateError> {
+        self.get_mut(id)
+            .map_err(ProcessTableStateError::Lookup)?
+            .control
+            .sleep(until)
+            .map_err(ProcessTableStateError::Transition)
+    }
+
+    /// Publish a completed sleep only once its deadline has been observed.
+    pub fn wake_sleep(
+        &mut self,
+        id: ProcessId,
+        now: TickInstant,
+    ) -> Result<(), ProcessTableStateError> {
+        self.get_mut(id)
+            .map_err(ProcessTableStateError::Lookup)?
+            .control
+            .wake_sleep(now)
+            .map_err(ProcessTableStateError::Transition)
+    }
+
     /// Wake a waiting process without implicitly selecting it as current.
     pub fn wake(&mut self, id: ProcessId) -> Result<(), ProcessTableStateError> {
         self.get_mut(id)
@@ -659,6 +715,42 @@ mod tests {
             table.wake(id),
             Err(ProcessTableStateError::Lookup(_))
         ));
+        assert_eq!(
+            table.get(replacement).unwrap().state(),
+            ProcessState::Created
+        );
+    }
+
+    #[test]
+    fn sleeping_resources_cannot_run_or_reap_before_deadline() {
+        let mut table = ProcessTable::<u64, 1>::new();
+        let id = table.insert(0x1234).unwrap();
+        let deadline = crate::time::TickInstant::from_raw(100);
+        assert!(table.sleep(id, deadline).is_err());
+        table.make_ready(id).unwrap();
+        table.start(id).unwrap();
+        table.sleep(id, deadline).unwrap();
+        assert!(table.start(id).is_err());
+        assert!(table.wake(id).is_err());
+        assert!(
+            table
+                .wake_sleep(id, crate::time::TickInstant::from_raw(99))
+                .is_err()
+        );
+        assert_eq!(
+            table.get(id).unwrap().state(),
+            ProcessState::Sleeping(deadline)
+        );
+        assert_eq!(*table.get(id).unwrap().resources(), 0x1234);
+        assert_eq!(table.reap(id), Err(ProcessReapError::NotTerminated));
+        table.wake_sleep(id, deadline).unwrap();
+        assert!(table.wake_sleep(id, deadline).is_err());
+        table.start(id).unwrap();
+        table.exit(id, ExitStatus::new(0)).unwrap();
+        table.reap(id).unwrap();
+        let replacement = table.insert(0x5678).unwrap();
+        assert_ne!(id, replacement);
+        assert!(table.wake_sleep(id, deadline).is_err());
         assert_eq!(
             table.get(replacement).unwrap().state(),
             ProcessState::Created

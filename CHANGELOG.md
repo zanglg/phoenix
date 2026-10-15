@@ -18,6 +18,9 @@ numbers and remains explicitly unstable before 1.0.0. During construction, chang
 - EL0 timer preemption with 2 ms quantum, post-EOI frame selection and IRQ-masked
   kernel operations. Non-yielding parent/infinite child preserve all 31 GPRs,
   NZCV/SP/private stacks; a no-timer successful guest is rejected by the oracle.
+- Native bounded sleep (call 9), deadline-driven wakeup and a stack-neutral EL1h
+  WFI idle path. Sixteen overlapping parent/child rounds verify 32 deadline/wake
+  pairs, idle IRQs, stable exception-stack top and complete child resource recovery.
 
 ## [0.1.0] - 2026-10-15
 

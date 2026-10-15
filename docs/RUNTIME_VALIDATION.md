@@ -45,7 +45,14 @@ protocol fixture and rejects corrupted lifetimes, faults and context proof.
 | --- | --- | --- |
 | RUN-USCHED-001 | Runtime Verified | Cooperative two-process round robin, blocked-parent and same-process yields, complete saved-context checks, exact resource reuse |
 | RUN-USCHED-002 | Runtime Verified | Non-yielding init/infinite child: observed 66/65 ticks and 130 timer handoffs; full 31-GPR/NZCV/SP/private-stack checks; no-timer successful guest is rejected |
-| RUN-USCHED-003 | Runtime Pending | User sleep and no-runnable idle; not implemented yet |
+| RUN-USCHED-003 | Runtime Verified | Sixteen overlapping sleep rounds, 32 exact rounded-up deadline/wake pairs, 229 observed idle ticks, stable stack top and full child resource recovery |
+
+The complete development preflight now passes `cargo xtask ci` (236 kernel and
+22 tooling tests), all nine target commands / 29 QEMU launches, and independent
+Rust 1.95 checks plus the same 258 host tests. Sleep evidence adds actual counter
+frequency/deadline recomputation and early/missing/duplicate-wake rejection. The
+final clean-source development package and its exact source identity are retained
+in the workspace evidence receipt; they do not constitute formal 0.2 acceptance.
 
 The preemption checkpoint passed canonical CI (235 kernel and 21 tooling tests),
 the 705-lifetime/576-fault hardening workload with timer entries in both process

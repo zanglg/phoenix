@@ -249,3 +249,30 @@ Logs are `qemu-<case>.log`, including `qemu-system-{lf,cr,crlf,bad-input,wrong-f
 The harness prints command lines, paths and results. GitHub CI runs all commands
 with Rust 1.99.0 and QEMU 10.0.13 on Debian trixie, and retains serial/package
 artifacts for 30 days. The tested debug kernel uses forced frame pointers.
+
+## 0.2 development scheduling suite
+
+`cargo xtask test-scheduling` builds the system image and four independent user
+ELFs (init/child/fault/cooperative), then runs five scenarios with 30-second
+budgets and no console input:
+
+| Boot argument | Evidence |
+| --- | --- |
+| `phoenix.system-cooperative` | IRQ-masked baseline: 64 rounds, 257 reaps, 128 exact faults, register/stack/FD isolation and both wait orderings |
+| `phoenix.system-cooperative-preempt` | Same lifecycle workload with real EL0 timer handoffs; peers poll actual shared-file progress |
+| `phoenix.system-preempt` | Two non-yielding register-check loops, an infinite child, multiple ticks in each context, real handoffs and successful init exit |
+| `phoenix.system-preempt-off` | Same image/output with timer disabled: guest exits 0 but preemption oracle must reject it |
+| `phoenix.system-sleep` | Sixteen overlapping sleep rounds, 32 paired deadlines/wakes, nonzero idle IRQ count, fixed idle stack top and exact reaps |
+
+The no-timer case prints `QEMU_PREEMPTION_NEGATIVE_REJECTED=true`. Other positive
+cases require guest exit 0 and their complete independent host oracle. Sleep
+records include the measured counter frequency, initial counter, requested ns,
+deadline and wake counter; the oracle recomputes rounded-up durations and rejects
+early, missing or duplicate wakes. Logs are `qemu-system-<scenario>.log` under the
+standard target directory. The full development suite now has 29 QEMU launches.
+
+Normal/interactive/stress system boots enable IRQs only in EL0. All kernel
+dispatch remains IRQ-masked. If no user can run, a naked EL1h WFI loop uses the
+permanently retained exception stack; only this exact PC range may receive an
+EL1 scheduler IRQ. The design and invariant review are in 0.2-SCHEDULING.md and
+UNSAFE_REVIEW.md. The released 0.1 tag retains its original synchronous boundary.

@@ -10,6 +10,8 @@ Returning calls preserve other integer registers and the architectural next PC.
 Numbers 0–5 are exit, write, read, open, close and synchronous child run. Unknown
 numbers return ENOSYS. Development calls 6–8 add single-child spawn, wait and
 cooperative yield with the bounded semantics defined in the 0.2 design.
+Development call 9 adds sleep for 0–1,000,000,000 nanoseconds: zero yields, positive
+durations return 0 no earlier than their deadline, and larger values return EINVAL.
 A nonzero SVC immediate is a terminal BadSystemCall fault,
 which kills the child and returns EFAULT to its waiting parent.
 

@@ -111,7 +111,7 @@ fn print_help() {
     println!("  test-runtime  Run guest-exit boot, exception, permission and IRQ probes");
     println!("  build-system / run-system / test-system  Build or exercise the native system");
     println!("  test-hardening  Run target rollback and repeated process/ASID recovery checks");
-    println!("  test-scheduling Run cooperative user scheduling, wait and isolation checks");
+    println!("  test-scheduling Run user scheduling, preemption, sleep and isolation checks");
     println!("  package  Collect system artifacts, provenance and SHA-256 checksums");
     println!("  ci       Run every validation available without an emulator");
     println!("  symbolize <ELF> <0xADDRESS>...  Resolve addresses using the exact kernel ELF");

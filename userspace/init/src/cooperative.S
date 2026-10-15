@@ -20,6 +20,10 @@ _start:
     b.eq preempt_start
     cmp w9, #'b'
     b.eq busy_start
+    cmp w9, #'s'
+    b.eq sleep_start
+    cmp w9, #'n'
+    b.eq sleep_child
     cmp w9, #'y'
     b.eq child_start
     /* Empty wait, a lone yield, and failed spawn must preserve the caller. */

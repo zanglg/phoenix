@@ -31,6 +31,9 @@ struct State {
     timer: Option<phoenix_kernel::time::TimerId>,
     ticks: [usize; 2],
     timer_switches: usize,
+    idle: bool,
+    idle_top: Option<usize>,
+    idle_ticks: usize,
     allocator: FrameAllocator<INIT_MEMORY_RANGES>,
     asids: AsidAllocator,
     tables: &'static FinalKernelTables,
@@ -135,6 +138,7 @@ pub(super) fn boot(argument: usize, console: &mut Console<EarlyPl011>) -> ! {
                         | "phoenix.system-preempt"
                         | "phoenix.system-preempt-off"
                         | "phoenix.system-cooperative-preempt"
+                        | "phoenix.system-sleep"
                 )
             ),
             info.bootargs() == Some("phoenix.system-stress"),
@@ -144,6 +148,7 @@ pub(super) fn boot(argument: usize, console: &mut Console<EarlyPl011>) -> ! {
                     "cooperate"
                 }
                 Some("phoenix.system-preempt" | "phoenix.system-preempt-off") => "preempt",
+                Some("phoenix.system-sleep") => "sleeptest",
                 _ => "init",
             },
             !matches!(
@@ -207,6 +212,9 @@ pub(super) fn boot(argument: usize, console: &mut Console<EarlyPl011>) -> ! {
         timer: None,
         ticks: [0; 2],
         timer_switches: 0,
+        idle: false,
+        idle_top: None,
+        idle_ticks: 0,
         allocator,
         asids,
         tables,
@@ -285,15 +293,36 @@ fn arm(runtime: &mut State) {
 
 fn interrupt(runtime: &mut State, frame: &mut ExceptionFrame, slot: VectorSlot) {
     assert!(runtime.preempt && irqs_masked());
-    assert_eq!(
-        slot,
-        VectorSlot::new(VectorOrigin::LowerAArch64, ExceptionKind::Irq)
-    );
-    assert_eq!(
-        frame.saved_program_status() & 0x8f,
-        0,
-        "IRQ must interrupt EL0 with I clear"
-    );
+    if runtime.idle {
+        assert_eq!(
+            slot,
+            VectorSlot::new(VectorOrigin::CurrentSpX, ExceptionKind::Irq)
+        );
+        assert_eq!(
+            frame.saved_program_status() & 0x8f,
+            5,
+            "idle must be EL1h with I clear"
+        );
+        let entry = phoenix_kernel::arch::aarch64::thread::idle_forever as *const () as u64;
+        assert!(
+            (entry..entry + 8).contains(&frame.program_counter()),
+            "IRQ outside idle loop"
+        );
+        assert_eq!(
+            Some(frame as *mut ExceptionFrame as usize + ExceptionFrame::SIZE),
+            runtime.idle_top
+        );
+    } else {
+        assert_eq!(
+            slot,
+            VectorSlot::new(VectorOrigin::LowerAArch64, ExceptionKind::Irq)
+        );
+        assert_eq!(
+            frame.saved_program_status() & 0x8f,
+            0,
+            "IRQ must interrupt EL0 with I clear"
+        );
+    }
     // dispatch_one releases both runtime/timer locks and completes GIC EOI before
     // returning a batch. No interrupt-runtime guard may survive select below.
     match boot_interrupt_handle()
@@ -308,11 +337,16 @@ fn interrupt(runtime: &mut State, frame: &mut ExceptionFrame, slot: VectorSlot) 
             let fired = batch.iter().next().unwrap();
             assert_eq!(Some(fired.id()), runtime.timer.take());
             assert_eq!(fired.event(), SCHEDULER_EVENT);
-            runtime.ticks[runtime.current.slot()] += 1;
+            if runtime.idle {
+                runtime.idle_ticks += 1;
+            } else {
+                runtime.ticks[runtime.current.slot()] += 1;
+            }
             arm(runtime);
-            let old = runtime.current;
+            let old = (!runtime.idle).then_some(runtime.current);
             select(runtime, frame);
-            runtime.timer_switches += usize::from(old != runtime.current);
+            runtime.timer_switches +=
+                usize::from(old != (!runtime.idle).then_some(runtime.current));
         }
         InterruptDispatch::Unexpected { intid } => panic!("unexpected user IRQ {intid}"),
     }
@@ -347,6 +381,7 @@ pub(super) fn dispatch(frame: &mut ExceptionFrame, slot: Option<VectorSlot>) {
         interrupt(runtime, frame, slot);
         return;
     }
+    assert!(!runtime.idle, "non-IRQ exception from idle");
     if slot == VectorSlot::new(VectorOrigin::LowerAArch64, ExceptionKind::Synchronous)
         && frame.syndrome().exception_class() == ExceptionClass::SupervisorCallAArch64
         && frame.syndrome().supervisor_call_immediate() == Some(0)
@@ -379,6 +414,12 @@ pub(super) fn dispatch(frame: &mut ExceptionFrame, slot: Option<VectorSlot>) {
         if number == 8 {
             syscall::set_return(frame, SyscallReturn::success(0).unwrap());
             select(runtime, frame);
+            return;
+        }
+        if number == 9 {
+            if let Err(error) = sleep(runtime, frame, args[0]) {
+                syscall::set_return(frame, SyscallReturn::error(error));
+            }
             return;
         }
         let result = io(runtime, number, args);
@@ -517,20 +558,54 @@ fn activate(runtime: &State, id: ProcessId) {
 /// survive this call. No lock guard or State borrow survives assembly ERET.
 fn select(runtime: &mut State, frame: &mut ExceptionFrame) {
     let old = runtime.current;
-    if runtime.processes.get(old).unwrap().state() == phoenix_kernel::process::ProcessState::Running
+    if !runtime.idle
+        && runtime.processes.get(old).unwrap().state()
+            == phoenix_kernel::process::ProcessState::Running
     {
         runtime.processes.resources_mut(old).unwrap().suspended = Some(*frame);
         runtime.processes.deschedule(old).unwrap();
     }
-    let next = runtime
-        .queue
-        .select(cpu::counter())
-        .expect("runnable process");
+    let now = cpu::counter();
+    let next = runtime.queue.select(now);
+    // Policy wakes every expired sleeper before selection; mirror those events
+    // in the resource-owning lifecycle before any selected process can run.
+    for id in runtime.scheduled.into_iter().flatten() {
+        if let phoenix_kernel::process::ProcessState::Sleeping(until) =
+            runtime.processes.get(id).unwrap().state()
+            && until <= now
+        {
+            runtime.processes.wake_sleep(id, now).unwrap();
+            let mut console = Console::new(EarlyPl011::new());
+            let _ = writeln!(
+                console,
+                "PHOENIX_WAKE pid={}.{} deadline={} now={}",
+                id.slot(),
+                id.generation(),
+                until.raw(),
+                now.raw()
+            );
+        }
+    }
+    let Some(next) = next else {
+        assert!(runtime.preempt, "idle requires an active wake source");
+        let top = frame as *mut ExceptionFrame as usize + ExceptionFrame::SIZE;
+        if let Some(expected) = runtime.idle_top {
+            assert_eq!(top, expected, "idle stack drift");
+        }
+        runtime.idle_top = Some(top);
+        runtime.idle = true;
+        *frame = ExceptionFrame::kernel_thread(
+            phoenix_kernel::arch::aarch64::thread::idle_forever as *const () as u64,
+            0,
+        );
+        return;
+    };
     let id = runtime.scheduled[next.slot()].expect("published process binding");
     assert_eq!(thread(runtime, id), next, "stale queue binding");
     runtime.processes.start(id).unwrap();
     activate(runtime, id);
     runtime.current = id;
+    runtime.idle = false;
     *frame = runtime
         .processes
         .resources_mut(id)
@@ -539,6 +614,43 @@ fn select(runtime: &mut State, frame: &mut ExceptionFrame) {
         .take()
         .unwrap();
     events::record(5, old.slot() as u64, id.slot() as u64);
+}
+
+fn sleep(runtime: &mut State, frame: &mut ExceptionFrame, nanoseconds: u64) -> Result<(), Errno> {
+    if nanoseconds > 1_000_000_000 {
+        return Err(Errno::InvalidArgument);
+    }
+    if nanoseconds == 0 {
+        syscall::set_return(frame, SyscallReturn::success(0).unwrap());
+        select(runtime, frame);
+        return Ok(());
+    }
+    if !runtime.preempt {
+        return Err(Errno::NotImplemented);
+    }
+    let now = cpu::counter();
+    let frequency = cpu::frequency().unwrap();
+    let until = frequency
+        .deadline_after_nanoseconds(now, nanoseconds)
+        .map_err(|_| Errno::InvalidArgument)?;
+    let id = runtime.current;
+    syscall::set_return(frame, SyscallReturn::success(0).unwrap());
+    runtime.processes.resources_mut(id).unwrap().suspended = Some(*frame);
+    runtime.processes.sleep(id, until).unwrap();
+    runtime.queue.sleep(until).unwrap();
+    let mut console = Console::new(EarlyPl011::new());
+    let _ = writeln!(
+        console,
+        "PHOENIX_SLEEP pid={}.{} start={} ns={} hz={} deadline={}",
+        id.slot(),
+        id.generation(),
+        now.raw(),
+        nanoseconds,
+        frequency.ticks_per_second(),
+        until.raw()
+    );
+    select(runtime, frame);
+    Ok(())
 }
 
 fn wait_child(runtime: &mut State, frame: &mut ExceptionFrame) -> Result<(), Errno> {
@@ -677,6 +789,7 @@ fn finish(runtime: &mut State, frame: &mut ExceptionFrame) {
         phoenix_kernel::process::ProcessState::Faulted(_)
     );
     events::dump(&mut console);
+    let _ = writeln!(console, "PHOENIX_IDLE ticks={}", runtime.idle_ticks);
     let _ = writeln!(
         console,
         "PHOENIX_SCHED root-ticks={} child-ticks={} switches={} child-ready={}",

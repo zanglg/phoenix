@@ -1762,6 +1762,7 @@ fn handle_probe_syscall(frame: &mut ExceptionFrame, slot: Option<VectorSlot>) ->
         | NativeSyscall::Spawn
         | NativeSyscall::Wait
         | NativeSyscall::Yield
+        | NativeSyscall::Sleep
         | NativeSyscall::Unknown(_) => {
             syscall::set_return(frame, SyscallReturn::error(Errno::NotImplemented));
             true

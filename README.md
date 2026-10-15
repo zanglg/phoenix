@@ -8,6 +8,7 @@ The first formal release is **0.1.0**. Development lives on `dev`;
 validation and tagging on `dev`; development continues there.
 The active development version is **0.2.0-dev.0**, with cooperative user scheduling
 and EL0 timer preemption; [the 0.2 design](docs/0.2-SCHEDULING.md) records the boundary.
+The [0.2 review contract](docs/0.2-CONTRACT.md) collects supported behavior and limits.
 
 ## Build and run
 
@@ -53,7 +54,8 @@ The kernel-thread/heap image and user-system image are separate integration targ
 The development system schedules two user processes with a 2 ms timer quantum.
 IRQs are enabled in EL0 and masked throughout kernel dispatch; syscalls complete
 before switching. A non-yielding child cannot starve its runnable parent.
-User sleep and the no-runnable-process idle path remain planned.
+Bounded user sleep retains contexts until their deadlines; an EL1 WFI loop waits
+when all users are blocked, without retaining a Rust continuation.
 Limits, error behavior, syscall numbers and ownership rules are defined
 in the [0.1 contract](docs/0.1-CONTRACT.md). Tests cover the stated bounded workloads.
 SMP, FP/SIMD, networking, persistent storage, POSIX/Linux compatibility, real hardware,
@@ -90,6 +92,8 @@ both wait/completion orderings and complete preserved GPR/NZCV/stack/FD checks.
 It also preempts two non-yielding contexts, checks all 31 GPRs/NZCV/private stacks,
 and requires init to progress while its child loops forever. The same successful
 guest output with timer preemption disabled must be rejected by the host oracle.
+Sixteen overlapping sleep rounds additionally require 32 balanced deadline/wake
+records, observed idle IRQs, stable idle stack top and exact child resource recovery.
 All emulator tests are bounded and retain logs under
 `target/phoenix/aarch64-unknown-none-softfloat/debug/`.
 See [QEMU.md](docs/QEMU.md) and the [validation ledger](docs/RUNTIME_VALIDATION.md).

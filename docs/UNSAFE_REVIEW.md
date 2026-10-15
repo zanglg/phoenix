@@ -81,6 +81,23 @@ ticks and the infinite child to remain Ready. A no-timer negative control proves
 that printed success alone is insufficient. Kernel syscall preemption, SMP,
 nested IRQs and FP/SIMD are still outside this invariant.
 
+## 0.2 sleep/idle extension
+
+Sleep validates the bounded duration and checked deadline before changing frame,
+process or queue state. A success return is saved in the process-owned frame;
+sleeping resources remain retained. Queue and lifecycle wake all deadlines due at
+the same sampled counter instant before selecting a frame. No early wake is allowed.
+
+If no user is Ready, dispatch overwrites only the active exception frame with an
+EL1h frame targeting an eight-byte naked WFI/branch loop. That loop has no prologue,
+stack allocation, destructor or borrow. The permanent construction/exception stack
+remains owned and mapped. The last user root stays retained, with no idle access
+to user memory. Every idle entry and IRQ checks the same SP top; idle IRQs must
+come from CurrentSpX/EL1h with I clear and PC inside the exact two-instruction range.
+Selection of a woken user installs its retained root and owned frame before ERET.
+Thus repeated idle/user transitions neither accumulate suspended kernel frames nor
+reuse a released stack. Rust borrows still end before every exception return.
+
 The stress boot diagnostics run before first EL0 entry with IRQs masked. Withheld
 frames and ASIDs remain private; failed image/table owners are destroyed before
 allocator restoration, and diagnostic ASIDs are never installed in TTBR0. The

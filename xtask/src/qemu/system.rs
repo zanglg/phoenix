@@ -245,7 +245,129 @@ pub(super) fn cooperative_suite(image: &Path, directory: &Path, root: &Path) -> 
             return false;
         }
     }
-    true
+    runtime::report(
+        runtime::run_guest(
+            command_for_boot(image, "phoenix.system-sleep"),
+            directory,
+            root,
+            "system-sleep",
+            None,
+            Duration::from_secs(30),
+        )
+        .is_some_and(|guest| guest.success() && valid_sleep(&guest.output)),
+    )
+}
+
+fn valid_sleep(output: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(output).replace('\r', "");
+    if text.contains(PANIC_SENTINEL)
+        || text.contains(EXCEPTION_SENTINEL)
+        || text.contains(USER_FAULT_SENTINEL)
+    {
+        return false;
+    }
+    let fields = |line: &str| -> Option<BTreeMap<String, String>> {
+        let mut values = BTreeMap::new();
+        for token in line.split_whitespace().skip(1) {
+            let (key, value) = token.split_once('=')?;
+            if values.insert(key.into(), value.into()).is_some() {
+                return None;
+            }
+        }
+        Some(values)
+    };
+    let mut pending = BTreeMap::new();
+    let mut sleeps = [0; 2];
+    let mut reaps = Vec::new();
+    let mut terminal = Vec::new();
+    let mut idle = None;
+    for line in text.lines() {
+        if line.starts_with("PHOENIX_SLEEP ") {
+            let Some(values) = fields(line) else {
+                return false;
+            };
+            if values.len() != 5 {
+                return false;
+            }
+            let get = |key: &str| values.get(key)?.parse::<u64>().ok();
+            let Some(pid) = values.get("pid") else {
+                return false;
+            };
+            let Some((slot, generation)) = pid.split_once('.') else {
+                return false;
+            };
+            let Some(slot) = slot.parse::<usize>().ok().filter(|slot| *slot < 2) else {
+                return false;
+            };
+            let Some(generation) = generation.parse::<u64>().ok() else {
+                return false;
+            };
+            if (slot == 0 && generation != 1) || (slot == 1 && !(1..=16).contains(&generation)) {
+                return false;
+            }
+            let (Some(start), Some(ns), Some(hz), Some(deadline)) =
+                (get("start"), get("ns"), get("hz"), get("deadline"))
+            else {
+                return false;
+            };
+            let expected_ns = if slot == 0 { 20_000_000 } else { 30_000_000 };
+            if ns != expected_ns || hz == 0 || hz > u32::MAX as u64 {
+                return false;
+            }
+            let ticks = (u128::from(ns) * u128::from(hz)).div_ceil(1_000_000_000);
+            if u128::from(deadline) != u128::from(start) + ticks
+                || pending.insert(pid.clone(), deadline).is_some()
+            {
+                return false;
+            }
+            sleeps[slot] += 1;
+        } else if line.starts_with("PHOENIX_WAKE ") {
+            let Some(values) = fields(line) else {
+                return false;
+            };
+            if values.len() != 3 {
+                return false;
+            }
+            let Some(pid) = values.get("pid") else {
+                return false;
+            };
+            let Some(deadline) = values
+                .get("deadline")
+                .and_then(|value| value.parse::<u64>().ok())
+            else {
+                return false;
+            };
+            let Some(now) = values
+                .get("now")
+                .and_then(|value| value.parse::<u64>().ok())
+            else {
+                return false;
+            };
+            if pending.remove(pid) != Some(deadline) || now < deadline {
+                return false;
+            }
+        } else if line.starts_with("PHOENIX_IDLE ") {
+            if idle.is_some() {
+                return false;
+            }
+            idle = line
+                .strip_prefix("PHOENIX_IDLE ticks=")
+                .and_then(|value| value.parse::<u64>().ok());
+            if idle.is_none() {
+                return false;
+            }
+        } else if line.starts_with("child: reaped=") {
+            reaps.push(line);
+        } else if line.starts_with("PHOENIX_SYSTEM_")
+            || line.starts_with("Phoenix sleep:")
+            || line.starts_with("system: children=")
+        {
+            terminal.push(line);
+        }
+    }
+    pending.is_empty() && sleeps == [16, 16] && idle.is_some_and(|ticks| ticks > 0)
+        && reaps == (1..=16).map(|generation| format!("child: reaped=1.{generation} fault=false frames=restored asid=2 slots=restored")).collect::<Vec<_>>()
+        && terminal == ["PHOENIX_SYSTEM_ENTER pid=0.1 asid=1", "Phoenix sleep: rounds=16 deadlines=ok stack=ok wait=ok", "system: children=16 faults=0 console-read=0 frame-accounting=ok", "PHOENIX_SYSTEM_EXIT status=0 fault=false"]
 }
 
 fn valid_preemption(output: &[u8]) -> bool {
@@ -564,5 +686,40 @@ mod tests {
         assert!(!valid_preemption(include_bytes!(
             "fixtures/cooperative.txt"
         )));
+    }
+
+    #[test]
+    fn sleep_oracle_requires_real_deadlines_balanced_wakes_and_idle() {
+        let observed = include_str!("fixtures/sleep.txt");
+        assert!(valid_sleep(observed.as_bytes()));
+        for (from, to) in [
+            ("ns=20000000", "ns=0"),
+            ("hz=62500000", "hz=0"),
+            ("PHOENIX_WAKE pid=0.1", "PHOENIX_WAKE pid=0.2"),
+            ("reaped=1.16", "reaped=1.15"),
+            ("ticks=229", "ticks=0"),
+            ("stack=ok", "stack=bad"),
+            ("status=0 fault=false", "status=1 fault=false"),
+        ] {
+            assert!(observed.contains(from));
+            assert!(!valid_sleep(observed.replacen(from, to, 1).as_bytes()));
+        }
+        let first_wake = observed
+            .lines()
+            .find(|line| line.starts_with("PHOENIX_WAKE"))
+            .unwrap();
+        let deadline: u64 = first_wake
+            .split_whitespace()
+            .find_map(|field| field.strip_prefix("deadline="))
+            .unwrap()
+            .parse()
+            .unwrap();
+        let prefix = first_wake.split_once(" now=").unwrap().0;
+        let early = observed.replacen(first_wake, &format!("{prefix} now={}", deadline - 1), 1);
+        assert!(!valid_sleep(early.as_bytes()));
+        let missing = observed.replacen(first_wake, "", 1);
+        assert!(!valid_sleep(missing.as_bytes()));
+        let duplicate = observed.replacen(first_wake, &format!("{first_wake}\n{first_wake}"), 1);
+        assert!(!valid_sleep(duplicate.as_bytes()));
     }
 }

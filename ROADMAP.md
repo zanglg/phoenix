@@ -45,7 +45,7 @@ concurrent readiness can be tested before enabling IRQ-driven preemption.
 
 ### 0.2.0: blocking and release hardening
 
-- [ ] Define bounded sleep, deadline wakeup and the no-runnable-process idle path.
+- [x] Define bounded sleep, deadline wakeup and the no-runnable-process idle path.
 - [ ] Exercise low-memory rollback and exact resource restoration under scheduling.
 - [ ] Complete MSRV, host/static and target gates, unsafe review and reproducible
   clean-source candidate artifacts, followed by owner review for formal release.

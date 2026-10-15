@@ -7,6 +7,7 @@ fn main() {
     println!("cargo:rerun-if-changed=linker.ld");
     println!("cargo:rerun-if-changed=src/entry.S");
     println!("cargo:rerun-if-changed=src/preempt.S");
+    println!("cargo:rerun-if-changed=src/sleep.S");
     for source in ["system", "child", "fault", "cooperative"] {
         println!("cargo:rerun-if-changed=src/{source}.S");
     }
