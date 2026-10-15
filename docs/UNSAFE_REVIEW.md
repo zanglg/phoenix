@@ -97,6 +97,10 @@ come from CurrentSpX/EL1h with I clear and PC inside the exact two-instruction r
 Selection of a woken user installs its retained root and owned frame before ERET.
 Thus repeated idle/user transitions neither accumulate suspended kernel frames nor
 reuse a released stack. Rust borrows still end before every exception return.
+At child completion, the parent must be Waiting, Sleeping or Ready. A Sleeping
+parent keeps its deadline and is never implicitly woken by child exit; the child
+remains terminal until that parent resumes and waits. Alternating sleep durations
+observe both Waiting and Sleeping completion branches, eight times each.
 
 The stress boot diagnostics run before first EL0 entry with IRQs masked. Withheld
 frames and ASIDs remain private; failed image/table owners are destroyed before

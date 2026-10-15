@@ -34,6 +34,7 @@ struct State {
     idle: bool,
     idle_top: Option<usize>,
     idle_ticks: usize,
+    child_parent_phases: [usize; 3],
     allocator: FrameAllocator<INIT_MEMORY_RANGES>,
     asids: AsidAllocator,
     tables: &'static FinalKernelTables,
@@ -215,6 +216,7 @@ pub(super) fn boot(argument: usize, console: &mut Console<EarlyPl011>) -> ! {
         idle: false,
         idle_top: None,
         idle_ticks: 0,
+        child_parent_phases: [0; 3],
         allocator,
         asids,
         tables,
@@ -744,6 +746,13 @@ fn finish(runtime: &mut State, frame: &mut ExceptionFrame) {
     if runtime.current != runtime.root {
         assert_eq!(runtime.child, Some(runtime.current));
         let parent = runtime.root;
+        let phase = match runtime.processes.get(parent).unwrap().state() {
+            phoenix_kernel::process::ProcessState::Waiting => 0,
+            phoenix_kernel::process::ProcessState::Sleeping(_) => 1,
+            phoenix_kernel::process::ProcessState::Ready => 2,
+            other => panic!("invalid parent state at child completion: {other:?}"),
+        };
+        runtime.child_parent_phases[phase] += 1;
         if runtime.processes.get(parent).unwrap().state()
             == phoenix_kernel::process::ProcessState::Waiting
         {
@@ -789,6 +798,13 @@ fn finish(runtime: &mut State, frame: &mut ExceptionFrame) {
         phoenix_kernel::process::ProcessState::Faulted(_)
     );
     events::dump(&mut console);
+    let _ = writeln!(
+        console,
+        "PHOENIX_CHILD_DONE waiting={} sleeping={} ready={}",
+        runtime.child_parent_phases[0],
+        runtime.child_parent_phases[1],
+        runtime.child_parent_phases[2]
+    );
     let _ = writeln!(console, "PHOENIX_IDLE ticks={}", runtime.idle_ticks);
     let _ = writeln!(
         console,

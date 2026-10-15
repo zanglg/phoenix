@@ -281,6 +281,7 @@ fn valid_sleep(output: &[u8]) -> bool {
     let mut reaps = Vec::new();
     let mut terminal = Vec::new();
     let mut idle = None;
+    let mut completions = None;
     for line in text.lines() {
         if line.starts_with("PHOENIX_SLEEP ") {
             let Some(values) = fields(line) else {
@@ -310,7 +311,15 @@ fn valid_sleep(output: &[u8]) -> bool {
             else {
                 return false;
             };
-            let expected_ns = if slot == 0 { 20_000_000 } else { 30_000_000 };
+            let expected_ns = if slot == 0 {
+                if sleeps[0] % 2 == 0 {
+                    40_000_000
+                } else {
+                    20_000_000
+                }
+            } else {
+                30_000_000
+            };
             if ns != expected_ns || hz == 0 || hz > u32::MAX as u64 {
                 return false;
             }
@@ -346,6 +355,30 @@ fn valid_sleep(output: &[u8]) -> bool {
             if pending.remove(pid) != Some(deadline) || now < deadline {
                 return false;
             }
+        } else if line.starts_with("PHOENIX_CHILD_DONE ") {
+            if completions.is_some() {
+                return false;
+            }
+            let Some(values) = fields(line) else {
+                return false;
+            };
+            if values.len() != 3 {
+                return false;
+            }
+            let get = |key: &str| values.get(key)?.parse::<usize>().ok();
+            let (Some(waiting), Some(sleeping), Some(ready)) =
+                (get("waiting"), get("sleeping"), get("ready"))
+            else {
+                return false;
+            };
+            completions = Some(
+                waiting > 0
+                    && sleeping > 0
+                    && waiting
+                        .checked_add(sleeping)
+                        .and_then(|count| count.checked_add(ready))
+                        == Some(16),
+            );
         } else if line.starts_with("PHOENIX_IDLE ") {
             if idle.is_some() {
                 return false;
@@ -365,7 +398,7 @@ fn valid_sleep(output: &[u8]) -> bool {
             terminal.push(line);
         }
     }
-    pending.is_empty() && sleeps == [16, 16] && idle.is_some_and(|ticks| ticks > 0)
+    pending.is_empty() && completions == Some(true) && sleeps == [16, 16] && idle.is_some_and(|ticks| ticks > 0)
         && reaps == (1..=16).map(|generation| format!("child: reaped=1.{generation} fault=false frames=restored asid=2 slots=restored")).collect::<Vec<_>>()
         && terminal == ["PHOENIX_SYSTEM_ENTER pid=0.1 asid=1", "Phoenix sleep: rounds=16 deadlines=ok stack=ok wait=ok", "system: children=16 faults=0 console-read=0 frame-accounting=ok", "PHOENIX_SYSTEM_EXIT status=0 fault=false"]
 }
@@ -697,13 +730,34 @@ mod tests {
             ("hz=62500000", "hz=0"),
             ("PHOENIX_WAKE pid=0.1", "PHOENIX_WAKE pid=0.2"),
             ("reaped=1.16", "reaped=1.15"),
-            ("ticks=229", "ticks=0"),
             ("stack=ok", "stack=bad"),
             ("status=0 fault=false", "status=1 fault=false"),
         ] {
             assert!(observed.contains(from));
             assert!(!valid_sleep(observed.replacen(from, to, 1).as_bytes()));
         }
+        let idle = observed
+            .lines()
+            .find(|line| line.starts_with("PHOENIX_IDLE ticks="))
+            .unwrap();
+        assert!(!valid_sleep(
+            observed
+                .replacen(idle, "PHOENIX_IDLE ticks=0", 1)
+                .as_bytes()
+        ));
+        let phases = observed
+            .lines()
+            .find(|line| line.starts_with("PHOENIX_CHILD_DONE "))
+            .unwrap();
+        assert!(!valid_sleep(
+            observed
+                .replacen(
+                    phases,
+                    "PHOENIX_CHILD_DONE waiting=16 sleeping=0 ready=0",
+                    1
+                )
+                .as_bytes()
+        ));
         let first_wake = observed
             .lines()
             .find(|line| line.starts_with("PHOENIX_WAKE"))

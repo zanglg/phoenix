@@ -262,7 +262,7 @@ budgets and no console input:
 | `phoenix.system-cooperative-preempt` | Same lifecycle workload with real EL0 timer handoffs; peers poll actual shared-file progress |
 | `phoenix.system-preempt` | Two non-yielding register-check loops, an infinite child, multiple ticks in each context, real handoffs and successful init exit |
 | `phoenix.system-preempt-off` | Same image/output with timer disabled: guest exits 0 but preemption oracle must reject it |
-| `phoenix.system-sleep` | Sixteen overlapping sleep rounds, 32 paired deadlines/wakes, nonzero idle IRQ count, fixed idle stack top and exact reaps |
+| `phoenix.system-sleep` | Sixteen overlapping sleep rounds, 32 paired deadlines/wakes, nonzero idle IRQ count, fixed idle stack top and exact reaps; child must complete with parent Waiting and Sleeping |
 
 The no-timer case prints `QEMU_PREEMPTION_NEGATIVE_REJECTED=true`. Other positive
 cases require guest exit 0 and their complete independent host oracle. Sleep

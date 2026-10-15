@@ -21,6 +21,9 @@ numbers and remains explicitly unstable before 1.0.0. During construction, chang
 - Native bounded sleep (call 9), deadline-driven wakeup and a stack-neutral EL1h
   WFI idle path. Sixteen overlapping parent/child rounds verify 32 deadline/wake
   pairs, idle IRQs, stable exception-stack top and complete child resource recovery.
+- Sleep hardening alternates parent deadlines and requires observed child
+  completion while the parent is Waiting and Sleeping; exit cannot wake a parent
+  before its own deadline or silently omit an idle/terminal-state combination.
 
 ## [0.1.0] - 2026-10-15
 

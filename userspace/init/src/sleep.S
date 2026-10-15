@@ -16,6 +16,9 @@ sleep_round:
     mov x20, #0x1234
     str x20, [sp, #128]
     ldr x0, =20000000
+    tbnz x19, #0, sleep_duration_ready
+    ldr x0, =40000000 /* Child exits while its parent is still sleeping. */
+sleep_duration_ready:
     call 9
     expect 0
     ldr x9, [sp, #128]
