@@ -15,6 +15,9 @@ numbers and remains explicitly unstable before 1.0.0. During construction, chang
 - Native single-child spawn/wait/yield calls 6–8, preserving synchronous run.
 - `test-scheduling`: 64 target rounds, 257 reaps, 128 faults, both wait/completion
   orderings, capacity rejection, GPR/NZCV/stack/descriptor isolation and ASID reuse.
+- EL0 timer preemption with 2 ms quantum, post-EOI frame selection and IRQ-masked
+  kernel operations. Non-yielding parent/infinite child preserve all 31 GPRs,
+  NZCV/SP/private stacks; a no-timer successful guest is rejected by the oracle.
 
 ## [0.1.0] - 2026-10-15
 

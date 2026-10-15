@@ -38,10 +38,10 @@ concurrent readiness can be tested before enabling IRQ-driven preemption.
 
 ### pre.2: EL0 timer preemption
 
-- [ ] Arm timer delivery for the system image and enable IRQs only on EL0 return.
-- [ ] Switch at the outer exception epilogue with every kernel borrow ended.
-- [ ] A non-yielding user loop cannot starve a second runnable user process.
-- [ ] Stress full register preservation, root/ASID isolation and exit/fault races.
+- [x] Arm timer delivery for the system image and enable IRQs only on EL0 return.
+- [x] Switch at the outer exception epilogue with every kernel borrow ended.
+- [x] A non-yielding user loop cannot starve a second runnable user process.
+- [x] Stress full register preservation, root/ASID isolation and exit/fault races.
 
 ### 0.2.0: blocking and release hardening
 

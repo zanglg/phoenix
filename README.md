@@ -6,8 +6,8 @@ kernel threads, independent user processes, console I/O and an in-memory filesys
 The first formal release is **0.1.0**. Development lives on `dev`;
 `main` is the owner review boundary. The owner accepted this first release for
 validation and tagging on `dev`; development continues there.
-The active development version is **0.2.0-dev.0**. Its first step adds cooperative
-user scheduling; [the 0.2 design](docs/0.2-SCHEDULING.md) records the new boundary.
+The active development version is **0.2.0-dev.0**, with cooperative user scheduling
+and EL0 timer preemption; [the 0.2 design](docs/0.2-SCHEDULING.md) records the boundary.
 
 ## Build and run
 
@@ -50,8 +50,10 @@ compiler and QEMU versions are recorded in the [runtime ledger](docs/RUNTIME_VAL
 - structured diagnostic ring, resource-exhaustion tests and deterministic packaging.
 
 The kernel-thread/heap image and user-system image are separate integration targets.
-The development system schedules two user processes cooperatively; it does not
-yet preempt them. A child that never yields, exits or faults can occupy the CPU indefinitely.
+The development system schedules two user processes with a 2 ms timer quantum.
+IRQs are enabled in EL0 and masked throughout kernel dispatch; syscalls complete
+before switching. A non-yielding child cannot starve its runnable parent.
+User sleep and the no-runnable-process idle path remain planned.
 Limits, error behavior, syscall numbers and ownership rules are defined
 in the [0.1 contract](docs/0.1-CONTRACT.md). Tests cover the stated bounded workloads.
 SMP, FP/SIMD, networking, persistent storage, POSIX/Linux compatibility, real hardware,
@@ -85,6 +87,9 @@ Its oracle requires the exact PC, FAR, ESR and kind for all nine user fault case
 705 child lifetimes with exact resource restoration and 576 contained faults.
 `test-scheduling` exercises 64 cooperative rounds, 257 child reaps and 128 faults,
 both wait/completion orderings and complete preserved GPR/NZCV/stack/FD checks.
+It also preempts two non-yielding contexts, checks all 31 GPRs/NZCV/private stacks,
+and requires init to progress while its child loops forever. The same successful
+guest output with timer preemption disabled must be rejected by the host oracle.
 All emulator tests are bounded and retain logs under
 `target/phoenix/aarch64-unknown-none-softfloat/debug/`.
 See [QEMU.md](docs/QEMU.md) and the [validation ledger](docs/RUNTIME_VALIDATION.md).

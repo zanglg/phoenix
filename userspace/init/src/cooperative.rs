@@ -1,7 +1,7 @@
 #![no_std]
 #![no_main]
 
-core::arch::global_asm!(include_str!("cooperative.S"));
+core::arch::global_asm!(include_str!("cooperative.S"), include_str!("preempt.S"));
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo<'_>) -> ! {

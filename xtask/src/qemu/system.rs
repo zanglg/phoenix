@@ -190,7 +190,7 @@ pub(super) fn cooperative_suite(image: &Path, directory: &Path, root: &Path) -> 
     };
     let mut command = command(image, false);
     *command.arguments.last_mut().unwrap() = "phoenix.system-cooperative".into();
-    runtime::report(
+    let cooperative = runtime::report(
         runtime::run_guest(
             command,
             directory,
@@ -200,7 +200,99 @@ pub(super) fn cooperative_suite(image: &Path, directory: &Path, root: &Path) -> 
             Duration::from_secs(30),
         )
         .is_some_and(|guest| guest.success() && contract.valid_cooperative(&guest.output)),
-    )
+    );
+    if !cooperative {
+        return false;
+    }
+    if !runtime::report(
+        runtime::run_guest(
+            command_for_boot(image, "phoenix.system-cooperative-preempt"),
+            directory,
+            root,
+            "system-cooperative-preempt",
+            None,
+            Duration::from_secs(30),
+        )
+        .is_some_and(|guest| guest.success() && contract.valid_cooperative(&guest.output)),
+    ) {
+        return false;
+    }
+    for (name, enabled) in [("system-preempt", true), ("system-preempt-off", false)] {
+        let command = command_for_boot(
+            image,
+            if enabled {
+                "phoenix.system-preempt"
+            } else {
+                "phoenix.system-preempt-off"
+            },
+        );
+        // Keep the same board and exact image for the negative control.
+        let valid = runtime::run_guest(command, directory, root, name, None, Duration::from_secs(30))
+            .is_some_and(|guest| {
+                guest.success() && if enabled {
+                    valid_preemption(&guest.output)
+                } else {
+                    let text = String::from_utf8_lossy(&guest.output).replace('\r', "");
+                    !valid_preemption(&guest.output)
+                        && text.lines().any(|line| line == "PHOENIX_SYSTEM_EXIT status=0 fault=false")
+                        && text.lines().any(|line| line == "PHOENIX_SCHED root-ticks=0 child-ticks=0 switches=0 child-ready=true")
+                }
+            });
+        if !enabled {
+            println!("QEMU_PREEMPTION_NEGATIVE_REJECTED={valid}");
+        }
+        if !runtime::report(valid) {
+            return false;
+        }
+    }
+    true
+}
+
+fn valid_preemption(output: &[u8]) -> bool {
+    let text = String::from_utf8_lossy(output).replace('\r', "");
+    if text.contains(PANIC_SENTINEL) || text.contains(EXCEPTION_SENTINEL) {
+        return false;
+    }
+    let protocol: Vec<_> = text
+        .lines()
+        .filter(|line| {
+            line.starts_with("PHOENIX_SYSTEM_")
+                || line.starts_with("PHOENIX_SCHED")
+                || line.starts_with(USER_FAULT_SENTINEL)
+                || line.starts_with("child: reaped=")
+                || line.starts_with("Phoenix preemption:")
+                || line.starts_with("system: children=")
+        })
+        .collect();
+    if protocol.len() != 5
+        || protocol[0] != "PHOENIX_SYSTEM_ENTER pid=0.1 asid=1"
+        || protocol[1] != "Phoenix preemption: non-yielding init progressed registers=ok stack=ok"
+        || protocol[3] != "system: children=0 faults=0 console-read=0 frame-accounting=ok"
+        || protocol[4] != "PHOENIX_SYSTEM_EXIT status=0 fault=false"
+    {
+        return false;
+    }
+    let stats: Vec<_> = protocol[2].split_whitespace().collect();
+    if stats.len() != 5 || stats[0] != "PHOENIX_SCHED" || stats[4] != "child-ready=true" {
+        return false;
+    }
+    let number = |token: &str, prefix: &str| token.strip_prefix(prefix)?.parse::<u64>().ok();
+    let Some(root) = number(stats[1], "root-ticks=") else {
+        return false;
+    };
+    let Some(child) = number(stats[2], "child-ticks=") else {
+        return false;
+    };
+    let Some(switches) = number(stats[3], "switches=") else {
+        return false;
+    };
+    root >= 2 && child >= 2 && switches >= 4 && switches <= root.saturating_add(child)
+}
+
+fn command_for_boot(image: &Path, boot: &str) -> QemuCommand {
+    let mut command = command(image, false);
+    *command.arguments.last_mut().unwrap() = boot.into();
+    command
 }
 
 fn command(image: &Path, stress: bool) -> QemuCommand {
@@ -441,5 +533,36 @@ mod tests {
         let without_first = observed.lines().skip(1).collect::<Vec<_>>().join("\n");
         assert!(!contract.valid_cooperative(without_first.as_bytes()));
         assert!(!contract.valid_cooperative(format!("{observed}PHOENIX_PANIC\n").as_bytes()));
+    }
+
+    #[test]
+    fn preemption_requires_both_contexts_and_a_live_infinite_child() {
+        let observed = include_str!("fixtures/preempt.txt");
+        assert!(valid_preemption(observed.as_bytes()));
+        for (from, to) in [
+            ("root-ticks=66", "root-ticks=0"),
+            ("child-ticks=65", "child-ticks=0"),
+            ("switches=130", "switches=0"),
+            ("switches=130", "switches=999999"),
+            ("child-ready=true", "child-ready=false"),
+            ("registers=ok", "registers=bad"),
+            ("status=0 fault=false", "status=1 fault=false"),
+        ] {
+            assert!(observed.contains(from));
+            assert!(!valid_preemption(observed.replacen(from, to, 1).as_bytes()));
+        }
+        for suffix in [
+            "PHOENIX_PANIC",
+            "PHOENIX_USER_FAULT",
+            "PHOENIX_SCHED",
+            "PHOENIX_SYSTEM_EXIT",
+        ] {
+            assert!(!valid_preemption(
+                format!("{observed}{suffix}\n").as_bytes()
+            ));
+        }
+        assert!(!valid_preemption(include_bytes!(
+            "fixtures/cooperative.txt"
+        )));
     }
 }

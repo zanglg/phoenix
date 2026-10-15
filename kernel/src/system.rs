@@ -1,8 +1,10 @@
-//! Two-process native system with cooperative, bounded round-robin scheduling.
+//! Two-process native system with EL0 timer preemption and bounded round robin.
 //!
 //! All mutable state belongs to CPU 0 with DAIF.I masked. EL0 never borrows
 //! kernel objects. Root switches invalidate translations before child reaping;
 //! no resource or frame reference escapes one synchronous dispatch operation.
+//! EL0 alone may run with IRQ enabled. Every vector masks IRQs before Rust;
+//! timer callbacks complete EOI/unlock before selecting a different user frame.
 use super::*;
 use core::sync::atomic::AtomicUsize;
 use phoenix_kernel::arch::aarch64::diagnostics as cpu;
@@ -25,6 +27,10 @@ struct State {
     child: Option<ProcessId>,
     queue: Scheduler<2>,
     scheduled: [Option<ProcessId>; 2],
+    preempt: bool,
+    timer: Option<phoenix_kernel::time::TimerId>,
+    ticks: [usize; 2],
+    timer_switches: usize,
     allocator: FrameAllocator<INIT_MEMORY_RANGES>,
     asids: AsidAllocator,
     tables: &'static FinalKernelTables,
@@ -41,6 +47,9 @@ static mut STATE: MaybeUninit<State> = MaybeUninit::uninit();
 static mut TABLES: MaybeUninit<FinalKernelTables> = MaybeUninit::uninit();
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 static READ_BYTES: AtomicUsize = AtomicUsize::new(0);
+const SCHEDULER_EVENT: phoenix_kernel::time::TimerEvent =
+    phoenix_kernel::time::TimerEvent::new(0x555352);
+const QUANTUM_NS: u64 = 2_000_000;
 
 pub(super) fn active() -> bool {
     ACTIVE.load(Ordering::Acquire)
@@ -99,7 +108,7 @@ pub(super) fn boot(argument: usize, console: &mut Console<EarlyPl011>) -> ! {
     let archive = Initramfs::from_bytes(INITRAMFS).expect("system archive");
     // SAFETY: Bootstrap mappings still cover all privately allocated RAM.
     let mut memory = unsafe { BootstrapPhysicalMemory::assume_bootstrap_mapping() };
-    let (plan, map, gic, test, stress, cooperative) = {
+    let (plan, map, gic, test, stress, initial_path, preempt) = {
         let tree = memory
             .device_tree(PhysAddr::new(argument))
             .expect("system DTB");
@@ -120,11 +129,27 @@ pub(super) fn boot(argument: usize, console: &mut Console<EarlyPl011>) -> ! {
             matches!(
                 info.bootargs(),
                 Some(
-                    "phoenix.system-test" | "phoenix.system-stress" | "phoenix.system-cooperative"
+                    "phoenix.system-test"
+                        | "phoenix.system-stress"
+                        | "phoenix.system-cooperative"
+                        | "phoenix.system-preempt"
+                        | "phoenix.system-preempt-off"
+                        | "phoenix.system-cooperative-preempt"
                 )
             ),
             info.bootargs() == Some("phoenix.system-stress"),
-            info.bootargs() == Some("phoenix.system-cooperative"),
+            match info.bootargs() {
+                Some("phoenix.system-stress") => "stress",
+                Some("phoenix.system-cooperative" | "phoenix.system-cooperative-preempt") => {
+                    "cooperate"
+                }
+                Some("phoenix.system-preempt" | "phoenix.system-preempt-off") => "preempt",
+                _ => "init",
+            },
+            !matches!(
+                info.bootargs(),
+                Some("phoenix.system-cooperative" | "phoenix.system-preempt-off")
+            ),
         )
     };
     let mut allocator = map.into_allocator();
@@ -135,19 +160,7 @@ pub(super) fn boot(argument: usize, console: &mut Console<EarlyPl011>) -> ! {
         .expect("system table frames")
         .materialize(&mut memory)
         .unwrap_or_else(|_| panic!("system table materialization"));
-    let init = load(
-        archive,
-        if stress {
-            "stress"
-        } else if cooperative {
-            "cooperate"
-        } else {
-            "init"
-        },
-        &mut allocator,
-        &mut memory,
-    )
-    .expect("system init image");
+    let init = load(archive, initial_path, &mut allocator, &mut memory).expect("system init image");
     drop(memory);
     let pointer = &raw mut TABLES;
     // SAFETY: One-time pinned initialization; all translations and capabilities
@@ -190,6 +203,10 @@ pub(super) fn boot(argument: usize, console: &mut Console<EarlyPl011>) -> ! {
         child: None,
         queue,
         scheduled,
+        preempt,
+        timer: None,
+        ticks: [0; 2],
+        timer_switches: 0,
         allocator,
         asids,
         tables,
@@ -213,6 +230,13 @@ pub(super) fn boot(argument: usize, console: &mut Console<EarlyPl011>) -> ! {
     if stress {
         hardening::run(runtime, console);
     }
+    if preempt {
+        boot_interrupt_handle()
+            .unwrap()
+            .activate(&LocalIrq::new())
+            .expect("user GIC activation");
+        arm(runtime);
+    }
     let resource = runtime.processes.get(id).unwrap().resources();
     let _ = writeln!(
         console,
@@ -222,9 +246,10 @@ pub(super) fn boot(argument: usize, console: &mut Console<EarlyPl011>) -> ! {
         asid.raw()
     );
     console.sink_mut().flush();
-    let frame = ExceptionFrame::user_process(
+    let frame = initial_frame(
         resource.space.entry().as_usize() as u64,
         resource.space.stack_pointer().as_usize() as u64,
+        preempt,
     );
     // SAFETY: Process table retains the root; no borrow survives entry. The
     // complete initial frame resides on the permanently owned construction stack.
@@ -234,6 +259,62 @@ pub(super) fn boot(argument: usize, console: &mut Console<EarlyPl011>) -> ! {
     // SAFETY: Same root/stack ownership; no mutable runtime access remains live.
     unsafe {
         phoenix_kernel::arch::aarch64::thread::enter_user(&frame);
+    }
+}
+
+fn initial_frame(entry: u64, stack: u64, preempt: bool) -> ExceptionFrame {
+    if preempt {
+        ExceptionFrame::preemptible_user_process(entry, stack)
+    } else {
+        ExceptionFrame::user_process(entry, stack)
+    }
+}
+
+fn arm(runtime: &mut State) {
+    let deadline = cpu::frequency()
+        .unwrap()
+        .deadline_after_nanoseconds(cpu::counter(), QUANTUM_NS)
+        .unwrap();
+    runtime.timer = Some(
+        boot_interrupt_handle()
+            .unwrap()
+            .schedule(&LocalIrq::new(), deadline, SCHEDULER_EVENT)
+            .expect("user scheduler tick"),
+    );
+}
+
+fn interrupt(runtime: &mut State, frame: &mut ExceptionFrame, slot: VectorSlot) {
+    assert!(runtime.preempt && irqs_masked());
+    assert_eq!(
+        slot,
+        VectorSlot::new(VectorOrigin::LowerAArch64, ExceptionKind::Irq)
+    );
+    assert_eq!(
+        frame.saved_program_status() & 0x8f,
+        0,
+        "IRQ must interrupt EL0 with I clear"
+    );
+    // dispatch_one releases both runtime/timer locks and completes GIC EOI before
+    // returning a batch. No interrupt-runtime guard may survive select below.
+    match boot_interrupt_handle()
+        .unwrap()
+        .dispatch_one(&LocalIrq::new())
+        .expect("user IRQ dispatch")
+    {
+        InterruptDispatch::Spurious { .. } => (),
+        InterruptDispatch::Timer(batch) if batch.is_empty() => (),
+        InterruptDispatch::Timer(batch) => {
+            assert_eq!(batch.len(), 1);
+            let fired = batch.iter().next().unwrap();
+            assert_eq!(Some(fired.id()), runtime.timer.take());
+            assert_eq!(fired.event(), SCHEDULER_EVENT);
+            runtime.ticks[runtime.current.slot()] += 1;
+            arm(runtime);
+            let old = runtime.current;
+            select(runtime, frame);
+            runtime.timer_switches += usize::from(old != runtime.current);
+        }
+        InterruptDispatch::Unexpected { intid } => panic!("unexpected user IRQ {intid}"),
     }
 }
 
@@ -262,6 +343,10 @@ fn copy_to(runtime: &State, address: u64, input: &[u8]) -> Result<(), Errno> {
 pub(super) fn dispatch(frame: &mut ExceptionFrame, slot: Option<VectorSlot>) {
     let runtime = state();
     let slot = slot.expect("system exception vector");
+    if slot.kind() == ExceptionKind::Irq {
+        interrupt(runtime, frame, slot);
+        return;
+    }
     if slot == VectorSlot::new(VectorOrigin::LowerAArch64, ExceptionKind::Synchronous)
         && frame.syndrome().exception_class() == ExceptionClass::SupervisorCallAArch64
         && frame.syndrome().supervisor_call_immediate() == Some(0)
@@ -366,9 +451,10 @@ fn spawn_child(
             return Err(Errno::NoMemory);
         }
     };
-    let initial = ExceptionFrame::user_process(
+    let initial = initial_frame(
         space.entry().as_usize() as u64,
         space.stack_pointer().as_usize() as u64,
+        runtime.preempt,
     );
     let resources = Resources {
         space,
@@ -575,12 +661,33 @@ fn finish(runtime: &mut State, frame: &mut ExceptionFrame) {
             .termination()
             .unwrap(),
     );
+    if runtime.preempt {
+        let handle = boot_interrupt_handle().unwrap();
+        let irq = LocalIrq::new();
+        if let Some(timer) = runtime.timer.take() {
+            handle
+                .cancel(&irq, timer)
+                .expect("cancel user scheduler tick");
+        }
+        handle.deactivate(&irq).expect("close user IRQ delivery");
+    }
     let mut console = Console::new(EarlyPl011::new());
     let faulted = matches!(
         runtime.processes.get(runtime.root).unwrap().state(),
         phoenix_kernel::process::ProcessState::Faulted(_)
     );
     events::dump(&mut console);
+    let _ = writeln!(
+        console,
+        "PHOENIX_SCHED root-ticks={} child-ticks={} switches={} child-ready={}",
+        runtime.ticks[0],
+        runtime.ticks[1],
+        runtime.timer_switches,
+        runtime
+            .child
+            .is_some_and(|child| runtime.processes.get(child).unwrap().state()
+                == phoenix_kernel::process::ProcessState::Ready)
+    );
     let _ = writeln!(
         console,
         "system: children={} faults={} console-read={} frame-accounting=ok",

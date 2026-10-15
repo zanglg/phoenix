@@ -83,7 +83,7 @@ _No unclassified entries._
 | SCHED-001 | Kernel threads and context switching | Implemented | 0.1.0 | Focused two-worker integration with retained stack owners and complete exception-frame switching |
 | SCHED-002 | Scheduler, preemption, and idle | Implemented | 0.1.0 | Bounded round robin, 2 ms timer preemption, idle, sleep, exit and stack reap; user-system execution remains synchronous |
 | SCHED-003 | Cooperative user-process scheduling | Implemented | 0.2.0 | Two-context round robin, block/wake, single-child spawn/wait/yield; 64 QEMU rounds, 257 reaps and 128 faults; development version, no release tag |
-| SCHED-004 | User timer preemption | Planned | 0.2.0 | EL0-only IRQ enable, non-yielding progress, full context/root preservation; see active Roadmap |
+| SCHED-004 | User timer preemption | Implemented | 0.2.0 | EL0-only IRQ enable, non-yielding progress, 31-GPR/NZCV/SP/private-stack checks and real handoff counters; no-timer guest success rejected |
 | SCHED-005 | User sleep and no-runnable idle | Planned | 0.2.0 | Bounded deadlines and retained idle context after preemption gate |
 | TIME-001 | Monotonic clock and generic timer | Implemented | 0.1.0 | Read-only physical counter, checked frequency conversion and real GIC timer delivery |
 | TIME-002 | Timer queue and sleep | Implemented | 0.1.0 | Transactional deadline queue and one-shot identity checks; post-EOI callbacks and thread sleep verified |

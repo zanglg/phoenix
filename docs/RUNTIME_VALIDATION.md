@@ -44,8 +44,18 @@ protocol fixture and rejects corrupted lifetimes, faults and context proof.
 | ID | State | Observed evidence |
 | --- | --- | --- |
 | RUN-USCHED-001 | Runtime Verified | Cooperative two-process round robin, blocked-parent and same-process yields, complete saved-context checks, exact resource reuse |
-| RUN-USCHED-002 | Runtime Pending | EL0 timer preemption and non-yielding user progress; next scoped step |
+| RUN-USCHED-002 | Runtime Verified | Non-yielding init/infinite child: observed 66/65 ticks and 130 timer handoffs; full 31-GPR/NZCV/SP/private-stack checks; no-timer successful guest is rejected |
 | RUN-USCHED-003 | Runtime Pending | User sleep and no-runnable idle; not implemented yet |
+
+The preemption checkpoint passed canonical CI (235 kernel and 21 tooling tests),
+the 705-lifetime/576-fault hardening workload with timer entries in both process
+slots, and all scheduling scenarios. The strict cooperative scenario keeps IRQs
+masked. A separate timer-enabled variant uses actual shared-file progress polling:
+counting yields does not guarantee a peer has reached its next milestone under
+preemption. Its corrected run observed 265 root ticks, 56 child ticks and 196
+timer handoffs across the same 257 lifetimes/128 faults. The non-yielding case
+and successful-but-rejected no-timer control also pass. Full suite size is now
+28 QEMU launches; exact-source final reruns remain part of candidate preparation.
 
 The following rows retain the 0.1 release scope; new scheduling evidence does not
 retroactively expand that tag's contract.

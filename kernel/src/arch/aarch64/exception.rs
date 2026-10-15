@@ -154,6 +154,15 @@ impl ExceptionFrame {
         frame
     }
 
+    /// Initial EL0 frame with IRQ enabled and D/A/F masked. The owner must
+    /// publish its scheduler, root and active timer before restoring this frame.
+    /// Exception entry still masks IRQs throughout kernel dispatch.
+    pub const fn preemptible_user_process(entry: u64, stack: u64) -> Self {
+        let mut frame = Self::user_process(entry, stack);
+        frame.spsr_el1 &= !(1 << 7);
+        frame
+    }
+
     /// Initial EL1h thread state: IRQ enabled, D/A/F masked, integer state zero.
     pub const fn kernel_thread(entry: u64, argument: u64) -> Self {
         let mut frame = Self::zeroed();
@@ -715,6 +724,19 @@ mod tests {
         assert_eq!(syndrome.exception_class(), ExceptionClass::Other(0x2a));
         assert_eq!(syndrome.instruction_length(), InstructionLength::Bits32);
         assert_eq!(syndrome.iss(), 0x12_3456);
+    }
+
+    #[test]
+    fn user_irq_policy_changes_only_the_saved_irq_mask() {
+        let masked = ExceptionFrame::user_process(0x400000, 0x7ffffff000);
+        let preemptible = ExceptionFrame::preemptible_user_process(0x400000, 0x7ffffff000);
+        assert_eq!(masked.saved_program_status(), 0x3c0);
+        assert_eq!(preemptible.saved_program_status(), 0x340);
+        assert_eq!(preemptible.program_counter(), masked.program_counter());
+        assert_eq!(preemptible.sp_el0(), masked.sp_el0());
+        for register in 0..31 {
+            assert_eq!(preemptible.general(register), Some(0));
+        }
     }
 
     #[test]

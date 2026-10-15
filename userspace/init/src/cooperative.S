@@ -16,6 +16,10 @@ _start:
     ldr x9, [sp, #8]
     ldrb w9, [x9]
     sub sp, sp, #256
+    cmp w9, #'p'
+    b.eq preempt_start
+    cmp w9, #'b'
+    b.eq busy_start
     cmp w9, #'y'
     b.eq child_start
     /* Empty wait, a lone yield, and failed spawn must preserve the caller. */
@@ -99,25 +103,24 @@ round:
     call 5
     expect -11
     bl checked_yield
-    /* C proves the child really ran; fd 3 must still be at the parent's zero. */
+handoff_poll:
+    /* Timer preemption may return init before the child's next milestone.
+     * Poll an actual shared-file handoff rather than counting voluntary yields.
+     * C proves execution; fd 3 must still begin at the parent's offset zero. */
     mov x0, #3
     mov x1, sp
-    mov x2, #1
+    mov x2, #3
     call 2
-    expect 1
+    cmp x0, #3
+    b.ne handoff_retry
     ldrb w9, [sp]
     cmp w9, #'C'
-    b.ne failed
-    bl checked_yield
-    mov x0, #3
-    mov x1, sp
-    mov x2, #2
-    call 2
-    expect 2
-    ldrh w9, [sp]
+    b.ne handoff_retry
+    ldrh w9, [sp, #1]
     mov x10, #0x4442 /* BD */
     cmp x9, x10
-    b.ne failed
+    b.ne handoff_retry
+    bl checked_yield
     bl checked_yield /* Child exits before parent waits. */
     adr x0, child
     mov x1, #11
@@ -180,6 +183,18 @@ round:
     expect done_end-done
     mov x0, #0
     call 0
+
+handoff_retry:
+    mov x0, #3
+    call 4
+    expect 0
+    adr x0, shared
+    mov x1, #8
+    mov x2, #0
+    call 3
+    expect 3
+    bl checked_yield
+    b handoff_poll
 
 child_start:
     /* A new address space must expose zero, not a previous child's poison. */

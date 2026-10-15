@@ -63,6 +63,24 @@ remaining owners stay retained until halt. No orphan cleanup is claimed.
 cursors. Timer preemption is a separate pending gate; this review does not yet
 authorize EL0 IRQ unmasking.
 
+## 0.2 EL0 timer extension
+
+The separately observed preemption path enables I only in saved EL0 frames.
+The exception vectors mask all DAIF bits before Rust; EL1 never unmasks them.
+Thus State access remains CPU-0-only, masked and non-reentrant even when its
+caller was interrupted in EL0. `dispatch_one` completes EOI and releases both
+runtime/timer locks before the process frame is saved and another root selected.
+No lock is held at ERET. Returned initial and saved frames preserve EL0t and its
+IRQ policy; all roots are retained until retirement with completed global TLBI.
+The periodic TimerId/event binding is checked on every delivery, and root exit
+cancels/revokes delivery before halt or the explicit guest-driven test exit.
+
+The non-yielding target loops check all 31 GPRs/NZCV/SP/private stack words across
+real timer handoffs; the host also requires both contexts to receive multiple
+ticks and the infinite child to remain Ready. A no-timer negative control proves
+that printed success alone is insufficient. Kernel syscall preemption, SMP,
+nested IRQs and FP/SIMD are still outside this invariant.
+
 The stress boot diagnostics run before first EL0 entry with IRQs masked. Withheld
 frames and ASIDs remain private; failed image/table owners are destroyed before
 allocator restoration, and diagnostic ASIDs are never installed in TTBR0. The
